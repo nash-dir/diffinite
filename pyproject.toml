@@ -44,3 +44,9 @@ diffinite = "diffinite:main"
 
 [tool.setuptools]
 py-modules = ["diffinite"]
+
+[tool.setuptools.packages.find]
+exclude = ["example*", "reference*", "dist*", "build*"]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["*.pdf", "*.bat"]
