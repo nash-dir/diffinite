@@ -348,11 +348,8 @@ def generate_html_diff(
 # ---------------------------------------------------------------------------
 # Step 5: HTML report & PDF conversion
 # ---------------------------------------------------------------------------
-_CSS = """\
-@page {
-    size: A4 landscape;
-    margin: 1.2cm;
-}
+# Base CSS without @page (the @page rule is built dynamically per document)
+_CSS_BODY = """\
 body {
     font-family: "Segoe UI", "Noto Sans KR", "Malgun Gothic", Arial, sans-serif;
     font-size: 10px;
@@ -472,6 +469,25 @@ ul.unmatched {
     color: #777;
     margin-bottom: 20px;
 }
+/* ---- Annotation frame styles ---- */
+.footer-table {
+    width: 100%;
+    font-family: "Segoe UI", Arial, sans-serif;
+    font-size: 8px;
+    color: #888;
+    border: none;
+}
+.footer-table td {
+    border: none;
+    padding: 0;
+    vertical-align: bottom;
+}
+.header-filename {
+    text-align: right;
+    font-family: "Segoe UI", Arial, sans-serif;
+    font-size: 7px;
+    color: #aaa;
+}
 """
 
 
@@ -487,8 +503,57 @@ def _ratio_badge(ratio: float) -> str:
     return f'<span class="badge {cls}">{pct:.1f}%</span>'
 
 
-def _html_wrap(title: str, body: str) -> str:
-    """Wrap body content in a full HTML document with CSS."""
+def _html_wrap(
+    title: str,
+    body: str,
+    annotation_html: str = "",
+    *,
+    has_footer: bool = False,
+    has_header: bool = False,
+) -> str:
+    """Wrap body content in a full HTML document with CSS.
+
+    Dynamically builds the @page CSS rule with optional @frame blocks
+    for footer and header annotations that repeat on every page.
+
+    Args:
+        title:           Page title.
+        body:            Main HTML body content.
+        annotation_html: Annotation divs with IDs matching frame names.
+        has_footer:      If True, add a footer @frame to @page.
+        has_header:      If True, add a header @frame to @page.
+
+    Returns:
+        Full HTML document string.
+    """
+    margin_bottom = "2cm" if has_footer else "1.2cm"
+    margin_top = "2cm" if has_header else "1.2cm"
+
+    frames = ""
+    if has_footer:
+        frames += """
+    @frame footer_frame {
+        -pdf-frame-content: pageFooter;
+        left: 1.2cm;
+        right: 1.2cm;
+        bottom: 0.2cm;
+        height: 1cm;
+    }"""
+    if has_header:
+        frames += """
+    @frame header_frame {
+        -pdf-frame-content: pageHeader;
+        left: 1.2cm;
+        right: 1.2cm;
+        top: 0.2cm;
+        height: 1cm;
+    }"""
+
+    page_css = f"""@page {{
+    size: A4 landscape;
+    margin: {margin_top} 1.2cm {margin_bottom} 1.2cm;{frames}
+}}"""
+
     return f"""\
 <!DOCTYPE html>
 <html lang="ko">
@@ -496,10 +561,12 @@ def _html_wrap(title: str, body: str) -> str:
 <meta charset="utf-8">
 <title>{html.escape(title)}</title>
 <style>
-{_CSS}
+{page_css}
+{_CSS_BODY}
 </style>
 </head>
 <body>
+{annotation_html}
 {body}
 </body>
 </html>
@@ -588,17 +655,82 @@ def build_cover_html(
     return _html_wrap("Diffinite — Cover", body)
 
 
+def _build_annotation_html(
+    *,
+    show_page_number: bool = False,
+    show_file_number: bool = False,
+    file_index: int = 0,
+    total_files: int = 0,
+    show_filename: bool = False,
+    filename: str = "",
+) -> tuple[str, bool, bool]:
+    """Build annotation divs using xhtml2pdf @frame mechanism.
+
+    Returns div elements whose IDs match @frame `-pdf-frame-content`
+    names, so xhtml2pdf renders them on every page.
+
+    Args:
+        show_page_number: Render 'Page n / N' at footer right.
+        show_file_number: Render 'File n / N' at footer left.
+        file_index:       1-based index of the current file.
+        total_files:      Total number of matched file pairs.
+        show_filename:    Render filename at header right.
+        filename:         Filename string to display.
+
+    Returns:
+        Tuple of (annotation_html, has_footer, has_header).
+    """
+    parts: list[str] = []
+    has_footer = show_page_number or show_file_number
+    has_header = show_filename and bool(filename)
+
+    if has_footer:
+        left_cell = ""
+        right_cell = ""
+        if show_file_number and total_files > 0:
+            left_cell = f'File {file_index} / {total_files}'
+        if show_page_number:
+            right_cell = 'Page <pdf:pagenumber> / <pdf:pagecount>'
+        parts.append(
+            f'<div id="pageFooter">'
+            f'<table class="footer-table"><tr>'
+            f'<td style="text-align:left;">{left_cell}</td>'
+            f'<td style="text-align:center;"></td>'  # Bates placeholder (added post-hoc)
+            f'<td style="text-align:right;">{right_cell}</td>'
+            f'</tr></table>'
+            f'</div>'
+        )
+
+    if has_header:
+        parts.append(
+            f'<div id="pageHeader">'
+            f'<p class="header-filename">{html.escape(filename)}</p>'
+            f'</div>'
+        )
+
+    return "\n".join(parts), has_footer, has_header
+
+
 def build_diff_page_html(
     result: DiffResult,
     index: int,
     unit: str,
+    *,
+    show_page_number: bool = False,
+    show_file_number: bool = False,
+    total_files: int = 0,
+    show_filename: bool = False,
 ) -> str:
     """Build a single-file diff page HTML.
 
     Args:
-        result: DiffResult for this file pair.
-        index:  1-based index of this pair.
-        unit:   "word" or "line".
+        result:           DiffResult for this file pair.
+        index:            1-based index of this pair.
+        unit:             "word" or "line".
+        show_page_number: Add page number annotation.
+        show_file_number: Add file sequence annotation.
+        total_files:      Total number of file pairs.
+        show_filename:    Add filename annotation.
 
     Returns:
         Full HTML string for one diff page.
@@ -619,9 +751,20 @@ def build_diff_page_html(
             f"<span style='color:red'>-{r.deletions} {unit}(s)</span></p>\n"
             f"{r.html_diff}\n"
         )
+    annotation_html, has_footer, has_header = _build_annotation_html(
+        show_page_number=show_page_number,
+        show_file_number=show_file_number,
+        file_index=index,
+        total_files=total_files,
+        show_filename=show_filename,
+        filename=r.match.rel_path_a,
+    )
     return _html_wrap(
         f"Diff — {r.match.rel_path_a}",
         body,
+        annotation_html=annotation_html,
+        has_footer=has_footer,
+        has_header=has_header,
     )
 
 
@@ -669,6 +812,96 @@ def merge_pdfs(pdf_paths: list[str], output_path: str) -> None:
     logger.info("Merged PDF saved → %s (%d bytes)", out.resolve(), out.stat().st_size)
 
 
+def add_bates_numbers(input_path: str, output_path: str) -> None:
+    """Stamp Bates numbers on each page of a merged PDF.
+
+    Uses reportlab to create an overlay with Bates numbers at the
+    bottom-center of each page, then merges the overlay onto the
+    original pages.
+
+    Args:
+        input_path:  Path to the input merged PDF.
+        output_path: Path to the stamped output PDF.
+    """
+    import io
+
+    from pypdf import PdfReader, PdfWriter
+    from reportlab.lib.pagesizes import landscape, A4
+    from reportlab.pdfgen import canvas
+
+    reader = PdfReader(input_path)
+    writer = PdfWriter()
+    total_pages = len(reader.pages)
+    digits = max(4, len(str(total_pages)))
+
+    for i, page in enumerate(reader.pages):
+        # Get page dimensions
+        box = page.mediabox
+        pw = float(box.width)
+        ph = float(box.height)
+
+        # Create an overlay PDF in memory
+        buf = io.BytesIO()
+        c = canvas.Canvas(buf, pagesize=(pw, ph))
+        bates = str(i + 1).zfill(digits)
+        c.setFont("Helvetica", 9)
+        c.setFillColorRGB(0.5, 0.5, 0.5)
+        c.drawCentredString(pw / 2, 18, bates)
+        c.save()
+        buf.seek(0)
+
+        # Merge overlay onto the original page
+        overlay_page = PdfReader(buf).pages[0]
+        page.merge_page(overlay_page)
+        writer.add_page(page)
+
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(str(out), "wb") as fh:
+        writer.write(fh)
+    writer.close()
+    logger.info("Bates numbers added → %s", out.resolve())
+
+
+def _stamp_bates_inplace(pdf_path: str, start_number: int, digits: int) -> None:
+    """Stamp Bates numbers on a single PDF file in-place.
+
+    Args:
+        pdf_path:     Path to the PDF to stamp.
+        start_number: 0-based starting page number for Bates sequence.
+        digits:       Number of zero-padded digits.
+    """
+    import io
+
+    from pypdf import PdfReader, PdfWriter
+    from reportlab.pdfgen import canvas
+
+    reader = PdfReader(pdf_path)
+    writer = PdfWriter()
+
+    for i, page in enumerate(reader.pages):
+        box = page.mediabox
+        pw = float(box.width)
+        ph = float(box.height)
+
+        buf = io.BytesIO()
+        c = canvas.Canvas(buf, pagesize=(pw, ph))
+        bates = str(start_number + i + 1).zfill(digits)
+        c.setFont("Helvetica", 9)
+        c.setFillColorRGB(0.5, 0.5, 0.5)
+        c.drawCentredString(pw / 2, 18, bates)
+        c.save()
+        buf.seek(0)
+
+        overlay_page = PdfReader(buf).pages[0]
+        page.merge_page(overlay_page)
+        writer.add_page(page)
+
+    with open(pdf_path, "wb") as fh:
+        writer.write(fh)
+    writer.close()
+
+
 # ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
@@ -679,19 +912,30 @@ def run_pipeline(
     compare_comment: bool = True,
     output_pdf: str = "report.pdf",
     threshold: float = FUZZY_THRESHOLD,
+    *,
+    no_merge: bool = False,
+    show_page_number: bool = False,
+    show_file_number: bool = False,
+    show_bates_number: bool = False,
+    show_filename: bool = False,
 ) -> None:
     """Execute the full diff-to-PDF pipeline.
 
     Uses divide-and-conquer: generates a cover PDF and individual per-file
-    diff PDFs, then merges them into the final output.
+    diff PDFs, then optionally merges them into the final output.
 
     Args:
-        dir_a:           Path to the original source directory.
-        dir_b:           Path to the comparison source directory.
-        by_word:         True for word-level comparison; False for line-level.
-        compare_comment: True to include comments; False to strip before diff.
-        output_pdf:      Output PDF file path.
-        threshold:       Fuzzy matching threshold (0–100).
+        dir_a:             Path to the original source directory.
+        dir_b:             Path to the comparison source directory.
+        by_word:           True for word-level comparison; False for line-level.
+        compare_comment:   True to include comments; False to strip before diff.
+        output_pdf:        Output PDF file path.
+        threshold:         Fuzzy matching threshold (0–100).
+        no_merge:          If True, output individual PDFs instead of merging.
+        show_page_number:  If True, stamp 'Page n / N' at bottom-right.
+        show_file_number:  If True, stamp 'File n / N' at bottom-left.
+        show_bates_number: If True, stamp Bates numbers at bottom-center (merged only).
+        show_filename:     If True, stamp filename at top-right.
     """
     import tempfile
 
@@ -746,8 +990,17 @@ def run_pipeline(
             html_diff=html_diff,
         ))
 
+    total_files = len(results)
+
     # Step 5 — divide-and-conquer PDF generation
     logger.info("Step 5: Generating PDFs (divide-and-conquer) …")
+
+    # Determine output directory for no-merge mode
+    if no_merge:
+        out_stem = Path(output_pdf).stem
+        out_dir = Path(output_pdf).parent / f"{out_stem}_files"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        logger.info("  No-merge mode — individual PDFs → %s", out_dir.resolve())
 
     with tempfile.TemporaryDirectory(prefix="diffinite_") as tmpdir:
         pdf_parts: list[str] = []
@@ -757,24 +1010,65 @@ def run_pipeline(
             results, unmatched_a, unmatched_b,
             dir_a, dir_b, by_word, compare_comment,
         )
-        cover_pdf = os.path.join(tmpdir, "00_cover.pdf")
-        if html_to_pdf(cover_html, cover_pdf):
-            pdf_parts.append(cover_pdf)
+        if no_merge:
+            cover_dest = str(out_dir / "000_cover.pdf")
+        else:
+            cover_dest = os.path.join(tmpdir, "00_cover.pdf")
+        if html_to_pdf(cover_html, cover_dest):
+            pdf_parts.append(cover_dest)
             logger.info("  Cover page → OK")
 
         # (2) Per-file diff pages
         for idx, r in enumerate(results, 1):
-            diff_html = build_diff_page_html(r, idx, unit)
-            diff_pdf = os.path.join(tmpdir, f"{idx:03d}_diff.pdf")
-            if html_to_pdf(diff_html, diff_pdf):
-                pdf_parts.append(diff_pdf)
+            diff_html = build_diff_page_html(
+                r, idx, unit,
+                show_page_number=show_page_number,
+                show_file_number=show_file_number,
+                total_files=total_files,
+                show_filename=show_filename,
+            )
+            # Determine destination path
+            safe_name = Path(r.match.rel_path_a).name.replace(" ", "_")
+            if no_merge:
+                diff_dest = str(out_dir / f"{idx:03d}_{safe_name}.pdf")
+            else:
+                diff_dest = os.path.join(tmpdir, f"{idx:03d}_diff.pdf")
+            if html_to_pdf(diff_html, diff_dest):
+                pdf_parts.append(diff_dest)
                 logger.info("  Diff page %d (%s) → OK", idx, r.match.rel_path_a)
             else:
                 logger.warning("  Diff page %d FAILED", idx)
 
-        # (3) Merge all
-        if pdf_parts:
+        # (3) Merge or skip
+        if no_merge:
+            # (4) Bates numbers for individual PDFs
+            if show_bates_number and pdf_parts:
+                logger.info("  Stamping Bates numbers on individual PDFs …")
+                global_page = 0
+                # Count total pages across all PDFs first
+                from pypdf import PdfReader as _PR
+                page_counts = []
+                for p in pdf_parts:
+                    try:
+                        page_counts.append(len(_PR(p).pages))
+                    except Exception:
+                        page_counts.append(0)
+                total_global_pages = sum(page_counts)
+                digits = max(4, len(str(total_global_pages)))
+                for p, pc in zip(pdf_parts, page_counts):
+                    if pc == 0:
+                        continue
+                    _stamp_bates_inplace(p, global_page, digits)
+                    global_page += pc
+            logger.info("  No-merge mode — %d PDFs saved to %s", len(pdf_parts), out_dir.resolve())
+        elif pdf_parts:
             merge_pdfs(pdf_parts, output_pdf)
+            # (4) Bates numbers (only for merged PDFs)
+            if show_bates_number:
+                logger.info("  Stamping Bates numbers …")
+                bates_tmp = os.path.join(tmpdir, "bates_tmp.pdf")
+                os.replace(output_pdf, bates_tmp)
+                add_bates_numbers(bates_tmp, output_pdf)
         else:
             logger.error("No PDF parts were generated — cannot create report")
 
@@ -814,8 +1108,39 @@ def main() -> None:
         default=FUZZY_THRESHOLD,
         help=f"Fuzzy matching threshold (0–100, default: {FUZZY_THRESHOLD})",
     )
+    parser.add_argument(
+        "--no-merge",
+        action="store_true",
+        default=False,
+        help="Generate individual PDFs per file instead of one merged PDF",
+    )
+    parser.add_argument(
+        "--page-number",
+        action="store_true",
+        default=False,
+        help="Show 'Page n / N' at the bottom-right of each page",
+    )
+    parser.add_argument(
+        "--file-number",
+        action="store_true",
+        default=False,
+        help="Show 'File n / N' at the bottom-left of each page",
+    )
+    parser.add_argument(
+        "--bates-number",
+        action="store_true",
+        default=False,
+        help="Stamp Bates numbers at the bottom-center of each page (merged mode only)",
+    )
+    parser.add_argument(
+        "--show-filename",
+        action="store_true",
+        default=False,
+        help="Show the filename at the top-right of each page",
+    )
 
     args = parser.parse_args()
+
 
     run_pipeline(
         dir_a=args.dir_a,
@@ -824,6 +1149,11 @@ def main() -> None:
         compare_comment=not args.no_comments,
         output_pdf=args.output_pdf,
         threshold=args.threshold,
+        no_merge=args.no_merge,
+        show_page_number=args.page_number,
+        show_file_number=args.file_number,
+        show_bates_number=args.bates_number,
+        show_filename=args.show_filename,
     )
 
 
