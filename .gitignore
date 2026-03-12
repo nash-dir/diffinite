@@ -1,0 +1,4 @@
+reference/*
+.venv/*
+.env
+example*/

@@ -1,0 +1,4 @@
+rapidfuzz>=3.0.0
+charset-normalizer>=3.0.0
+xhtml2pdf>=0.2.11
+pypdf>=4.0.0
