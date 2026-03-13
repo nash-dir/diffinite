@@ -1,22 +1,38 @@
 # Diffinite
 
-**Source code directory diff → PDF report with Bates numbering**
+**Forensic source-code comparison → PDF report with multi-evidence analysis**
 
-Diffinite compares source code files across two directories using fuzzy file-name matching, produces quantitative analysis (match ratio, additions, deletions), and generates a styled PDF report with side-by-side visual diffs.
+Diffinite compares source code across two directories using fuzzy file-name matching, Winnowing fingerprint analysis, and optional AST-level structural comparison. It produces professional PDF reports with side-by-side visual diffs, N:M cross-matching, and multi-channel evidence scoring — designed for **IP litigation, code audit, and software plagiarism forensics**.
 
-Built for **code audits, IP litigation, forensic analysis**, and any scenario where you need a professional, paginated diff report with legal-grade page identification.
+## Key Features
 
-## Features
+### Core Analysis
+- **Fuzzy file matching** — Pairs files across directories even if names differ ([RapidFuzz](https://github.com/rapidfuzz/RapidFuzz))
+- **Side-by-side diff** — Line-by-line visual comparison with syntax highlighting ([Pygments](https://pygments.org/))
+- **Context folding** — Collapses unchanged regions to focus on changes
+- **Comment stripping** — Optionally ignores comments before comparison
+- **Encoding auto-detection** — Handles mixed encodings via [charset-normalizer](https://github.com/Ousret/charset_normalizer)
 
-- **Fuzzy file matching** — Automatically pairs files across directories even if names differ slightly (powered by [RapidFuzz](https://github.com/rapidfuzz/RapidFuzz))
-- **Side-by-side diff** — Line-by-line visual comparison with color-coded additions/deletions
-- **PDF report** — Professional A4 landscape PDF with cover page and per-file diffs
+### Deep Compare (N:M Cross-Matching)
+- **Winnowing fingerprints** — Detect code reuse even across split/merged files
+- **Token normalization** — Catches Type-2 clones (renamed identifiers/literals)
+- **AST linearization** — tree-sitter-based structural analysis resilient to variable renaming (Phase 2)
+- **PDG normalization** — Use-def chain analysis, dead code filtering, dependency reordering (Phase 4)
+
+### Multi-Evidence Channels (Phase 3)
+- **Raw Winnowing** — Exact token sequence similarity
+- **Normalized Winnowing** — Identifier/literal-normalized similarity
+- **AST Winnowing** — Structural pattern similarity
+- **Identifier Cosine** — Name-change disguise detection
+- **Comment/String Overlap** — Author artefact preservation detection
+- **Composite Score** — Weighted combination of all channels
+
+### PDF Report
+- **Cover page** — Summary table with match ratios, additions/deletions, and channel evidence matrix
+- **Diff pages** — Side-by-side visual diff for each matched file pair
 - **Bates numbering** — Sequential page stamps for legal/forensic use
 - **Page annotations** — File sequence, page numbers, and filename on every page
 - **Merge or split** — Single merged PDF or individual per-file PDFs
-- **Comment stripping** — Optionally ignore comments before comparison
-- **Word or line mode** — Compare by line (default) or by whitespace-split tokens
-- **Encoding auto-detection** — Handles mixed encodings via [charset-normalizer](https://github.com/Ousret/charset_normalizer)
 
 ## Installation
 
@@ -24,12 +40,12 @@ Built for **code audits, IP litigation, forensic analysis**, and any scenario wh
 pip install diffinite
 ```
 
-Or install from source:
+From source (with AST analysis support):
 
 ```bash
 git clone https://github.com/nash-dir/diffinite.git
 cd diffinite
-pip install .
+pip install -e ".[ast]"
 ```
 
 ## Quick Start
@@ -38,16 +54,18 @@ pip install .
 # Basic comparison
 diffinite dir_a dir_b -o report.pdf
 
-# Full annotations: page numbers, file sequence, Bates numbers, filenames
-diffinite dir_a dir_b -o report.pdf \
+# With comment stripping and annotations
+diffinite dir_a dir_b -o report.pdf --no-comments \
     --page-number --file-number --bates-number --show-filename
 
-# Individual PDFs per file (no merge)
-diffinite dir_a dir_b -o report.pdf --no-merge \
-    --page-number --file-number --bates-number --show-filename
+# Deep compare with Winnowing fingerprints
+diffinite dir_a dir_b -o report.pdf --deep --normalize
 
-# Strip comments before comparison
-diffinite dir_a dir_b -o report.pdf --no-comments
+# AST-based structural analysis + multi-channel evidence
+diffinite dir_a dir_b -o report.pdf --deep --mode ast --multi-channel
+
+# Maximum forensic analysis (AST + all channels + normalization)
+diffinite dir_a dir_b -o report.pdf --deep --mode ast --multi-channel --normalize --no-comments
 ```
 
 ## CLI Options
@@ -61,48 +79,64 @@ diffinite dir_a dir_b -o report.pdf --no-comments
 | `--no-comments` | Strip comments before comparison |
 | `--threshold` | Fuzzy matching threshold, 0–100 (default: 60) |
 | `--no-merge` | Generate individual PDFs per file |
-| `--page-number` | Show `Page n / N` at the bottom-right of each page |
-| `--file-number` | Show `File n / N` at the bottom-left of each page |
-| `--bates-number` | Stamp Bates numbers at the bottom-center of each page |
-| `--show-filename` | Show the filename at the top-right of each page |
+| `--page-number` | Show `Page n / N` at the bottom-right |
+| `--file-number` | Show `File n / N` at the bottom-left |
+| `--bates-number` | Stamp Bates numbers at the bottom-center |
+| `--show-filename` | Show filename at the top-right |
 
-## PDF Output
+### Deep Compare Options
 
-### Merged mode (default)
+| Option | Description |
+|--------|-------------|
+| `--deep` | Enable N:M deep cross-matching |
+| `--normalize` | Normalize identifiers → `ID`, literals → `LIT` |
+| `--mode` | Fingerprint strategy: `token` (default), `ast`, `pdg` |
+| `--multi-channel` | Enable 5-channel multi-evidence scoring |
+| `--kgram-size` | K-gram size for Winnowing (default: 5) |
+| `--window-size` | Winnowing window size (default: 4) |
+| `--min-jaccard` | Minimum Jaccard threshold for matches (default: 0.05) |
 
-Generates a single PDF with:
-1. **Cover page** — Summary table with match ratios, additions/deletions per file pair
-2. **Diff pages** — Side-by-side visual diff for each matched file pair
+## Architecture
 
-### Split mode (`--no-merge`)
-
-Generates individual PDFs in a `{output_stem}_files/` directory:
-- `000_cover.pdf` — Cover page
-- `001_{filename}.pdf` — Per-file diff pages
-
-Bates numbers are continuous across all files in both modes.
-
-## Example
-
-An example dataset (AOSP Android 9 vs 11 Core OS) is included. To download the source files and run:
-
-```bash
-cd example
-example_download.bat       # Downloads Handler.java, Looper.java, Message.java
-cd ..
-diffinite example/left example/right -o example_report.pdf \
-    --page-number --file-number --bates-number --show-filename
+```
+src/diffinite/
+├── cli.py              # CLI entry point
+├── pipeline.py         # Orchestration pipeline
+├── collector.py        # File collection & fuzzy matching
+├── parser.py           # Comment stripping (Python/C/Java/JS/Go/Rust/HTML/SQL)
+├── differ.py           # Diff computation & HTML generation
+├── fingerprint.py      # Winnowing fingerprint extraction
+├── deep_compare.py     # N:M cross-matching engine
+├── ast_normalizer.py   # tree-sitter AST linearization & PDG normalization
+├── evidence.py         # Multi-evidence channel scoring
+├── models.py           # Data classes
+└── pdf_gen.py          # PDF report generation
 ```
 
-## Supported Languages (Comment Stripping)
+## Supported Languages
 
-When using `--no-comments`, the following file types are supported:
+### Comment Stripping (`--no-comments`)
 
 | Extensions | Comment styles |
 |------------|---------------|
 | `.py` | `# ...` |
 | `.js` `.ts` `.c` `.cpp` `.h` `.hpp` `.java` `.cs` `.go` `.rs` | `// ...` and `/* ... */` |
 | `.html` `.xml` `.htm` `.svg` | `<!-- ... -->` |
+| `.sql` | `-- ...` and `/* ... */` |
+
+### AST Analysis (`--mode ast`)
+
+| Extensions | Language |
+|------------|---------|
+| `.py` | Python |
+| `.java` | Java |
+| `.js` | JavaScript |
+| `.ts` | TypeScript |
+| `.c` `.h` | C |
+| `.cpp` `.hpp` `.cc` | C++ |
+| `.cs` | C# |
+| `.go` | Go |
+| `.rs` | Rust |
 
 ## License
 
