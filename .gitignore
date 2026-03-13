@@ -1,6 +1,14 @@
-reference/*
-.venv/*
-.env
+# Build / virtual env
+.venv/
 dist/
 build/
-*.egg-info/
+*.egg-info/
+__pycache__/
+*.pyc
+
+# IDE / OS
+.env
+.pytest_cache/
+
+# Legacy & dev artifacts
+legacy/
