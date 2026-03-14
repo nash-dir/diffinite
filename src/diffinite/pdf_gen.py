@@ -98,7 +98,6 @@ table.summary tr:nth-child(even) {
     text-align: left;
 }
 .ln {
-    width: 28px;
     text-align: right;
     color: #999;
     background: #f5f5f5;

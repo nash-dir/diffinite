@@ -39,7 +39,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--output-pdf", "-o",
         default="report.pdf",
-        help="Output PDF file path (default: report.pdf)",
+        help="Output PDF file path (default: report.pdf). "
+             "Ignored when any --report-* option is specified.",
     )
 
     # Comparison options
@@ -116,6 +117,31 @@ def main(argv: list[str] | None = None) -> None:
         ),
     )
 
+    # Report format options
+    format_group = parser.add_argument_group(
+        "Report Format",
+        "Output format(s). Multiple can be combined. "
+        "If none specified, defaults to --output-pdf.",
+    )
+    format_group.add_argument(
+        "--report-pdf",
+        metavar="PATH",
+        default=None,
+        help="Generate a merged PDF report at the given path",
+    )
+    format_group.add_argument(
+        "--report-html",
+        metavar="PATH",
+        default=None,
+        help="Generate a standalone HTML report at the given path",
+    )
+    format_group.add_argument(
+        "--report-md",
+        metavar="PATH",
+        default=None,
+        help="Generate a Markdown summary report at the given path",
+    )
+
     # Deep compare options
     deep_group = parser.add_argument_group(
         "Deep Compare",
@@ -182,8 +208,32 @@ def main(argv: list[str] | None = None) -> None:
             "Produces a comprehensive evidence matrix in the report."
         ),
     )
+    deep_group.add_argument(
+        "--profile",
+        choices=["industrial", "academic"],
+        default="industrial",
+        help=(
+            "Detection profile: 'industrial' uses defaults tuned for "
+            "large-scale codebases (K=5, W=4); 'academic' uses parameters "
+            "optimised for short student submissions (K=2, W=3, higher "
+            "threshold). Default: industrial."
+        ),
+    )
 
     args = parser.parse_args(argv)
+
+    # Academic profile overrides
+    kgram_size = args.kgram_size
+    window_size = args.window_size
+    min_jaccard = args.min_jaccard
+    if args.profile == "academic":
+        # Only override if user hasn't explicitly set values
+        if args.kgram_size == DEFAULT_K:
+            kgram_size = 2
+        if args.window_size == DEFAULT_W:
+            window_size = 3
+        if args.min_jaccard == 0.05:
+            min_jaccard = 0.40
 
     run_pipeline(
         dir_a=args.dir_a,
@@ -200,13 +250,17 @@ def main(argv: list[str] | None = None) -> None:
         show_filename=args.show_filename,
         deep=args.deep,
         workers=args.workers,
-        kgram_size=args.kgram_size,
-        window_size=args.window_size,
-        min_jaccard=args.min_jaccard,
+        kgram_size=kgram_size,
+        window_size=window_size,
+        min_jaccard=min_jaccard,
         normalize=args.normalize,
         mode=args.mode,
         multi_channel=args.multi_channel,
         collapse_identical=args.collapse_identical,
+        profile=args.profile,
+        report_pdf=args.report_pdf,
+        report_html=args.report_html,
+        report_md=args.report_md,
     )
 
 

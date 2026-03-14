@@ -1,0 +1,10 @@
+﻿Generating analysis reports in C:\projects\diffinite\TDD\result_2603141013
+
+Analyzing SQLite example...
+  → C:\projects\diffinite\TDD\result_2603141013\sqlite_analysis.md
+Analyzing AOSP example...
+  → C:\projects\diffinite\TDD\result_2603141013\aosp_analysis.md
+Analyzing Plagiarism dataset...
+  → C:\projects\diffinite\TDD\result_2603141013\plagiarism_analysis.md
+
+All reports generated.
