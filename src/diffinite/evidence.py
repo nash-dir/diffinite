@@ -53,6 +53,7 @@ def _extract_identifiers(source: str) -> list[str]:
     ]
 
 
+
 def identifier_cosine(source_a: str, source_b: str) -> float:
     """Compute cosine similarity between identifier frequency vectors.
 
@@ -84,6 +85,58 @@ def identifier_cosine(source_a: str, source_b: str) -> float:
         return 0.0
 
     return dot / (mag_a * mag_b)
+
+
+def _cosine_from_counters(counter_a: Counter, counter_b: Counter) -> float:
+    """Compute cosine similarity between two Counter objects."""
+    if not counter_a or not counter_b:
+        return 0.0
+    all_keys = set(counter_a) | set(counter_b)
+    dot = sum(counter_a.get(k, 0) * counter_b.get(k, 0) for k in all_keys)
+    mag_a = math.sqrt(sum(v * v for v in counter_a.values()))
+    mag_b = math.sqrt(sum(v * v for v in counter_b.values()))
+    if mag_a == 0 or mag_b == 0:
+        return 0.0
+    return dot / (mag_a * mag_b)
+
+
+def declaration_identifier_cosine(
+    source_a: str, source_b: str, extension: str,
+) -> float:
+    """Compute cosine similarity using only declaration-level identifiers.
+
+    Unlike ``identifier_cosine()`` which includes ALL identifiers, this
+    function uses tree-sitter to extract only **API surface** identifiers:
+    class names, method names, formal parameter names, and return types.
+
+    This produces a much stronger SSO signal because implementation-level
+    local variable names are excluded, preventing dilution of the API
+    name similarity.
+
+    Falls back to standard ``identifier_cosine()`` if tree-sitter is
+    unavailable for the given language.
+
+    Args:
+        source_a:  Comment-stripped source of file A.
+        source_b:  Comment-stripped source of file B.
+        extension: Lowercase file extension (e.g. ``".java"``).
+
+    Returns:
+        Cosine similarity ∈ [0.0, 1.0].
+    """
+    try:
+        from diffinite.ast_normalizer import extract_declaration_identifiers
+
+        ids_a = extract_declaration_identifiers(source_a, extension)
+        ids_b = extract_declaration_identifiers(source_b, extension)
+
+        if ids_a is not None and ids_b is not None:
+            return _cosine_from_counters(Counter(ids_a), Counter(ids_b))
+    except ImportError:
+        pass
+
+    # Fallback to all-identifiers cosine
+    return identifier_cosine(source_a, source_b)
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +243,7 @@ _DEFAULT_WEIGHTS: dict[str, float] = {
     "ast_winnowing":         2.0,
     "identifier_cosine":     1.5,
     "comment_string_overlap": 1.0,
+    "declaration_cosine":     0.0,  # opt-in — not included in composite by default
 }
 
 # Academic profile weights — tuned via grid search on IR-Plag-Dataset.
@@ -204,6 +258,7 @@ _ACADEMIC_WEIGHTS: dict[str, float] = {
     "ast_winnowing":         1.0,
     "identifier_cosine":     0.0,
     "comment_string_overlap": 0.0,
+    "declaration_cosine":     0.0,
 }
 
 _PROFILE_WEIGHTS: dict[str, dict[str, float]] = {
@@ -285,6 +340,12 @@ def compute_channel_scores(
     if cleaned_a is not None and cleaned_b is not None:
         scores["identifier_cosine"] = identifier_cosine(cleaned_a, cleaned_b)
 
+    # Channel 6: Declaration Cosine (SSO-specific)
+    if cleaned_a is not None and cleaned_b is not None and extension:
+        scores["declaration_cosine"] = declaration_identifier_cosine(
+            cleaned_a, cleaned_b, extension,
+        )
+
     # Channel 4: Comment/String Overlap
     if source_a is not None and source_b is not None and extension:
         scores["comment_string_overlap"] = comment_string_overlap(
@@ -303,3 +364,4 @@ def compute_channel_scores(
         scores["composite"] = weighted_sum / total_weight if total_weight else 0.0
 
     return scores
+

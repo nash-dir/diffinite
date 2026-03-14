@@ -514,3 +514,232 @@ def pdg_tokenize(source: str, extension: str) -> Optional[list[str]]:
     except Exception as exc:
         logger.debug("PDG tokenization failed for extension %s: %s", extension, exc)
         return None
+
+
+# ---------------------------------------------------------------------------
+# SSO Detection: Declaration-Level Identifier Extraction
+# ---------------------------------------------------------------------------
+# Node types that represent declarations (API surface)
+_DECLARATION_NODE_TYPES = frozenset({
+    "class_declaration", "class_definition",
+    "interface_declaration",
+    "method_declaration", "method_definition",
+    "function_declaration", "function_definition",
+    "constructor_declaration",
+    "enum_declaration",
+    "annotation_type_declaration",
+})
+
+# Node types that are formal parameters
+_PARAMETER_NODE_TYPES = frozenset({
+    "formal_parameter", "spread_parameter",
+    "parameter", "required_parameter", "optional_parameter",
+    "parameter_declaration",
+})
+
+# Node types whose identifiers should be EXCLUDED (implementation detail)
+_IMPLEMENTATION_NODE_TYPES = frozenset({
+    "local_variable_declaration",
+    "variable_declaration",
+    "assignment_expression", "assignment",
+    "augmented_assignment",
+    "expression_statement",
+    "method_invocation", "call_expression",
+    "field_access",
+})
+
+
+def extract_declaration_identifiers(
+    source: str, extension: str,
+) -> Optional[list[str]]:
+    """Extract only declaration-level identifiers from the AST.
+
+    Collects identifiers from:
+    - Class/interface/enum names
+    - Method/function names
+    - Formal parameter names and types
+
+    Excludes:
+    - Local variable names
+    - Method call targets
+    - Field access expressions
+
+    This provides a focused view of the API surface — the SSO signal —
+    without contamination from implementation-level identifiers.
+
+    Args:
+        source:    Source code text.
+        extension: Lowercase file extension (e.g. ``".java"``).
+
+    Returns:
+        Sorted list of declaration-level identifier strings,
+        or ``None`` if tree-sitter is unavailable.
+    """
+    parser = get_parser(extension)
+    if parser is None:
+        return None
+
+    try:
+        source_bytes = source.encode("utf-8")
+        tree = parser.parse(source_bytes)  # type: ignore[attr-defined]
+        root = tree.root_node
+
+        identifiers: list[str] = []
+        _collect_declaration_ids(root, identifiers, in_declaration=False)
+        return identifiers if identifiers else None
+
+    except Exception as exc:
+        logger.debug(
+            "Declaration identifier extraction failed for %s: %s",
+            extension, exc,
+        )
+        return None
+
+
+def _collect_declaration_ids(
+    node: object,
+    identifiers: list[str],
+    *,
+    in_declaration: bool,
+) -> None:
+    """Recursively collect identifiers from declaration contexts."""
+    node_type: str = node.type  # type: ignore[attr-defined]
+    child_count: int = node.child_count  # type: ignore[attr-defined]
+
+    # Check if we're entering a declaration context
+    is_decl = node_type in _DECLARATION_NODE_TYPES
+    is_param = node_type in _PARAMETER_NODE_TYPES
+    is_impl = node_type in _IMPLEMENTATION_NODE_TYPES
+
+    # Skip implementation blocks (but still recurse into nested declarations)
+    if is_impl and not in_declaration:
+        # Still look for nested class/method declarations inside
+        for child in node.children:  # type: ignore[attr-defined]
+            child_type: str = child.type  # type: ignore[attr-defined]
+            if child_type in _DECLARATION_NODE_TYPES:
+                _collect_declaration_ids(child, identifiers, in_declaration=True)
+        return
+
+    # Leaf node in declaration context → collect identifier
+    if child_count == 0:
+        id_types = _get_identifier_types(node_type)  # reuse existing helper
+        # For identifiers at declaration level, collect the actual text
+        if node_type in _IDENTIFIER_TYPES and (in_declaration or is_param):
+            text = node.text.decode("utf-8") if isinstance(node.text, bytes) else node.text  # type: ignore[attr-defined]
+            if text and text.strip():
+                identifiers.append(text.strip())
+        # Also collect type identifiers from declarations/parameters
+        elif node_type == "type_identifier" and (in_declaration or is_param):
+            text = node.text.decode("utf-8") if isinstance(node.text, bytes) else node.text  # type: ignore[attr-defined]
+            if text and text.strip():
+                identifiers.append(text.strip())
+        return
+
+    # Recurse into children
+    new_in_decl = in_declaration or is_decl or is_param
+    for child in node.children:  # type: ignore[attr-defined]
+        child_type = child.type  # type: ignore[attr-defined]
+        # Don't descend into implementation bodies for declarations
+        # (the block/body inside a method is implementation)
+        if (is_decl or in_declaration) and child_type in ("block", "statement_block", "compound_statement"):
+            # Skip method body — it's implementation detail
+            continue
+        _collect_declaration_ids(child, identifiers, in_declaration=new_in_decl)
+
+
+# ---------------------------------------------------------------------------
+# SSO Detection: Structure-Only AST Linearization
+# ---------------------------------------------------------------------------
+def linearize_structure_only(
+    source: str, extension: str,
+) -> Optional[list[str]]:
+    """Linearize the AST emitting only the structural skeleton.
+
+    Unlike full ``linearize()``, this variant:
+    1. Emits structure tags for declaration nodes
+    2. Preserves identifier names at declaration level (class/method/param names)
+    3. Skips implementation body content (method bodies, local variables)
+
+    This amplifies the SSO signal: files that share the same API structure
+    will produce nearly identical token sequences even if their implementations
+    are completely different.
+
+    Args:
+        source:    Source code text.
+        extension: Lowercase file extension.
+
+    Returns:
+        Token sequence, or ``None`` if tree-sitter is unavailable.
+    """
+    parser = get_parser(extension)
+    if parser is None:
+        return None
+
+    try:
+        source_bytes = source.encode("utf-8")
+        tree = parser.parse(source_bytes)  # type: ignore[attr-defined]
+        root = tree.root_node
+
+        tokens: list[str] = []
+        _linearize_structure_recursive(root, tokens, extension)
+        return tokens if tokens else None
+
+    except Exception as exc:
+        logger.debug(
+            "Structure-only linearization failed for %s: %s",
+            extension, exc,
+        )
+        return None
+
+
+def _linearize_structure_recursive(
+    node: object, tokens: list[str], extension: str,
+) -> None:
+    """DFS helper that emits only declaration structure."""
+    node_type: str = node.type  # type: ignore[attr-defined]
+    child_count: int = node.child_count  # type: ignore[attr-defined]
+
+    # Leaf node
+    if child_count == 0:
+        if node_type in _IDENTIFIER_TYPES:
+            # Preserve actual identifier at declaration level
+            text = node.text.decode("utf-8") if isinstance(node.text, bytes) else node.text  # type: ignore[attr-defined]
+            if text and text.strip():
+                tokens.append(text.strip())
+        elif node_type == "type_identifier":
+            text = node.text.decode("utf-8") if isinstance(node.text, bytes) else node.text  # type: ignore[attr-defined]
+            if text and text.strip():
+                tokens.append(text.strip())
+        elif node_type in _LITERAL_TYPES:
+            tokens.append("LIT")
+        elif node_type in _STRING_TYPES:
+            tokens.append("STR")
+        else:
+            text = node.text.decode("utf-8") if isinstance(node.text, bytes) else node.text  # type: ignore[attr-defined]
+            if text and text.strip():
+                tokens.append(text.strip())
+        return
+
+    # Internal node
+    is_structure = node_type in _STRUCTURE_NODE_TYPES
+    is_declaration = node_type in _DECLARATION_NODE_TYPES
+
+    if is_structure or is_declaration:
+        tokens.append(f"<{node_type}>")
+
+    for child in node.children:  # type: ignore[attr-defined]
+        child_type: str = child.type  # type: ignore[attr-defined]
+        # Skip method/function bodies (implementation detail)
+        if is_declaration and child_type in ("block", "statement_block", "compound_statement", "class_body"):
+            # For class bodies, we DO want to descend to find nested declarations
+            if child_type == "class_body":
+                _linearize_structure_recursive(child, tokens, extension)
+            else:
+                # Method body — emit a placeholder instead of traversing
+                tokens.append("<BODY>")
+            continue
+        _linearize_structure_recursive(child, tokens, extension)
+
+    if is_structure or is_declaration:
+        tokens.append(f"</{node_type}>")
+
