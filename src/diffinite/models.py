@@ -87,6 +87,8 @@ class DeepMatchResult:
     matched_files_b: list[tuple[str, int, float]] = field(default_factory=list)
     fingerprint_count_a: int = 0
     channel_scores: dict[str, dict[str, float]] = field(default_factory=dict)
+    classification: dict[str, str] = field(default_factory=dict)
+    afc_results: dict[str, dict] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

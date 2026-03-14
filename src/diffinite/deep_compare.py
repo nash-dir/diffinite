@@ -301,8 +301,21 @@ def _run_multi_channel(
     min_jaccard: float,
     profile: str = "industrial",
 ) -> list[DeepMatchResult]:
-    """Multi-channel deep compare with evidence scoring."""
-    from diffinite.evidence import compute_channel_scores, get_weights_for_profile
+    """Multi-channel deep compare with evidence scoring.
+
+    Integrates:
+    - Corpus-level TF-IDF weighting for identifier channels
+    - Cross-channel pattern classification (SSO_COPYING, DIRECT_COPY, etc.)
+    - AFC (Abstraction-Filtration-Comparison) analysis
+    """
+    from diffinite.evidence import (
+        _build_idf,
+        _extract_identifiers,
+        afc_analysis,
+        classify_similarity_pattern,
+        compute_channel_scores,
+        get_weights_for_profile,
+    )
 
     weights = get_weights_for_profile(profile)
 
@@ -354,6 +367,13 @@ def _run_multi_channel(
             cleaned_b[rel] = clean_text
             ext_b[rel] = items_b[j][2]
 
+    # ── Corpus-level IDF for TF-IDF weighting ──
+    all_identifier_lists: list[list[str]] = []
+    for ct in list(cleaned_a.values()) + list(cleaned_b.values()):
+        if ct:
+            all_identifier_lists.append(_extract_identifiers(ct))
+    idf = _build_idf(all_identifier_lists) if all_identifier_lists else None
+
     # Build inverted index using normalised fingerprints (best general coverage)
     norm_b = {rel: hashes.get("normalized", set()) for rel, hashes in fp_b.items()}
     inv_b = build_inverted_index(norm_b)
@@ -376,6 +396,8 @@ def _run_multi_channel(
 
         matched_b: list[tuple[str, int, float]] = []
         all_channel_scores: dict[str, dict[str, float]] = {}
+        all_classifications: dict[str, str] = {}
+        all_afc_results: dict[str, dict] = {}
 
         for file_id_b, shared in b_counts.items():
             jaccard = _jaccard(norm_a, norm_b[file_id_b])
@@ -404,6 +426,24 @@ def _run_multi_channel(
             )
             all_channel_scores[file_id_b] = scores
 
+            # ── Cross-channel classification ──
+            all_classifications[file_id_b] = classify_similarity_pattern(scores)
+
+            # ── AFC analysis ──
+            ca = cleaned_a.get(file_id_a)
+            cb = cleaned_b.get(file_id_b)
+            if ca and cb and extension:
+                try:
+                    afc = afc_analysis(
+                        ca, cb, extension,
+                        skip_boilerplate=True,
+                        idf=idf,
+                    )
+                    all_afc_results[file_id_b] = afc
+                except Exception as exc:
+                    logger.debug("AFC analysis failed for %s ↔ %s: %s",
+                                 file_id_a, file_id_b, exc)
+
         matched_b.sort(key=lambda x: x[2], reverse=True)
 
         if matched_b:
@@ -413,6 +453,8 @@ def _run_multi_channel(
                 matched_files_b=matched_b,
                 fingerprint_count_a=fp_count,
                 channel_scores=all_channel_scores,
+                classification=all_classifications,
+                afc_results=all_afc_results,
             ))
 
     deep_results.sort(key=lambda r: r.file_a)
