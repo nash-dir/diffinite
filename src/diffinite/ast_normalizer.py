@@ -41,81 +41,76 @@ except ImportError:
     _TS_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
-# Extension → tree-sitter language mapping
+# Extension → tree-sitter language mapping  (delegated to language registry)
 # ---------------------------------------------------------------------------
-# Each value is a tuple: (module_import_name, language_func_name)
-_LANG_MAP: dict[str, tuple[str, str]] = {
-    ".py":    ("tree_sitter_python",      "language"),
-    ".pyw":   ("tree_sitter_python",      "language"),
-    ".java":  ("tree_sitter_java",        "language"),
-    ".js":    ("tree_sitter_javascript",   "language"),
-    ".jsx":   ("tree_sitter_javascript",   "language"),
-    ".mjs":   ("tree_sitter_javascript",   "language"),
-    ".c":     ("tree_sitter_c",           "language"),
-    ".h":     ("tree_sitter_c",           "language"),
-    ".cpp":   ("tree_sitter_cpp",         "language"),
-    ".hpp":   ("tree_sitter_cpp",         "language"),
-    ".cc":    ("tree_sitter_cpp",         "language"),
-    ".cs":    ("tree_sitter_c_sharp",     "language"),
-    ".go":    ("tree_sitter_go",          "language"),
-    ".rs":    ("tree_sitter_rust",        "language"),
-    ".ts":    ("tree_sitter_typescript",  "language_typescript"),
-    ".tsx":   ("tree_sitter_typescript",  "language_tsx"),
-}
+from diffinite.languages import get_spec  # noqa: E402
+from diffinite.languages._defaults import (
+    DEFAULT_IDENTIFIER_TYPES,
+    DEFAULT_LITERAL_TYPES,
+    DEFAULT_STRING_TYPES,
+    DEFAULT_STRUCTURE_NODE_TYPES,
+    DEFAULT_STATEMENT_TYPES,
+)
 
-# Node types that are identifiers (will be normalised to "ID")
-_IDENTIFIER_TYPES = frozenset({
-    "identifier", "type_identifier", "field_identifier",
-    "property_identifier", "shorthand_property_identifier",
-    "shorthand_property_identifier_pattern",
-    "variable_name", "name", "attribute",
-})
+# Legacy aliases — backward compatibility for any external imports
+_LANG_MAP: dict[str, tuple[str, str]] = {}
 
-# Node types for numeric literals (→ "LIT")
-_LITERAL_TYPES = frozenset({
-    "integer", "integer_literal", "decimal_integer_literal",
-    "hex_integer_literal", "octal_integer_literal",
-    "binary_integer_literal", "float_literal",
-    "decimal_floating_point_literal", "number",
-})
 
-# Node types for string literals (→ "STR")
-_STRING_TYPES = frozenset({
-    "string", "string_literal", "string_fragment",
-    "template_string", "raw_string_literal",
-    "character_literal", "char_literal",
-    "interpreted_string_literal", "rune_literal",
-})
+def _build_legacy_lang_map() -> dict[str, tuple[str, str]]:
+    """Build old-style _LANG_MAP from registry for backward compat."""
+    from diffinite.languages import all_extensions
+    result: dict[str, tuple[str, str]] = {}
+    for ext in all_extensions():
+        spec = get_spec(ext)
+        if spec and spec.tree_sitter_module:
+            result[ext] = (spec.tree_sitter_module, spec.tree_sitter_func)
+    return result
 
-# Internal node types that contribute meaningful structure
-# (open/close tags emitted for these)
-_STRUCTURE_NODE_TYPES = frozenset({
-    # Statements
-    "if_statement", "else_clause", "elif_clause",
-    "for_statement", "for_in_statement", "enhanced_for_statement",
-    "while_statement", "do_statement",
-    "switch_statement", "switch_expression",
-    "case_clause", "switch_case", "default_case",
-    "try_statement", "catch_clause", "finally_clause",
-    "return_statement", "throw_statement",
-    "break_statement", "continue_statement",
-    # Declarations
-    "function_definition", "function_declaration",
-    "method_declaration", "method_definition",
-    "class_declaration", "class_definition",
-    "constructor_declaration",
-    "variable_declaration", "local_variable_declaration",
-    # Expressions
-    "call_expression", "method_invocation",
-    "binary_expression", "unary_expression",
-    "assignment_expression", "conditional_expression",
-    "lambda_expression",
-    # Blocks
-    "block", "statement_block", "compound_statement",
-    # Parameters
-    "formal_parameters", "parameter_list", "parameters",
-    "argument_list", "arguments",
-})
+
+# Populate at import time
+_LANG_MAP.update(_build_legacy_lang_map())
+
+# Default node type sets — imported from _defaults.py
+_IDENTIFIER_TYPES = DEFAULT_IDENTIFIER_TYPES
+_LITERAL_TYPES = DEFAULT_LITERAL_TYPES
+_STRING_TYPES = DEFAULT_STRING_TYPES
+_STRUCTURE_NODE_TYPES = DEFAULT_STRUCTURE_NODE_TYPES
+
+
+def _get_identifier_types(ext: str) -> frozenset[str]:
+    """Get identifier node types, with per-language override support."""
+    spec = get_spec(ext)
+    if spec and spec.identifier_types is not None:
+        return spec.identifier_types
+    return DEFAULT_IDENTIFIER_TYPES
+
+
+def _get_literal_types(ext: str) -> frozenset[str]:
+    spec = get_spec(ext)
+    if spec and spec.literal_types is not None:
+        return spec.literal_types
+    return DEFAULT_LITERAL_TYPES
+
+
+def _get_string_types(ext: str) -> frozenset[str]:
+    spec = get_spec(ext)
+    if spec and spec.string_types is not None:
+        return spec.string_types
+    return DEFAULT_STRING_TYPES
+
+
+def _get_structure_types(ext: str) -> frozenset[str]:
+    spec = get_spec(ext)
+    if spec and spec.structure_types is not None:
+        return spec.structure_types
+    return DEFAULT_STRUCTURE_NODE_TYPES
+
+
+def _get_statement_types(ext: str) -> frozenset[str]:
+    spec = get_spec(ext)
+    if spec and spec.statement_types is not None:
+        return spec.statement_types
+    return DEFAULT_STATEMENT_TYPES
 
 # tree-sitter parser cache to avoid re-creating parsers
 _parser_cache: dict[str, object] = {}
@@ -140,11 +135,12 @@ def get_parser(extension: str) -> Optional[object]:
     if extension in _parser_cache:
         return _parser_cache[extension]
 
-    lang_info = _LANG_MAP.get(extension)
-    if lang_info is None:
+    spec = get_spec(extension)
+    if spec is None or spec.tree_sitter_module is None:
         return None
 
-    module_name, func_name = lang_info
+    module_name = spec.tree_sitter_module
+    func_name = spec.tree_sitter_func
     try:
         import importlib
         mod = importlib.import_module(module_name)
@@ -255,19 +251,8 @@ def ast_tokenize(source: str, extension: str) -> Optional[list[str]]:
 # ---------------------------------------------------------------------------
 # Phase 4: Lightweight PDG Normalization
 # ---------------------------------------------------------------------------
-# Statement-level node types to consider for PDG analysis
-_STATEMENT_TYPES = frozenset({
-    "expression_statement", "return_statement",
-    "if_statement", "for_statement", "while_statement",
-    "for_in_statement", "enhanced_for_statement",
-    "do_statement", "switch_statement",
-    "try_statement", "throw_statement",
-    "variable_declaration", "local_variable_declaration",
-    "assignment_expression",
-    # Python
-    "assignment", "augmented_assignment",
-    "print_statement",
-})
+# Statement-level node types — imported from _defaults.py
+_STATEMENT_TYPES = DEFAULT_STATEMENT_TYPES
 
 
 def _collect_identifiers(node: object) -> tuple[set[str], set[str]]:
