@@ -4,3 +4,104 @@ Copyright 2026 nash-dir
 This product includes code that was partially generated with the assistance
 of LLM-based AI tools (Anthropic Claude).
 The final implementation was reviewed, tested, and approved by the author.
+
+=========================================================================
+  Third-Party Reference Code and Datasets
+=========================================================================
+
+The following third-party source code files and datasets are included
+in this repository solely as REFERENCE DATA for algorithm validation
+and forensic analysis benchmarking. They are NOT part of the Diffinite
+software itself and retain their original licenses as noted below.
+
+These files are located under example/ and TDD/corpus/ directories,
+both of which are excluded from distribution via .gitignore.
+
+-------------------------------------------------------------------------
+1. OpenJDK (Oracle)
+-------------------------------------------------------------------------
+   Path:     example/Case-Oracle/OpenJDK_Oracle/
+             example/Case-NegativeControl/OpenJDK/
+             TDD/corpus/openjdk_extra/
+   Source:   https://github.com/openjdk/jdk (tag: jdk7-b147)
+   License:  GNU General Public License, version 2,
+             with the Classpath Exception
+   Copyright (c) 1994, 2011, Oracle and/or its affiliates.
+   Files:    ArrayList.java, Collections.java, String.java, List.java,
+             Math.java, HashMap.java, HashSet.java, Arrays.java
+
+-------------------------------------------------------------------------
+2. Android Open Source Project (AOSP / Google)
+-------------------------------------------------------------------------
+   Path:     example/Case-Oracle/AOSP_Google/
+   Source:   https://android.googlesource.com/platform/libcore/
+             (Froyo release)
+   License:  Apache License, Version 2.0
+   Copyright (c) 2006, 2010, The Android Open Source Project.
+   Files:    ArrayList.java, Collections.java, String.java, List.java,
+             Math.java
+
+-------------------------------------------------------------------------
+3. Eclipse Collections
+-------------------------------------------------------------------------
+   Path:     example/Case-NegativeControl/Eclipse_Collections/
+   Source:   https://github.com/eclipse/eclipse-collections
+   License:  Eclipse Public License - v 1.0
+             Eclipse Distribution License - v 1.0
+   Copyright (c) 2004, 2024, Goldman Sachs, Eclipse Foundation,
+             and/or their affiliates.
+   Files:    FastList.java, UnifiedSet.java, UnifiedMap.java,
+             Iterate.java, StringIterate.java
+
+-------------------------------------------------------------------------
+4. Apache Commons Lang
+-------------------------------------------------------------------------
+   Path:     TDD/corpus/apache_commons_lang/
+   Source:   https://github.com/apache/commons-lang
+   License:  Apache License, Version 2.0
+   Copyright (c) 2001, 2024, The Apache Software Foundation.
+   Files:    StringUtils.java, ArrayUtils.java, NumberUtils.java
+
+-------------------------------------------------------------------------
+5. Apache Commons Collections
+-------------------------------------------------------------------------
+   Path:     TDD/corpus/apache_commons_collections/
+   Source:   https://github.com/apache/commons-collections
+   License:  Apache License, Version 2.0
+   Copyright (c) 2001, 2024, The Apache Software Foundation.
+   Files:    CollectionUtils.java, ListUtils.java
+
+-------------------------------------------------------------------------
+6. Google Guava
+-------------------------------------------------------------------------
+   Path:     TDD/corpus/guava/
+   Source:   https://github.com/google/guava
+   License:  Apache License, Version 2.0
+   Copyright (c) 2007, 2024, Google LLC.
+   Files:    Strings.java, Lists.java, Maps.java
+
+-------------------------------------------------------------------------
+7. IR-Plag-Dataset (Source Code Plagiarism Dataset)
+-------------------------------------------------------------------------
+   Path:     example/plagiarism/
+   Source:   https://github.com/oscarkarnalim/sourcecodeplagiarismdataset
+   License:  Apache License, Version 2.0
+   Citation: Karnalim, O. (2017). "Source Code Plagiarism Detection
+             in Academia with Information Retrieval: Dataset and the
+             Observation." Informatics in Education, 16(1), 83-102.
+   Files:    467 Java source code files across 7 programming tasks
+             (case-01 through case-07), each with original,
+             non-plagiarized, and plagiarized (L1-L6) submissions.
+
+-------------------------------------------------------------------------
+8. SOCO 2014 (PAN@FIRE Source Code Re-use Detection)
+-------------------------------------------------------------------------
+   Path:     TDD/corpus/soco14/
+   Source:   https://zenodo.org/records/7433031
+   License:  Open Access (Creative Commons Attribution 4.0 International)
+   Citation: Flores, E., Barrón-Cedeño, A., Rosso, P., Moreno, L.
+             (2014). "DeSoCoRe: Detecting Source Code Re-Use across
+             Programming Languages." Proceedings of the 6th Forum for
+             Information Retrieval Evaluation (FIRE 2014).
+   Files:    Training: 259 Java + 79 C files with expert annotations
+             Test: ~30,000 Java + C/C++ files with relevance judgements
