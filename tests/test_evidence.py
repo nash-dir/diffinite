@@ -154,6 +154,7 @@ class TestComputeChannelScores:
         )
         expected_keys = {
             "raw_winnowing", "normalized_winnowing", "ast_winnowing",
-            "identifier_cosine", "comment_string_overlap", "composite",
+            "identifier_cosine", "declaration_cosine",
+            "comment_string_overlap", "composite",
         }
         assert expected_keys == set(scores.keys())
