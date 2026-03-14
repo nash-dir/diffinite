@@ -87,3 +87,29 @@ class DeepMatchResult:
     matched_files_b: list[tuple[str, int, float]] = field(default_factory=list)
     fingerprint_count_a: int = 0
     channel_scores: dict[str, dict[str, float]] = field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Analysis metadata (for report transparency / reproducibility)
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class AnalysisMetadata:
+    """Execution parameters recorded in every report for legal reproducibility.
+
+    Attributes:
+        exec_mode:   ``"simple"`` or ``"deep"``.
+        profile:     ``"industrial"`` or ``"academic"``.
+        k:           K-gram size used for Winnowing.
+        w:           Winnowing window size.
+        threshold:   Minimum Jaccard similarity threshold.
+        tokenizer:   Tokenisation strategy (``"token"`` / ``"ast"`` / ``"pdg"``).
+        grid_search: Whether the grid-search sensitivity sweep was performed.
+    """
+
+    exec_mode: str
+    profile: str
+    k: int
+    w: int
+    threshold: float
+    tokenizer: str = "token"
+    grid_search: bool = False

@@ -37,7 +37,7 @@ class TestPipelineE2E:
             dir_a=EXAMPLE_LEFT,
             dir_b=EXAMPLE_RIGHT,
             output_pdf=output,
-            deep=True,
+            exec_mode="deep",
             workers=2,
             kgram_size=5,
             window_size=4,

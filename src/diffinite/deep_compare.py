@@ -50,12 +50,12 @@ def _extract_one(args: tuple) -> tuple[str, set[int], int]:
     """Extract fingerprints for a single file.
 
     Args:
-        args: ``(abs_path, rel_path, extension, k, w, normalize, mode)``
+        args: ``(abs_path, rel_path, extension, k, w, normalize, tokenizer)``
 
     Returns:
         ``(rel_path, set_of_hash_values, total_fingerprint_count)``
     """
-    abs_path, rel_path, extension, k, w, normalize, mode = args
+    abs_path, rel_path, extension, k, w, normalize, tokenizer = args
     text = read_file(abs_path)
     if text is None:
         return rel_path, set(), 0
@@ -64,7 +64,7 @@ def _extract_one(args: tuple) -> tuple[str, set[int], int]:
     cleaned = strip_comments(text, extension)
     fps = extract_fingerprints(
         cleaned, k=k, w=w, normalize=normalize,
-        mode=mode, extension=extension,
+        mode=tokenizer, extension=extension,
     )
     hash_set = {fp.hash_value for fp in fps}
     return rel_path, hash_set, len(fps)
@@ -158,7 +158,7 @@ def run_deep_compare(
     workers: int = 4,
     min_jaccard: float = 0.05,
     normalize: bool = False,
-    mode: str = "token",
+    tokenizer: str = "token",
     multi_channel: bool = False,
     profile: str = "industrial",
 ) -> list[DeepMatchResult]:
@@ -182,7 +182,7 @@ def run_deep_compare(
         workers: Number of parallel worker processes.
         min_jaccard: Minimum Jaccard similarity to include in results.
         normalize: If *True*, normalise tokens before fingerprinting.
-        mode: Tokenisation strategy (``"token"``, ``"ast"``, ``"pdg"``).
+        tokenizer: Tokenisation strategy (``"token"``, ``"ast"``, ``"pdg"``).
         multi_channel: If *True*, compute all evidence channel scores.
 
     Returns:
@@ -199,7 +199,7 @@ def run_deep_compare(
     return _run_single_channel(
         dir_a, dir_b, files_a, files_b,
         k=k, w=w, workers=workers, min_jaccard=min_jaccard,
-        normalize=normalize, mode=mode,
+        normalize=normalize, tokenizer=tokenizer,
     )
 
 
@@ -214,7 +214,7 @@ def _run_single_channel(
     workers: int,
     min_jaccard: float,
     normalize: bool,
-    mode: str,
+    tokenizer: str,
 ) -> list[DeepMatchResult]:
     """Single-channel deep compare (original implementation)."""
     root_a = Path(dir_a).resolve()
@@ -222,11 +222,11 @@ def _run_single_channel(
 
     # Prepare work items
     items_a = [
-        (str(root_a / f), f, Path(f).suffix.lower(), k, w, normalize, mode)
+        (str(root_a / f), f, Path(f).suffix.lower(), k, w, normalize, tokenizer)
         for f in files_a
     ]
     items_b = [
-        (str(root_b / f), f, Path(f).suffix.lower(), k, w, normalize, mode)
+        (str(root_b / f), f, Path(f).suffix.lower(), k, w, normalize, tokenizer)
         for f in files_b
     ]
 
