@@ -311,10 +311,34 @@ def build_cover_html(
     compare_comment: bool,
     *,
     deep_results: Optional[list[DeepMatchResult]] = None,
+    metadata: Optional["AnalysisMetadata"] = None,
+    grid_search_text: str = "",
 ) -> str:
     """Build the cover-page HTML with summary table and deep compare."""
+    from diffinite.models import AnalysisMetadata as _AM  # avoid circular at module level
+
     unit = "word" if by_word else "line"
     comment_mode = "included" if compare_comment else "excluded"
+
+    # Analysis metadata banner (transparency)
+    meta_html = ""
+    if metadata is not None:
+        meta_html = (
+            '<div style="border:2px solid #0078d4;border-radius:6px;'
+            'padding:10px 16px;margin-bottom:20px;'
+            'background:#f0f7ff;font-size:11px;">\n'
+            '<strong>&#128203; Analysis Configuration</strong><br>\n'
+            f'<strong>Mode:</strong> {html.escape(metadata.exec_mode)} &nbsp;|&nbsp; '
+            f'<strong>Profile:</strong> {html.escape(metadata.profile)} &nbsp;|&nbsp; '
+            f'<strong>K=</strong>{metadata.k}, <strong>W=</strong>{metadata.w}, '
+            f'<strong>T=</strong>{metadata.threshold:.2f} &nbsp;|&nbsp; '
+            f'<strong>Tokenizer:</strong> {html.escape(metadata.tokenizer)}'
+            + (
+                ' &nbsp;|&nbsp; <strong>Grid Search:</strong> Yes'
+                if metadata.grid_search else ''
+            )
+            + '\n</div>\n'
+        )
 
     summary_rows = ""
     for idx, r in enumerate(results, 1):
@@ -415,8 +439,15 @@ def build_cover_html(
                     )
             deep_html += "</table>\n"
 
+    # Grid search section (for PDF cover)
+    grid_html = ""
+    if grid_search_text:
+        from diffinite.pipeline import _grid_search_md_to_html
+        grid_html = _grid_search_md_to_html(grid_search_text)
+
     body = f"""\
 <h1>Diffinite &mdash; Source Code Diff Report</h1>
+{meta_html}
 <p class="meta">
   <strong>Dir A:</strong> {html.escape(dir_a)}<br>
   <strong>Dir B:</strong> {html.escape(dir_b)}<br>
@@ -437,6 +468,7 @@ def build_cover_html(
 
 {unmatched_html}
 {deep_html}
+{grid_html}
 """
     return _html_wrap("Diffinite — Cover", body)
 
