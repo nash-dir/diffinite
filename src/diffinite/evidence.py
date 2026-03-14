@@ -535,6 +535,26 @@ def compute_channel_scores(
 # ---------------------------------------------------------------------------
 # Cross-Channel Classification (Stage 4: Pattern-based SSO detection)
 # ---------------------------------------------------------------------------
+
+# Classification thresholds — data-driven values from Stage 3 grid search.
+# See TDD/corpus/optimal_thresholds.json for derivation.
+# Two-phase optimisation: Phase 1 → zero SSO/DC FP, Phase 2 → max F1.
+#
+# Format: PARAM = optimal_value  # (baseline was X.XX)
+_DC_RAW_MIN = 0.65           # (baseline: 0.50) — raised to suppress short-code FP
+_DC_IDENT_MIN = 0.50         # (baseline: 0.50)
+_SSO_RAW_MAX = 0.20          # (baseline: 0.25) — tightened to block high-raw SSO FP
+_SSO_DECL_MIN = 0.60         # (baseline: 0.50) — raised to suppress academic-code FP
+_SSO_GAP_MIN = 0.30          # (baseline: 0.25) — raised for domain-convergence filtering
+_SSO_AST_MIN = 0.25          # (baseline: 0.25)
+_OBC_RAW_MAX = 0.15          # (baseline: 0.15)
+_OBC_IDENT_MAX = 0.30        # (baseline: 0.30)
+_OBC_AST_MIN = 0.30          # (baseline: 0.30)
+_CONV_IDENT_MIN = 0.20       # (baseline: 0.20)
+_CONV_DECL_MAX = 0.40        # (baseline: 0.40)
+_CONV_RAW_MAX = 0.20         # (baseline: 0.20)
+
+
 def classify_similarity_pattern(scores: dict[str, float]) -> str:
     """Classify the similarity pattern based on cross-channel evidence.
 
@@ -551,6 +571,10 @@ def classify_similarity_pattern(scores: dict[str, float]) -> str:
     | DOMAIN_CONVERGENCE    | LOW  | any   | LOW  | LOW  |
     +-----------------------+------+-------+------+------+
 
+    Thresholds are data-driven, derived from Stage 3 two-phase grid
+    search (84,000 combinations, zero-FP objective).
+    See ``TDD/corpus/optimal_thresholds.json`` for full derivation.
+
     Args:
         scores: Dict of channel scores as returned by
                 ``compute_channel_scores()``.
@@ -566,7 +590,7 @@ def classify_similarity_pattern(scores: dict[str, float]) -> str:
     ast = scores.get("ast_winnowing", 0.0)
 
     # ── DIRECT_COPY: all channels high (verbatim or near-verbatim copy)
-    if raw > 0.50 and ident > 0.50:
+    if raw > _DC_RAW_MIN and ident > _DC_IDENT_MIN:
         return "DIRECT_COPY"
 
     # ── SSO_COPYING: API surface preserved, implementation differs
@@ -576,17 +600,17 @@ def classify_similarity_pattern(scores: dict[str, float]) -> str:
     #    3. Significant identifier-raw gap (API names vs code)
     #    4. AST structural similarity above baseline (shared class/method skeleton)
     #       This condition prevents domain convergence FP where AST is low
-    if raw < 0.25 and decl >= 0.50 and (ident - raw) >= 0.25 and ast > 0.25:
+    if raw < _SSO_RAW_MAX and decl >= _SSO_DECL_MIN and (ident - raw) >= _SSO_GAP_MIN and ast > _SSO_AST_MIN:
         return "SSO_COPYING"
 
     # ── OBFUSCATED_CLONE: raw and ident low, but AST reveals structure
     #    Threshold tightened to 0.30 to avoid edge-case FP where
     #    collection classes have borderline AST similarity (e.g. 0.250)
-    if raw < 0.15 and ident < 0.30 and ast > 0.30:
+    if raw < _OBC_RAW_MAX and ident < _OBC_IDENT_MAX and ast > _OBC_AST_MIN:
         return "OBFUSCATED_CLONE"
 
     # ── DOMAIN_CONVERGENCE: similar domain vocabulary but different API
-    if ident > 0.20 and decl < 0.40 and raw < 0.20:
+    if ident > _CONV_IDENT_MIN and decl < _CONV_DECL_MAX and raw < _CONV_RAW_MAX:
         return "DOMAIN_CONVERGENCE"
 
     return "INCONCLUSIVE"
