@@ -192,6 +192,37 @@ _DEFAULT_WEIGHTS: dict[str, float] = {
     "comment_string_overlap": 1.0,
 }
 
+# Academic profile weights — tuned via grid search on IR-Plag-Dataset.
+# Short academic code (10–30 lines) shares many common identifiers and
+# comments across independent submissions, so only structure-based
+# Winnowing channels provide reliable discrimination.  Raw winnowing is
+# weighted higher because it captures exact-copy patterns (L1–L3) that
+# normalised fingerprints absorb.
+_ACADEMIC_WEIGHTS: dict[str, float] = {
+    "raw_winnowing":        3.0,
+    "normalized_winnowing":  1.0,
+    "ast_winnowing":         1.0,
+    "identifier_cosine":     0.0,
+    "comment_string_overlap": 0.0,
+}
+
+_PROFILE_WEIGHTS: dict[str, dict[str, float]] = {
+    "industrial": _DEFAULT_WEIGHTS,
+    "academic": _ACADEMIC_WEIGHTS,
+}
+
+
+def get_weights_for_profile(profile: str = "industrial") -> dict[str, float]:
+    """Return channel weights for the given profile.
+
+    Args:
+        profile: ``"industrial"`` (default) or ``"academic"``.
+
+    Returns:
+        Dict mapping channel names to weight values.
+    """
+    return _PROFILE_WEIGHTS.get(profile, _DEFAULT_WEIGHTS).copy()
+
 
 def _jaccard_from_sets(set_a: set[int], set_b: set[int]) -> float:
     """Compute Jaccard similarity between two hash sets."""
@@ -217,6 +248,7 @@ def compute_channel_scores(
     cleaned_a: Optional[str] = None,
     cleaned_b: Optional[str] = None,
     extension: str = "",
+    weights: Optional[dict[str, float]] = None,
 ) -> dict[str, float]:
     """Compute scores across all available evidence channels.
 
@@ -261,10 +293,11 @@ def compute_channel_scores(
 
     # Composite weighted average
     if scores:
+        active_weights = weights if weights is not None else _DEFAULT_WEIGHTS
         total_weight = 0.0
         weighted_sum = 0.0
         for channel, score in scores.items():
-            w = _DEFAULT_WEIGHTS.get(channel, 1.0)
+            w = active_weights.get(channel, 1.0)
             weighted_sum += score * w
             total_weight += w
         scores["composite"] = weighted_sum / total_weight if total_weight else 0.0

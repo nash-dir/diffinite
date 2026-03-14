@@ -137,6 +137,7 @@ def generate_html_diff(
     filename_a: str = "",
     filename_b: str = "",
     context_lines: int = CONTEXT_LINES,
+    ln_col_width: int | None = None,
 ) -> str:
     """Generate a side-by-side HTML diff table with syntax highlighting.
 
@@ -149,12 +150,20 @@ def generate_html_diff(
         filename_a / filename_b: Filenames used to select Pygments lexers.
         context_lines: Number of context lines around each change.
                        Set to ``-1`` to disable folding.
+        ln_col_width: Explicit pixel width for the line-number column.
+                      If *None*, auto-computed from the line counts of
+                      ``text_a`` and ``text_b``.
 
     Returns:
         HTML string containing the diff table.
     """
     lines_a = text_a.splitlines()
     lines_b = text_b.splitlines()
+
+    # Compute responsive line-number column width
+    if ln_col_width is None:
+        max_ln = max(len(lines_a), len(lines_b), 1)
+        ln_col_width = max(28, len(str(max_ln)) * 7 + 10)
 
     lexer_a = _get_lexer(filename_a) if filename_a else TextLexer(stripnl=False)
     lexer_b = _get_lexer(filename_b) if filename_b else TextLexer(stripnl=False)
@@ -166,11 +175,12 @@ def generate_html_diff(
         ln_a: str, code_a: str, cls_a: str,
         ln_b: str, code_b: str, cls_b: str,
     ) -> str:
+        ln_style = f'style="width:{ln_col_width}px"'
         return (
             f'<tr>'
-            f'<td class="ln {cls_a}">{ln_a}</td>'
+            f'<td class="ln {cls_a}" {ln_style}>{ln_a}</td>'
             f'<td class="code {cls_a}"><pre>{code_a}</pre></td>'
-            f'<td class="ln {cls_b}">{ln_b}</td>'
+            f'<td class="ln {cls_b}" {ln_style}>{ln_b}</td>'
             f'<td class="code {cls_b}"><pre>{code_b}</pre></td>'
             f'</tr>'
         )
@@ -237,12 +247,13 @@ def generate_html_diff(
                 rows.append(_row("", "", "empty", str(j1 + off + 1), c, "add"))
 
     body = "\n".join(rows)
+    ln_th_style = f'style="width:{ln_col_width}px"'
     return (
         f'<table class="difftbl">'
         f'<thead><tr>'
-        f'<th class="ln">#</th>'
+        f'<th class="ln" {ln_th_style}>#</th>'
         f'<th class="code">{html.escape(label_a)}</th>'
-        f'<th class="ln">#</th>'
+        f'<th class="ln" {ln_th_style}>#</th>'
         f'<th class="code">{html.escape(label_b)}</th>'
         f'</tr></thead>\n'
         f'<tbody>\n{body}\n</tbody>'

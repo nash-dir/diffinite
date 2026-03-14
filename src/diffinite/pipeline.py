@@ -1,12 +1,18 @@
 """Pipeline orchestrator.
 
-Ties together collection, parsing, diffing, deep-compare, and PDF
+Ties together collection, parsing, diffing, deep-compare, and report
 generation into a single ``run_pipeline()`` function that is called
 by the CLI.
+
+Supports multiple output formats:
+  --report-pdf  (default) — merged PDF with bookmarks and Bates numbers.
+  --report-html           — standalone HTML report.
+  --report-md             — Markdown summary report.
 """
 
 from __future__ import annotations
 
+import html as html_mod
 import logging
 import os
 import tempfile
@@ -16,7 +22,7 @@ from diffinite.collector import collect_files, match_files, FUZZY_THRESHOLD
 from diffinite.deep_compare import run_deep_compare
 from diffinite.differ import compute_diff, generate_html_diff, read_file
 from diffinite.fingerprint import DEFAULT_K, DEFAULT_W
-from diffinite.models import DiffResult
+from diffinite.models import DiffResult, DeepMatchResult
 from diffinite.parser import strip_comments
 from diffinite.pdf_gen import (
     add_bates_numbers,
@@ -30,6 +36,180 @@ from diffinite.pdf_gen import (
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def _compute_ln_col_width(line_counts: list[int]) -> int:
+    """Compute a unified line-number column width for all diff pages.
+
+    ``line_counts`` should contain the line count of every file
+    (both A and B sides).  The returned pixel width accommodates
+    the longest line number with appropriate padding.
+    """
+    max_ln = max(line_counts) if line_counts else 1
+    digits = len(str(max_ln))
+    # 7px per digit + 10px padding, minimum 28px
+    return max(28, digits * 7 + 10)
+
+
+# ---------------------------------------------------------------------------
+# Markdown report generator
+# ---------------------------------------------------------------------------
+def _generate_markdown_report(
+    results: list[DiffResult],
+    unmatched_a: list[str],
+    unmatched_b: list[str],
+    dir_a: str,
+    dir_b: str,
+    by_word: bool,
+    compare_comment: bool,
+    deep_results: list[DeepMatchResult] | None,
+    output_path: str,
+) -> None:
+    """Generate a Markdown summary report."""
+    unit = "word" if by_word else "line"
+    comment_mode = "included" if compare_comment else "excluded"
+
+    lines: list[str] = []
+    lines.append("# Diffinite — Source Code Diff Report\n")
+    lines.append(f"- **Dir A:** `{dir_a}`")
+    lines.append(f"- **Dir B:** `{dir_b}`")
+    lines.append(f"- **Comparison unit:** {unit}")
+    lines.append(f"- **Comments:** {comment_mode}")
+    lines.append(f"- **Matched pairs:** {len(results)}")
+    lines.append(f"- **Unmatched:** {len(unmatched_a)} (A) / {len(unmatched_b)} (B)\n")
+
+    # Summary table
+    lines.append("## Summary\n")
+    lines.append("| # | File A | File B | Name Sim. | Match | +Added | −Deleted |")
+    lines.append("|---|--------|--------|:---------:|:-----:|:------:|:--------:|")
+    for idx, r in enumerate(results, 1):
+        pct = r.ratio * 100
+        err = f" ⚠ {r.error}" if r.error else ""
+        lines.append(
+            f"| {idx} | `{r.match.rel_path_a}` | `{r.match.rel_path_b}` "
+            f"| {r.match.similarity:.1f} | {pct:.1f}%{err} "
+            f"| +{r.additions} | −{r.deletions} |"
+        )
+
+    # Unmatched
+    if unmatched_a or unmatched_b:
+        lines.append("\n## Unmatched Files\n")
+        if unmatched_a:
+            lines.append(f"### Only in A (`{dir_a}`)\n")
+            for f in unmatched_a:
+                lines.append(f"- `{f}`")
+        if unmatched_b:
+            lines.append(f"\n### Only in B (`{dir_b}`)\n")
+            for f in unmatched_b:
+                lines.append(f"- `{f}`")
+
+    # Deep Compare
+    if deep_results:
+        has_channels = any(dr.channel_scores for dr in deep_results)
+        if has_channels:
+            lines.append("\n## Deep Compare — Multi-Evidence Channel Matrix\n")
+            lines.append("| A File | B File | Raw | Normalized | AST | Identifier | Comment/Str | Composite |")
+            lines.append("|--------|--------|:---:|:----------:|:---:|:----------:|:-----------:|:---------:|")
+            ch_names = [
+                "raw_winnowing", "normalized_winnowing", "ast_winnowing",
+                "identifier_cosine", "comment_string_overlap", "composite",
+            ]
+            for dr in deep_results:
+                for b_file, shared, jaccard in dr.matched_files_b:
+                    ch = dr.channel_scores.get(b_file, {})
+                    cells = " | ".join(
+                        f"{ch.get(cn, 0)*100:.1f}%" if ch.get(cn) is not None else "—"
+                        for cn in ch_names
+                    )
+                    lines.append(f"| `{dr.file_a}` | `{b_file}` | {cells} |")
+        else:
+            lines.append("\n## Deep Compare — N:M Cross-Match Results\n")
+            lines.append("| A File | B File(s) | Shared Hashes | Jaccard |")
+            lines.append("|--------|-----------|:-------------:|:-------:|")
+            for dr in deep_results:
+                for b_file, shared, jaccard in dr.matched_files_b:
+                    lines.append(
+                        f"| `{dr.file_a}` | `{b_file}` | {shared} | {jaccard*100:.1f}% |"
+                    )
+
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("\n".join(lines), encoding="utf-8")
+    logger.info("Markdown report → %s", out.resolve())
+
+
+# ---------------------------------------------------------------------------
+# HTML report generator (standalone, self-contained)
+# ---------------------------------------------------------------------------
+def _generate_html_report(
+    results: list[DiffResult],
+    unmatched_a: list[str],
+    unmatched_b: list[str],
+    dir_a: str,
+    dir_b: str,
+    by_word: bool,
+    compare_comment: bool,
+    deep_results: list[DeepMatchResult] | None,
+    output_path: str,
+    ln_col_width: int = 28,
+) -> None:
+    """Generate a standalone HTML report with all diffs inline."""
+    cover_html_body = build_cover_html(
+        results, unmatched_a, unmatched_b,
+        dir_a, dir_b, by_word, compare_comment,
+        deep_results=deep_results,
+    )
+
+    # Append all inline diffs
+    unit = "word" if by_word else "line"
+    diff_sections: list[str] = []
+    for idx, r in enumerate(results, 1):
+        if r.error:
+            diff_sections.append(
+                f'<h2>{idx}. {html_mod.escape(r.match.rel_path_a)} &harr; '
+                f'{html_mod.escape(r.match.rel_path_b)}</h2>\n'
+                f'<p style="color:red">Error: {html_mod.escape(r.error)}</p>\n'
+            )
+        else:
+            from diffinite.pdf_gen import _ratio_badge
+            diff_sections.append(
+                f'<h2>{idx}. {html_mod.escape(r.match.rel_path_a)} &harr; '
+                f'{html_mod.escape(r.match.rel_path_b)}</h2>\n'
+                f'<p>Match ratio: {_ratio_badge(r.ratio)} &nbsp; '
+                f'<span style="color:green">+{r.additions} {unit}(s)</span> &nbsp; '
+                f'<span style="color:red">-{r.deletions} {unit}(s)</span></p>\n'
+                f'{r.html_diff}\n'
+            )
+
+    # Write full standalone HTML
+    from diffinite.pdf_gen import _CSS_BODY
+    full_html = f"""\
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>Diffinite — Diff Report</title>
+<style>
+{_CSS_BODY}
+</style>
+</head>
+<body>
+{cover_html_body}
+<hr style="margin:40px 0">
+{"<hr style='margin:40px 0'>".join(diff_sections)}
+</body>
+</html>
+"""
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(full_html, encoding="utf-8")
+    logger.info("HTML report → %s", out.resolve())
+
+
+# ---------------------------------------------------------------------------
+# Main pipeline
+# ---------------------------------------------------------------------------
 def run_pipeline(
     dir_a: str,
     dir_b: str,
@@ -55,19 +235,34 @@ def run_pipeline(
     normalize: bool = False,
     mode: str = "token",
     multi_channel: bool = False,
+    profile: str = "industrial",
+    # Multi-format output
+    report_pdf: str | None = None,
+    report_html: str | None = None,
+    report_md: str | None = None,
 ) -> None:
-    """Execute the full diff-to-PDF pipeline.
+    """Execute the full diff-to-report pipeline.
 
     Standard mode:
         1. Collect files → fuzzy 1:1 match
         2. Read + optional comment strip
         3. Compute diff + Pygments-highlighted HTML
-        4. Generate per-file PDFs → merge with bookmarks
+        4. Generate report in requested format(s)
 
     Deep mode (``--deep``):
         Adds Winnowing-based N:M cross-matching and appends the
         cross-match table to the cover page / separate PDF section.
+
+    Output formats (can be combined):
+        --report-pdf  (default) — merged PDF with bookmarks.
+        --report-html           — standalone self-contained HTML.
+        --report-md             — Markdown summary table.
     """
+    # Determine effective output paths
+    # If no explicit format is specified, default to PDF
+    if report_pdf is None and report_html is None and report_md is None:
+        report_pdf = output_pdf
+
     # Step 1 — collect & match
     logger.info("Step 1: Collecting files …")
     files_a = collect_files(dir_a)
@@ -86,8 +281,10 @@ def run_pipeline(
     root_b = Path(dir_b).resolve()
     unit = "word" if by_word else "line"
 
-    # Steps 2-4 — read, preprocess, diff for each pair
+    # Steps 2-4 — read, preprocess, diff, collect line counts
     results: list[DiffResult] = []
+    all_line_counts: list[int] = []
+
     for m in matches:
         abs_a = str(root_a / m.rel_path_a)
         abs_b = str(root_b / m.rel_path_b)
@@ -107,7 +304,44 @@ def run_pipeline(
             text_a = strip_comments(text_a, ext, squash_blanks=squash_blanks)
             text_b = strip_comments(text_b, ext, squash_blanks=squash_blanks)
 
+        # Track line counts for unified responsive width
+        all_line_counts.append(text_a.count("\n") + 1)
+        all_line_counts.append(text_b.count("\n") + 1)
+
         ratio, additions, deletions = compute_diff(text_a, text_b, by_word)
+
+        # Defer HTML generation (need unified ln_col_width)
+        results.append(DiffResult(
+            match=m,
+            ratio=ratio,
+            additions=additions,
+            deletions=deletions,
+            html_diff="",  # filled below after width computed
+        ))
+
+    # Compute global unified line-number column width
+    ln_col_width = _compute_ln_col_width(all_line_counts)
+    logger.info("  Responsive ln width: %dpx (max line: %s)",
+                ln_col_width, max(all_line_counts) if all_line_counts else 0)
+
+    # Generate HTML diffs with unified column width
+    diff_idx = 0
+    for m_idx, m in enumerate(matches):
+        r = results[m_idx]
+        if r.error:
+            continue
+
+        abs_a = str(root_a / m.rel_path_a)
+        abs_b = str(root_b / m.rel_path_b)
+        ext = Path(m.rel_path_a).suffix.lower()
+
+        text_a = read_file(abs_a)
+        text_b = read_file(abs_b)
+        if text_a is None or text_b is None:
+            continue
+        if not compare_comment:
+            text_a = strip_comments(text_a, ext, squash_blanks=squash_blanks)
+            text_b = strip_comments(text_b, ext, squash_blanks=squash_blanks)
 
         html_diff = generate_html_diff(
             text_a, text_b,
@@ -116,15 +350,15 @@ def run_pipeline(
             filename_a=m.rel_path_a,
             filename_b=m.rel_path_b,
             context_lines=3 if collapse_identical else -1,
+            ln_col_width=ln_col_width,
         )
-
-        results.append(DiffResult(
-            match=m,
-            ratio=ratio,
-            additions=additions,
-            deletions=deletions,
+        results[m_idx] = DiffResult(
+            match=r.match,
+            ratio=r.ratio,
+            additions=r.additions,
+            deletions=r.deletions,
             html_diff=html_diff,
-        ))
+        )
 
     total_files = len(results)
 
@@ -139,11 +373,71 @@ def run_pipeline(
             normalize=normalize,
             mode=mode,
             multi_channel=multi_channel,
+            profile=profile,
         )
 
-    # Step 5 — divide-and-conquer PDF generation
-    logger.info("Step 5: Generating PDFs (divide-and-conquer) …")
+    # ── Output generation ─────────────────────────────────────────────
 
+    # Markdown report
+    if report_md:
+        logger.info("Generating Markdown report …")
+        _generate_markdown_report(
+            results, unmatched_a, unmatched_b,
+            dir_a, dir_b, by_word, compare_comment,
+            deep_results, report_md,
+        )
+
+    # HTML report
+    if report_html:
+        logger.info("Generating HTML report …")
+        _generate_html_report(
+            results, unmatched_a, unmatched_b,
+            dir_a, dir_b, by_word, compare_comment,
+            deep_results, report_html, ln_col_width,
+        )
+
+    # PDF report
+    if report_pdf:
+        logger.info("Generating PDF report (divide-and-conquer) …")
+        _generate_pdf_report(
+            results, unmatched_a, unmatched_b,
+            dir_a, dir_b, by_word, compare_comment,
+            deep_results, report_pdf,
+            no_merge=no_merge,
+            show_page_number=show_page_number,
+            show_file_number=show_file_number,
+            show_bates_number=show_bates_number,
+            show_filename=show_filename,
+            unit=unit,
+            total_files=total_files,
+        )
+
+    logger.info("Done ✓")
+
+
+# ---------------------------------------------------------------------------
+# PDF report (extracted from old pipeline)
+# ---------------------------------------------------------------------------
+def _generate_pdf_report(
+    results: list[DiffResult],
+    unmatched_a: list[str],
+    unmatched_b: list[str],
+    dir_a: str,
+    dir_b: str,
+    by_word: bool,
+    compare_comment: bool,
+    deep_results: list[DeepMatchResult] | None,
+    output_pdf: str,
+    *,
+    no_merge: bool,
+    show_page_number: bool,
+    show_file_number: bool,
+    show_bates_number: bool,
+    show_filename: bool,
+    unit: str,
+    total_files: int,
+) -> None:
+    """Generate PDF report with divide-and-conquer merging."""
     if no_merge:
         out_stem = Path(output_pdf).stem
         out_dir = Path(output_pdf).parent / f"{out_stem}_files"
@@ -188,7 +482,6 @@ def run_pipeline(
 
         # (3) Merge with bookmarks or individual PDFs
         if no_merge:
-            # Bates for individual PDFs
             if show_bates_number:
                 _apply_bates_to_individual(
                     [cover_dest] + [p for p, _ in diff_pdf_pairs]
@@ -206,8 +499,6 @@ def run_pipeline(
                 add_bates_numbers(bates_tmp, output_pdf)
         else:
             logger.error("No PDF parts were generated — cannot create report")
-
-    logger.info("Done ✓")
 
 
 def _apply_bates_to_individual(pdf_paths: list[str]) -> None:

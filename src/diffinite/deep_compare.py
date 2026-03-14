@@ -160,6 +160,7 @@ def run_deep_compare(
     normalize: bool = False,
     mode: str = "token",
     multi_channel: bool = False,
+    profile: str = "industrial",
 ) -> list[DeepMatchResult]:
     """Execute N:M cross-matching between two directories.
 
@@ -192,6 +193,7 @@ def run_deep_compare(
         return _run_multi_channel(
             dir_a, dir_b, files_a, files_b,
             k=k, w=w, workers=workers, min_jaccard=min_jaccard,
+            profile=profile,
         )
 
     return _run_single_channel(
@@ -297,9 +299,12 @@ def _run_multi_channel(
     w: int,
     workers: int,
     min_jaccard: float,
+    profile: str = "industrial",
 ) -> list[DeepMatchResult]:
     """Multi-channel deep compare with evidence scoring."""
-    from diffinite.evidence import compute_channel_scores
+    from diffinite.evidence import compute_channel_scores, get_weights_for_profile
+
+    weights = get_weights_for_profile(profile)
 
     root_a = Path(dir_a).resolve()
     root_b = Path(dir_b).resolve()
@@ -395,6 +400,7 @@ def _run_multi_channel(
                 cleaned_a=cleaned_a.get(file_id_a),
                 cleaned_b=cleaned_b.get(file_id_b),
                 extension=extension,
+                weights=weights,
             )
             all_channel_scores[file_id_b] = scores
 
