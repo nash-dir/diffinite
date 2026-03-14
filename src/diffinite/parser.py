@@ -21,66 +21,59 @@ import enum
 import re
 from typing import Optional
 
+from collections.abc import Iterator, Mapping
+
 from diffinite.models import CommentSpec
 
 # ---------------------------------------------------------------------------
-# Extension → CommentSpec mapping
+# Extension → CommentSpec mapping  (delegated to language registry)
 # ---------------------------------------------------------------------------
+from diffinite.languages import get_spec, all_extensions  # noqa: E402
 
-# C-family extensions that may use #if 0
-_C_FAMILY_EXTS = frozenset({
-    ".c", ".h", ".cpp", ".hpp", ".cs", ".java",
-    ".js", ".jsx", ".ts", ".tsx", ".go", ".rs",
-    ".swift", ".kt", ".scala",
-})
 
-COMMENT_SPECS: dict[str, CommentSpec] = {
-    # Python
-    ".py":   CommentSpec(line_markers=("#",),    block_start=None,    block_end=None),
-    # C-family
-    ".c":    CommentSpec(line_markers=("//",),   block_start="/*",    block_end="*/"),
-    ".h":    CommentSpec(line_markers=("//",),   block_start="/*",    block_end="*/"),
-    ".cpp":  CommentSpec(line_markers=("//",),   block_start="/*",    block_end="*/"),
-    ".hpp":  CommentSpec(line_markers=("//",),   block_start="/*",    block_end="*/"),
-    ".cs":   CommentSpec(line_markers=("//",),   block_start="/*",    block_end="*/"),
-    ".java": CommentSpec(line_markers=("//",),   block_start="/*",    block_end="*/"),
-    ".js":   CommentSpec(line_markers=("//",),   block_start="/*",    block_end="*/"),
-    ".jsx":  CommentSpec(line_markers=("//",),   block_start="/*",    block_end="*/"),
-    ".ts":   CommentSpec(line_markers=("//",),   block_start="/*",    block_end="*/"),
-    ".tsx":  CommentSpec(line_markers=("//",),   block_start="/*",    block_end="*/"),
-    ".go":   CommentSpec(line_markers=("//",),   block_start="/*",    block_end="*/"),
-    ".rs":   CommentSpec(line_markers=("//",),   block_start="/*",    block_end="*/"),
-    ".swift":CommentSpec(line_markers=("//",),   block_start="/*",    block_end="*/"),
-    ".kt":   CommentSpec(line_markers=("//",),   block_start="/*",    block_end="*/"),
-    ".scala":CommentSpec(line_markers=("//",),   block_start="/*",    block_end="*/"),
-    # PHP — supports both // and # line comments
-    ".php":  CommentSpec(line_markers=("//", "#"), block_start="/*",  block_end="*/"),
-    # Ruby
-    ".rb":   CommentSpec(line_markers=("#",),    block_start="=begin", block_end="=end"),
-    # Shell / Bash
-    ".sh":   CommentSpec(line_markers=("#",),    block_start=None,     block_end=None),
-    ".bash": CommentSpec(line_markers=("#",),    block_start=None,     block_end=None),
-    # Perl
-    ".pl":   CommentSpec(line_markers=("#",),    block_start=None,     block_end=None),
-    ".pm":   CommentSpec(line_markers=("#",),    block_start=None,     block_end=None),
-    # HTML / XML / SVG
-    ".html": CommentSpec(line_markers=(),        block_start="<!--",  block_end="-->"),
-    ".htm":  CommentSpec(line_markers=(),        block_start="<!--",  block_end="-->"),
-    ".xml":  CommentSpec(line_markers=(),        block_start="<!--",  block_end="-->"),
-    ".svg":  CommentSpec(line_markers=(),        block_start="<!--",  block_end="-->"),
-    # CSS
-    ".css":  CommentSpec(line_markers=(),        block_start="/*",    block_end="*/"),
-    ".scss": CommentSpec(line_markers=("//",),   block_start="/*",    block_end="*/"),
-    ".less": CommentSpec(line_markers=("//",),   block_start="/*",    block_end="*/"),
-    # SQL
-    ".sql":  CommentSpec(line_markers=("--",),   block_start="/*",    block_end="*/"),
-    # Lua
-    ".lua":  CommentSpec(line_markers=("--",),   block_start="--[[",  block_end="]]"),
-    # YAML / TOML
-    ".yaml": CommentSpec(line_markers=("#",),    block_start=None,     block_end=None),
-    ".yml":  CommentSpec(line_markers=("#",),    block_start=None,     block_end=None),
-    ".toml": CommentSpec(line_markers=("#",),    block_start=None,     block_end=None),
-}
+class _RegistryProxy(Mapping):
+    """Dict-like proxy: ``COMMENT_SPECS[ext]`` → ``get_spec(ext).comment``.
+
+    Provides full backward compatibility for code that accesses
+    ``COMMENT_SPECS`` as a dict — supports ``[]``, ``.get()``,
+    ``in``, ``len()``, ``iter()``, and ``keys()/values()/items()``.
+    """
+
+    # ── Mapping abstract methods ──────────────────────────────────
+    def __getitem__(self, ext: str) -> CommentSpec:
+        spec = get_spec(ext)
+        if spec is None:
+            raise KeyError(ext)
+        return spec.comment
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(all_extensions())
+
+    def __len__(self) -> int:
+        return len(all_extensions())
+
+    # ── Convenience ───────────────────────────────────────────────
+    def __contains__(self, ext: object) -> bool:  # type: ignore[override]
+        return get_spec(ext) is not None if isinstance(ext, str) else False
+
+    def __repr__(self) -> str:
+        return f"_RegistryProxy({len(self)} extensions)"
+
+
+COMMENT_SPECS: Mapping[str, CommentSpec] = _RegistryProxy()
+
+
+def _has_ifdef_zero(ext: str) -> bool:
+    """Check if an extension requires ``#if 0`` pre-processing."""
+    spec = get_spec(ext)
+    return spec.has_ifdef_zero if spec else False
+
+
+# Legacy alias — kept for backward compatibility with external code
+_C_FAMILY_EXTS = frozenset(
+    ext for ext in all_extensions()
+    if (s := get_spec(ext)) is not None and s.has_ifdef_zero
+)
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +193,7 @@ def strip_comments(
         return text
 
     # Pre-pass: strip #if 0 blocks for C-family
-    if extension in _C_FAMILY_EXTS:
+    if _has_ifdef_zero(extension):
         text = _strip_ifdef_zero(text)
 
     result = _strip_2pass(text, spec)

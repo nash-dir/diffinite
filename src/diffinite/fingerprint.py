@@ -37,11 +37,15 @@ HASH_MOD: int = (1 << 61) - 1  # Mersenne prime for low collision
 # keeping the tokens themselves (no empty strings).
 _TOKEN_RE = re.compile(r"[A-Za-z_]\w*|[0-9]+(?:\.[0-9]+)?|[^\s]")
 
-# Common keywords across C/Java/Python/JS — used for token normalisation.
-# Including keywords from other languages is safe: if a keyword appears as
-# an identifier in another language, both sides get the same treatment,
-# producing identical hashes.  In forensic analysis, false negatives
-# (missed clones) are more dangerous than false positives.
+# Common keywords — curated subset used for token normalisation.
+# Phase 3 Strategy A: maintain the exact legacy keyword set for backward
+# compatibility.  Phase 5 will switch to per-extension keywords via
+# ``get_spec(ext).keywords`` for improved precision.
+from diffinite.languages import all_keywords as _all_keywords  # noqa: E402
+
+# Legacy keyword set — identical to the pre-v0.4.0 hardcoded frozenset.
+# all_keywords() is a superset (per-language keywords); using it directly
+# would change fingerprint hashes and break existing forensic reports.
 _COMMON_KEYWORDS = frozenset({
     # Control flow
     "if", "else", "for", "while", "do", "switch", "case", "break",
