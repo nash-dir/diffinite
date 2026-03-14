@@ -387,18 +387,35 @@ def build_cover_html(
         has_channels = any(dr.channel_scores for dr in deep_results)
 
         if has_channels:
+            # Check if classification data is available
+            has_classification = any(dr.classification for dr in deep_results)
+            has_afc = any(dr.afc_results for dr in deep_results)
+
             deep_html += "<h2>Deep Compare &mdash; Multi-Evidence Channel Matrix</h2>\n"
             deep_html += (
                 '<table class="deep">'
                 "<tr><th>A File</th><th>B File</th>"
                 "<th>Raw</th><th>Normalized</th><th>AST</th>"
                 "<th>Identifier</th><th>Comment/Str</th>"
-                "<th>Composite</th></tr>\n"
+                "<th>Composite</th>"
             )
+            if has_classification:
+                deep_html += "<th>Classification</th>"
+            deep_html += "</tr>\n"
+
             _ch_names = [
                 "raw_winnowing", "normalized_winnowing", "ast_winnowing",
                 "identifier_cosine", "comment_string_overlap", "composite",
             ]
+            _classification_colors = {
+                "SSO_COPYING": "#dc3545",
+                "DIRECT_COPY": "#e67e22",
+                "OBFUSCATED_CLONE": "#8e44ad",
+                "DOMAIN_CONVERGENCE": "#28a745",
+                "INCONCLUSIVE": "#888",
+            }
+            afc_rows: list[str] = []
+
             for dr in deep_results:
                 for b_file, shared, jaccard in dr.matched_files_b:
                     ch = dr.channel_scores.get(b_file, {})
@@ -410,14 +427,54 @@ def build_cover_html(
                             cells += f"<td>{badge}</td>"
                         else:
                             cells += "<td>—</td>"
+                    # Classification badge
+                    cls_cell = ""
+                    if has_classification:
+                        cls_label = dr.classification.get(b_file, "—")
+                        cls_color = _classification_colors.get(cls_label, "#888")
+                        cls_cell = (
+                            f'<td><span style="display:inline-block;'
+                            f'padding:2px 6px;border-radius:3px;'
+                            f'font-size:8px;font-weight:bold;'
+                            f'color:#fff;background:{cls_color}">'
+                            f'{html.escape(cls_label)}</span></td>'
+                        )
                     deep_html += (
                         f"<tr>"
                         f"<td>{html.escape(dr.file_a)}</td>"
                         f"<td>{html.escape(b_file)}</td>"
                         f"{cells}"
+                        f"{cls_cell}"
                         f"</tr>\n"
                     )
+
+                    # Collect AFC filtration report items
+                    if has_afc:
+                        afc = dr.afc_results.get(b_file, {})
+                        filt_report = afc.get("filtration_report", [])
+                        afc_cls = afc.get("classification", "")
+                        if filt_report or afc_cls:
+                            items_html = "".join(
+                                f"<li>{html.escape(item)}</li>"
+                                for item in filt_report
+                            )
+                            afc_rows.append(
+                                f"<li><strong>{html.escape(dr.file_a)} "
+                                f"&harr; {html.escape(b_file)}</strong>"
+                                f" &mdash; AFC: {html.escape(afc_cls)}"
+                                f"<ul>{items_html}</ul></li>"
+                            )
+
             deep_html += "</table>\n"
+
+            # AFC filtration summary section
+            if afc_rows:
+                deep_html += (
+                    "<h3>AFC Filtration Summary</h3>\n"
+                    '<ul style="font-size:9px;">\n'
+                    + "\n".join(afc_rows)
+                    + "\n</ul>\n"
+                )
         else:
             # Standard single-channel display
             deep_html += "<h2>Deep Compare &mdash; N:M Cross-Match Results</h2>\n"

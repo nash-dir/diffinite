@@ -35,9 +35,38 @@ from diffinite.fingerprint import _COMMON_KEYWORDS
 # Simple tokeniser — same regex as fingerprint.py
 _TOKEN_RE = re.compile(r"[A-Za-z_]\w*|[0-9]+(?:\.[0-9]+)?|[^\s]")
 
+# Noise identifiers — tokens that inflate cosine similarity without
+# indicating SSO.  Includes:
+#  - Java/generic type names (scènes à faire)
+#  - Single-character loop/generic variables
+_JAVA_TYPE_STOPWORDS = frozenset({
+    "String", "Object", "Integer", "Long", "Double", "Float",
+    "Boolean", "Character", "Byte", "Short", "Number",
+    "Void", "Class", "Comparable", "Iterable", "Iterator",
+    "Serializable", "Cloneable", "Exception", "Throwable",
+    "Override", "Deprecated", "SuppressWarnings",
+})
+
+
+def _is_noise_identifier(token: str) -> bool:
+    """Check if *token* is a noise identifier that should be excluded.
+
+    Filters:
+    - Single-character identifiers (loop vars `i`, `j`, `k`; generics `V`, `K`, `T`)
+    - Java standard type names (scènes à faire)
+    """
+    if len(token) == 1:
+        return True  # i, j, k, V, K, T, E, etc.
+    if token in _JAVA_TYPE_STOPWORDS:
+        return True
+    return False
+
 
 def _extract_identifiers(source: str) -> list[str]:
-    """Extract identifier tokens (excluding language keywords).
+    """Extract identifier tokens (excluding keywords and noise identifiers).
+
+    Filters out language keywords, single-character variables (loop/generics),
+    and Java standard type names that are scènes à faire.
 
     Args:
         source: Source code text (comments already stripped).
@@ -50,6 +79,7 @@ def _extract_identifiers(source: str) -> list[str]:
         t for t in tokens
         if t not in _COMMON_KEYWORDS
         and (t[0].isalpha() or t[0] == '_')
+        and not _is_noise_identifier(t)
     ]
 
 
@@ -87,6 +117,132 @@ def identifier_cosine(source_a: str, source_b: str) -> float:
     return dot / (mag_a * mag_b)
 
 
+# ---------------------------------------------------------------------------
+# TF-IDF weighted identifier similarity (Stage 2: FP reduction)
+# ---------------------------------------------------------------------------
+def _build_idf(all_identifiers_per_file: list[list[str]]) -> dict[str, float]:
+    """Build a smoothed IDF dictionary from a corpus of identifier lists.
+
+    Uses the smoothed formula: ``log((N+1) / (df+1)) + 1``
+    where *N* = total number of documents, *df* = number of documents
+    containing the term.
+
+    Common identifiers like ``size``, ``get``, ``set`` that appear in
+    many files will have low IDF; rare API-specific names like
+    ``compareTo``, ``copyValueOf`` will have high IDF.
+
+    Args:
+        all_identifiers_per_file: List-of-lists — each inner list
+            contains all identifiers from one source file.
+
+    Returns:
+        Dict mapping identifier → IDF weight.
+    """
+    N = len(all_identifiers_per_file)
+    # Document frequency: how many files contain each identifier
+    df: dict[str, int] = {}
+    for ids in all_identifiers_per_file:
+        for token in set(ids):  # unique per document
+            df[token] = df.get(token, 0) + 1
+
+    idf: dict[str, float] = {}
+    for token, freq in df.items():
+        idf[token] = math.log((N + 1) / (freq + 1)) + 1
+    return idf
+
+
+def _tfidf_vector(identifiers: list[str], idf: dict[str, float]) -> Counter:
+    """Compute TF-IDF weighted vector from identifiers and IDF dict.
+
+    TF is raw count, multiplied by IDF weight for each term.
+
+    Args:
+        identifiers: List of identifier tokens from a single file.
+        idf: IDF dictionary from ``_build_idf()``.
+
+    Returns:
+        Counter with TF-IDF weights as values.
+    """
+    tf = Counter(identifiers)
+    tfidf = Counter()
+    for token, count in tf.items():
+        weight = idf.get(token, 1.0)
+        tfidf[token] = count * weight
+    return tfidf
+
+
+def identifier_cosine_tfidf(
+    source_a: str, source_b: str,
+    idf: dict[str, float] | None = None,
+) -> float:
+    """Compute TF-IDF weighted cosine similarity between identifier vectors.
+
+    When ``idf`` is ``None``, falls back to plain ``identifier_cosine()``.
+    Otherwise, applies TF-IDF weighting which down-weights common domain
+    identifiers (``size``, ``get``, ``set``) and amplifies rare API-specific
+    names (``compareTo``, ``copyValueOf``).
+
+    Args:
+        source_a: Comment-stripped source of file A.
+        source_b: Comment-stripped source of file B.
+        idf:      IDF dictionary from ``_build_idf()``, or None for fallback.
+
+    Returns:
+        Cosine similarity ∈ [0.0, 1.0].
+    """
+    if idf is None:
+        return identifier_cosine(source_a, source_b)
+
+    ids_a = _extract_identifiers(source_a)
+    ids_b = _extract_identifiers(source_b)
+
+    vec_a = _tfidf_vector(ids_a, idf)
+    vec_b = _tfidf_vector(ids_b, idf)
+
+    return _cosine_from_counters(vec_a, vec_b)
+
+
+def declaration_cosine_tfidf(
+    source_a: str, source_b: str, extension: str,
+    idf: dict[str, float] | None = None,
+) -> float:
+    """Compute TF-IDF weighted cosine similarity using declaration identifiers.
+
+    Same as ``declaration_identifier_cosine()`` but applies IDF weighting
+    to down-weight boilerplate method names that appear across many files.
+
+    Falls back to ``declaration_identifier_cosine()`` if ``idf`` is None
+    or tree-sitter is unavailable.
+
+    Args:
+        source_a:  Comment-stripped source of file A.
+        source_b:  Comment-stripped source of file B.
+        extension: Lowercase file extension (e.g. ``".java"``).
+        idf:       IDF dictionary, or None for fallback.
+
+    Returns:
+        Cosine similarity ∈ [0.0, 1.0].
+    """
+    if idf is None:
+        return declaration_identifier_cosine(source_a, source_b, extension)
+
+    try:
+        from diffinite.ast_normalizer import extract_declaration_identifiers
+
+        ids_a = extract_declaration_identifiers(source_a, extension)
+        ids_b = extract_declaration_identifiers(source_b, extension)
+
+        if ids_a is not None and ids_b is not None:
+            vec_a = _tfidf_vector(ids_a, idf)
+            vec_b = _tfidf_vector(ids_b, idf)
+            return _cosine_from_counters(vec_a, vec_b)
+    except ImportError:
+        pass
+
+    return declaration_identifier_cosine(source_a, source_b, extension)
+
+
+
 def _cosine_from_counters(counter_a: Counter, counter_b: Counter) -> float:
     """Compute cosine similarity between two Counter objects."""
     if not counter_a or not counter_b:
@@ -98,6 +254,16 @@ def _cosine_from_counters(counter_a: Counter, counter_b: Counter) -> float:
     if mag_a == 0 or mag_b == 0:
         return 0.0
     return dot / (mag_a * mag_b)
+
+
+def _jaccard_from_sets(set_a: set, set_b: set) -> float:
+    """Jaccard similarity between two sets."""
+    if not set_a and not set_b:
+        return 0.0
+    union = set_a | set_b
+    if not union:
+        return 0.0
+    return len(set_a & set_b) / len(union)
 
 
 def declaration_identifier_cosine(
@@ -364,4 +530,206 @@ def compute_channel_scores(
         scores["composite"] = weighted_sum / total_weight if total_weight else 0.0
 
     return scores
+
+
+# ---------------------------------------------------------------------------
+# Cross-Channel Classification (Stage 4: Pattern-based SSO detection)
+# ---------------------------------------------------------------------------
+def classify_similarity_pattern(scores: dict[str, float]) -> str:
+    """Classify the similarity pattern based on cross-channel evidence.
+
+    Instead of relying on a single threshold, this function examines
+    the *pattern* of scores across channels to determine the type
+    of similarity:
+
+    +-----------------------+------+-------+------+------+
+    | Scenario              | raw  | ident | decl |  ast |
+    +-----------------------+------+-------+------+------+
+    | DIRECT_COPY           | HIGH | HIGH  | HIGH | HIGH |
+    | SSO_COPYING           | LOW  | HIGH  | HIGH | MED+ |
+    | OBFUSCATED_CLONE      | LOW  | LOW   | LOW  | MED+ |
+    | DOMAIN_CONVERGENCE    | LOW  | any   | LOW  | LOW  |
+    +-----------------------+------+-------+------+------+
+
+    Args:
+        scores: Dict of channel scores as returned by
+                ``compute_channel_scores()``.
+
+    Returns:
+        One of: ``"DIRECT_COPY"``, ``"SSO_COPYING"``,
+        ``"OBFUSCATED_CLONE"``, ``"DOMAIN_CONVERGENCE"``,
+        ``"INCONCLUSIVE"``.
+    """
+    raw = scores.get("raw_winnowing", 0.0)
+    ident = scores.get("identifier_cosine", 0.0)
+    decl = scores.get("declaration_cosine", 0.0)
+    ast = scores.get("ast_winnowing", 0.0)
+
+    # ── DIRECT_COPY: all channels high (verbatim or near-verbatim copy)
+    if raw > 0.50 and ident > 0.50:
+        return "DIRECT_COPY"
+
+    # ── SSO_COPYING: API surface preserved, implementation differs
+    #    Requires:
+    #    1. Low raw (different implementation)
+    #    2. High declaration similarity (shared API surface)
+    #    3. Significant identifier-raw gap (API names vs code)
+    #    4. AST structural similarity above baseline (shared class/method skeleton)
+    #       This condition prevents domain convergence FP where AST is low
+    if raw < 0.25 and decl >= 0.50 and (ident - raw) >= 0.25 and ast > 0.25:
+        return "SSO_COPYING"
+
+    # ── OBFUSCATED_CLONE: raw and ident low, but AST reveals structure
+    #    Threshold tightened to 0.30 to avoid edge-case FP where
+    #    collection classes have borderline AST similarity (e.g. 0.250)
+    if raw < 0.15 and ident < 0.30 and ast > 0.30:
+        return "OBFUSCATED_CLONE"
+
+    # ── DOMAIN_CONVERGENCE: similar domain vocabulary but different API
+    if ident > 0.20 and decl < 0.40 and raw < 0.20:
+        return "DOMAIN_CONVERGENCE"
+
+    return "INCONCLUSIVE"
+
+
+# ---------------------------------------------------------------------------
+# AFC Analysis  (Stage 6: Abstraction-Filtration-Comparison)
+# ---------------------------------------------------------------------------
+def afc_analysis(
+    source_a: str, source_b: str, extension: str,
+    *,
+    skip_boilerplate: bool = True,
+    idf: dict[str, float] | None = None,
+) -> dict:
+    """AFC test pipeline following the Altai (1992) 3-step analysis.
+
+    1. **Abstraction**: Decompose programs hierarchically
+       (file → class → method → statement)
+    2. **Filtration**: Remove unprotectable elements
+       (boilerplate, scènes à faire, language idioms)
+    3. **Comparison**: Re-score only protectable expression
+
+    Args:
+        source_a:         Comment-stripped source of file A.
+        source_b:         Comment-stripped source of file B.
+        extension:        Lowercase file extension.
+        skip_boilerplate: If True, filter boilerplate in declaration analysis.
+        idf:              Optional IDF dict for TF-IDF weighting.
+
+    Returns:
+        Dict with keys:
+          - ``raw_scores``: scores before filtration
+          - ``filtered_scores``: scores after filtration
+          - ``filtration_report``: what was filtered
+          - ``classification``: pattern classification on filtered scores
+    """
+    from diffinite.fingerprint import extract_fingerprints
+    from collections import Counter
+
+    K, W = 5, 4
+
+    # ── Step 0: Raw scores (pre-filtration baseline) ──
+    fp_raw_a = {fp.hash_value for fp in extract_fingerprints(
+        source_a, k=K, w=W, normalize=False, mode="token", extension=extension)}
+    fp_raw_b = {fp.hash_value for fp in extract_fingerprints(
+        source_b, k=K, w=W, normalize=False, mode="token", extension=extension)}
+    fp_ast_a = {fp.hash_value for fp in extract_fingerprints(
+        source_a, k=K, w=W, normalize=True, mode="ast", extension=extension)}
+    fp_ast_b = {fp.hash_value for fp in extract_fingerprints(
+        source_b, k=K, w=W, normalize=True, mode="ast", extension=extension)}
+
+    raw_scores = {
+        "raw_winnowing": _jaccard_from_sets(fp_raw_a, fp_raw_b),
+        "ast_winnowing": _jaccard_from_sets(fp_ast_a, fp_ast_b),
+        "identifier_cosine": identifier_cosine(source_a, source_b),
+        "declaration_cosine": declaration_identifier_cosine(
+            source_a, source_b, extension),
+    }
+
+    # ── Step 1: Abstraction — hierarchical decomposition ──
+    filtration_report: list[str] = []
+
+    try:
+        from diffinite.ast_normalizer import (
+            extract_declaration_identifiers,
+            extract_class_declarations,
+        )
+
+        classes_a = extract_class_declarations(source_a, extension)
+        classes_b = extract_class_declarations(source_b, extension)
+        if classes_a:
+            filtration_report.append(
+                f"Abstraction: {len(classes_a)} class(es) in source A"
+            )
+        if classes_b:
+            filtration_report.append(
+                f"Abstraction: {len(classes_b)} class(es) in source B"
+            )
+    except ImportError:
+        classes_a, classes_b = None, None
+
+    # ── Step 2: Filtration — remove unprotectable elements ──
+    # 2a. Boilerplate method filtering
+    try:
+        from diffinite.ast_normalizer import extract_declaration_identifiers
+
+        ids_full_a = extract_declaration_identifiers(
+            source_a, extension, skip_boilerplate=False)
+        ids_filt_a = extract_declaration_identifiers(
+            source_a, extension, skip_boilerplate=True)
+        ids_full_b = extract_declaration_identifiers(
+            source_b, extension, skip_boilerplate=False)
+        ids_filt_b = extract_declaration_identifiers(
+            source_b, extension, skip_boilerplate=True)
+
+        if ids_full_a and ids_filt_a:
+            removed = len(ids_full_a) - len(ids_filt_a)
+            filtration_report.append(
+                f"Filtration: removed {removed} boilerplate identifier(s) from A"
+            )
+        if ids_full_b and ids_filt_b:
+            removed = len(ids_full_b) - len(ids_filt_b)
+            filtration_report.append(
+                f"Filtration: removed {removed} boilerplate identifier(s) from B"
+            )
+    except ImportError:
+        ids_filt_a, ids_filt_b = None, None
+
+    # 2b. Import filtering for raw winnowing
+    fp_filt_a = {fp.hash_value for fp in extract_fingerprints(
+        source_a, k=K, w=W, normalize=False, mode="token",
+        extension=extension, filter_imports=True)}
+    fp_filt_b = {fp.hash_value for fp in extract_fingerprints(
+        source_b, k=K, w=W, normalize=False, mode="token",
+        extension=extension, filter_imports=True)}
+
+    # ── Step 3: Comparison — re-score on filtered content ──
+    filtered_scores = {
+        "raw_winnowing": _jaccard_from_sets(fp_filt_a, fp_filt_b),
+        "ast_winnowing": raw_scores["ast_winnowing"],  # AST not affected by imports
+        "identifier_cosine": raw_scores["identifier_cosine"],
+    }
+
+    # Declaration cosine with boilerplate filtering
+    if ids_filt_a is not None and ids_filt_b is not None:
+        filtered_scores["declaration_cosine"] = _cosine_from_counters(
+            Counter(ids_filt_a), Counter(ids_filt_b)
+        )
+    else:
+        filtered_scores["declaration_cosine"] = raw_scores["declaration_cosine"]
+
+    # Apply TF-IDF if available
+    if idf is not None:
+        filtered_scores["identifier_cosine"] = identifier_cosine_tfidf(
+            source_a, source_b, idf=idf
+        )
+
+    return {
+        "raw_scores": raw_scores,
+        "filtered_scores": filtered_scores,
+        "filtration_report": filtration_report,
+        "classification": classify_similarity_pattern(filtered_scores),
+    }
+
+
 

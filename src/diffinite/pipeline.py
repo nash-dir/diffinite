@@ -223,13 +223,23 @@ def _generate_markdown_report(
     if deep_results:
         has_channels = any(dr.channel_scores for dr in deep_results)
         if has_channels:
+            has_classification = any(dr.classification for dr in deep_results)
+            has_afc = any(dr.afc_results for dr in deep_results)
+
             lines.append("\n## Deep Compare — Multi-Evidence Channel Matrix\n")
-            lines.append("| A File | B File | Raw | Normalized | AST | Identifier | Comment/Str | Composite |")
-            lines.append("|--------|--------|:---:|:----------:|:---:|:----------:|:-----------:|:---------:|")
+            header = "| A File | B File | Raw | Normalized | AST | Identifier | Comment/Str | Composite |"
+            separator = "|--------|--------|:---:|:----------:|:---:|:----------:|:-----------:|:---------:|"
+            if has_classification:
+                header += " Classification |"
+                separator += ":--------------:|"
+            lines.append(header)
+            lines.append(separator)
+
             ch_names = [
                 "raw_winnowing", "normalized_winnowing", "ast_winnowing",
                 "identifier_cosine", "comment_string_overlap", "composite",
             ]
+            afc_lines: list[str] = []
             for dr in deep_results:
                 for b_file, shared, jaccard in dr.matched_files_b:
                     ch = dr.channel_scores.get(b_file, {})
@@ -237,7 +247,28 @@ def _generate_markdown_report(
                         f"{ch.get(cn, 0)*100:.1f}%" if ch.get(cn) is not None else "—"
                         for cn in ch_names
                     )
-                    lines.append(f"| `{dr.file_a}` | `{b_file}` | {cells} |")
+                    cls_cell = ""
+                    if has_classification:
+                        cls_label = dr.classification.get(b_file, "—")
+                        cls_cell = f" {cls_label} |"
+                    lines.append(f"| `{dr.file_a}` | `{b_file}` | {cells} |{cls_cell}")
+
+                    # Collect AFC data
+                    if has_afc:
+                        afc = dr.afc_results.get(b_file, {})
+                        filt_report = afc.get("filtration_report", [])
+                        afc_cls = afc.get("classification", "")
+                        if filt_report or afc_cls:
+                            afc_lines.append(
+                                f"- **{dr.file_a} ↔ {b_file}** — AFC: {afc_cls}"
+                            )
+                            for item in filt_report:
+                                afc_lines.append(f"  - {item}")
+
+            # AFC summary
+            if afc_lines:
+                lines.append("\n### AFC Filtration Summary\n")
+                lines.extend(afc_lines)
         else:
             lines.append("\n## Deep Compare — N:M Cross-Match Results\n")
             lines.append("| A File | B File(s) | Shared Hashes | Jaccard |")

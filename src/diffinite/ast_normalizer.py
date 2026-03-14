@@ -548,9 +548,34 @@ _IMPLEMENTATION_NODE_TYPES = frozenset({
     "field_access",
 })
 
+# Boilerplate method names — common overrides that every Java class may implement
+_BOILERPLATE_METHODS = frozenset({
+    "equals", "hashCode", "toString", "compareTo",
+    "clone", "finalize",
+})
+
+
+def _is_boilerplate_method_name(name: str) -> bool:
+    """Check whether *name* is a boilerplate method (equals, hashCode,
+    toString, getter/setter, etc.).
+
+    Boilerplate methods are those whose presence is driven by language
+    convention rather than API design — filtering them reduces false
+    positives in SSO detection.
+    """
+    if name in _BOILERPLATE_METHODS:
+        return True
+    # Getter/setter pattern: get/set/is + UpperCaseLetter
+    if len(name) > 3 and name[:3] in ("get", "set") and name[3].isupper():
+        return True
+    if len(name) > 2 and name[:2] == "is" and name[2].isupper():
+        return True
+    return False
+
 
 def extract_declaration_identifiers(
     source: str, extension: str,
+    *, skip_boilerplate: bool = False,
 ) -> Optional[list[str]]:
     """Extract only declaration-level identifiers from the AST.
 
@@ -564,12 +589,13 @@ def extract_declaration_identifiers(
     - Method call targets
     - Field access expressions
 
-    This provides a focused view of the API surface — the SSO signal —
-    without contamination from implementation-level identifiers.
+    When *skip_boilerplate* is True, identifiers belonging to boilerplate
+    methods (equals, hashCode, toString, getters/setters) are excluded.
 
     Args:
-        source:    Source code text.
-        extension: Lowercase file extension (e.g. ``".java"``).
+        source:           Source code text.
+        extension:        Lowercase file extension (e.g. ``".java"``).
+        skip_boilerplate: If True, exclude boilerplate method identifiers.
 
     Returns:
         Sorted list of declaration-level identifier strings,
@@ -585,7 +611,10 @@ def extract_declaration_identifiers(
         root = tree.root_node
 
         identifiers: list[str] = []
-        _collect_declaration_ids(root, identifiers, in_declaration=False)
+        _collect_declaration_ids(
+            root, identifiers, in_declaration=False,
+            skip_boilerplate=skip_boilerplate,
+        )
         return identifiers if identifiers else None
 
     except Exception as exc:
@@ -601,6 +630,8 @@ def _collect_declaration_ids(
     identifiers: list[str],
     *,
     in_declaration: bool,
+    skip_boilerplate: bool = False,
+    _in_boilerplate_method: bool = False,
 ) -> None:
     """Recursively collect identifiers from declaration contexts."""
     node_type: str = node.type  # type: ignore[attr-defined]
@@ -611,13 +642,35 @@ def _collect_declaration_ids(
     is_param = node_type in _PARAMETER_NODE_TYPES
     is_impl = node_type in _IMPLEMENTATION_NODE_TYPES
 
+    # Check if this method declaration is boilerplate
+    in_boilerplate = _in_boilerplate_method
+    if skip_boilerplate and is_decl and node_type in (
+        "method_declaration", "method_definition",
+        "function_declaration", "function_definition",
+    ):
+        # Look for the method name child
+        for child in node.children:  # type: ignore[attr-defined]
+            if child.type == "identifier":  # type: ignore[attr-defined]
+                name = child.text.decode("utf-8") if isinstance(child.text, bytes) else child.text  # type: ignore[attr-defined]
+                if _is_boilerplate_method_name(name):
+                    in_boilerplate = True
+                break
+
+    # If inside boilerplate method and filtering, skip entirely
+    if skip_boilerplate and in_boilerplate:
+        return
+
     # Skip implementation blocks (but still recurse into nested declarations)
     if is_impl and not in_declaration:
         # Still look for nested class/method declarations inside
         for child in node.children:  # type: ignore[attr-defined]
             child_type: str = child.type  # type: ignore[attr-defined]
             if child_type in _DECLARATION_NODE_TYPES:
-                _collect_declaration_ids(child, identifiers, in_declaration=True)
+                _collect_declaration_ids(
+                    child, identifiers, in_declaration=True,
+                    skip_boilerplate=skip_boilerplate,
+                    _in_boilerplate_method=in_boilerplate,
+                )
         return
 
     # Leaf node in declaration context → collect identifier
@@ -644,7 +697,11 @@ def _collect_declaration_ids(
         if (is_decl or in_declaration) and child_type in ("block", "statement_block", "compound_statement"):
             # Skip method body — it's implementation detail
             continue
-        _collect_declaration_ids(child, identifiers, in_declaration=new_in_decl)
+        _collect_declaration_ids(
+            child, identifiers, in_declaration=new_in_decl,
+            skip_boilerplate=skip_boilerplate,
+            _in_boilerplate_method=in_boilerplate,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -742,4 +799,106 @@ def _linearize_structure_recursive(
 
     if is_structure or is_declaration:
         tokens.append(f"</{node_type}>")
+
+
+# ---------------------------------------------------------------------------
+# AFC: Abstraction Layer — Class-Level Decomposition  (Stage 6)
+# ---------------------------------------------------------------------------
+_CLASS_NODE_TYPES = frozenset({
+    "class_declaration", "class_definition",
+    "interface_declaration", "enum_declaration",
+})
+
+_METHOD_NODE_TYPES = frozenset({
+    "method_declaration", "method_definition",
+    "function_declaration", "function_definition",
+    "constructor_declaration",
+})
+
+
+def _node_text(node) -> str:
+    text = node.text
+    if isinstance(text, bytes):
+        text = text.decode("utf-8", errors="replace")
+    return text
+
+
+def _find_name(node) -> str:
+    """Find the name identifier from a declaration node."""
+    for child in node.children:
+        if child.type == "identifier":
+            return _node_text(child)
+    return "<anonymous>"
+
+
+def extract_class_declarations(
+    source: str, extension: str,
+) -> Optional[list[dict]]:
+    """Decompose source into class-level units (AFC Abstraction layer).
+
+    Each class is returned as a dict with:
+      - ``name``: class/interface name
+      - ``methods``: list of ``{"name": str}`` dicts
+      - ``node_type``: tree-sitter node type
+
+    Args:
+        source:    Source code text (comments stripped).
+        extension: Lowercase file extension.
+
+    Returns:
+        List of class info dicts, or ``None`` if tree-sitter unavailable.
+    """
+    parser = get_parser(extension)
+    if parser is None:
+        return None
+
+    try:
+        source_bytes = source.encode("utf-8")
+        tree = parser.parse(source_bytes)
+        root = tree.root_node
+
+        classes: list[dict] = []
+        _find_classes_recursive(root, classes)
+        return classes if classes else None
+
+    except Exception as exc:
+        logger.debug("Class extraction failed for %s: %s", extension, exc)
+        return None
+
+
+def _find_classes_recursive(node, classes: list[dict]) -> None:
+    """Recursively find class/interface declarations."""
+    node_type = node.type
+
+    if node_type in _CLASS_NODE_TYPES:
+        name = _find_name(node)
+        methods = []
+        # Find methods within this class
+        for child in node.children:
+            if child.type == "class_body":
+                _find_methods_in_body(child, methods)
+            elif child.type in _METHOD_NODE_TYPES:
+                methods.append({"name": _find_name(child)})
+
+        classes.append({
+            "name": name,
+            "node_type": node_type,
+            "methods": methods,
+        })
+
+    # Recurse into children
+    for child in node.children:
+        if child.type != "class_body":  # Don't double-descend
+            _find_classes_recursive(child, classes)
+
+
+def _find_methods_in_body(body_node, methods: list[dict]) -> None:
+    """Find method declarations within a class body."""
+    for child in body_node.children:
+        if child.type in _METHOD_NODE_TYPES:
+            methods.append({"name": _find_name(child)})
+        elif child.type in _CLASS_NODE_TYPES:
+            # Nested class — skip for now (handled by top-level recursion)
+            pass
+
 

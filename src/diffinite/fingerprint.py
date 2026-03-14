@@ -195,9 +195,9 @@ def winnow(
     return fingerprints
 
 
-# ---------------------------------------------------------------------------
-# High-level API
-# ---------------------------------------------------------------------------
+_IMPORT_RE = re.compile(r"^(import|package)\s+.*;\s*$", re.MULTILINE)
+
+
 def extract_fingerprints(
     source: str,
     k: int = DEFAULT_K,
@@ -206,29 +206,35 @@ def extract_fingerprints(
     normalize: bool = False,
     mode: str = "token",
     extension: str = "",
+    filter_imports: bool = False,
 ) -> list[FingerprintEntry]:
     """Full pipeline: tokenise → K-gram hash → winnow → fingerprint set.
 
     Args:
-        source:    Pre-processed source code (comments stripped).
-        k:         K-gram size.
-        w:         Winnowing window size.
-        normalize: If *True*, apply token-type normalisation before hashing
-                   (only used in ``"token"`` mode).
-        mode:      Tokenisation strategy:
+        source:         Pre-processed source code (comments stripped).
+        k:              K-gram size.
+        w:              Winnowing window size.
+        normalize:      If *True*, apply token-type normalisation before hashing
+                        (only used in ``"token"`` mode).
+        mode:           Tokenisation strategy:
 
-                   * ``"token"`` — Phase 1 flat token normalisation (default).
-                   * ``"ast"``   — Phase 2 tree-sitter AST linearization.
-                   * ``"pdg"``   — Phase 4 PDG-normalised AST (future).
+                        * ``"token"`` — Phase 1 flat token normalisation (default).
+                        * ``"ast"``   — Phase 2 tree-sitter AST linearization.
+                        * ``"pdg"``   — Phase 4 PDG-normalised AST (future).
 
-                   When set to ``"ast"`` or ``"pdg"`` and tree-sitter is
-                   unavailable, falls back to ``"token"`` mode automatically.
-        extension: Lowercase file extension (e.g. ``".py"``), required for
-                   AST/PDG modes.
+                        When set to ``"ast"`` or ``"pdg"`` and tree-sitter is
+                        unavailable, falls back to ``"token"`` mode automatically.
+        extension:      Lowercase file extension (e.g. ``".py"``), required for
+                        AST/PDG modes.
+        filter_imports: If *True*, strip ``import`` and ``package`` statements
+                        before fingerprinting (reduces FP from shared Java imports).
 
     Returns:
         List of :class:`FingerprintEntry` fingerprints.
     """
+    if filter_imports:
+        source = _IMPORT_RE.sub("", source)
+
     tokens: list[str] | None = None
 
     if mode in ("ast", "pdg"):
@@ -248,3 +254,4 @@ def extract_fingerprints(
 
     hashes = rolling_hash(tokens, k)
     return winnow(hashes, w)
+
