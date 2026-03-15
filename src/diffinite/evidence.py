@@ -569,6 +569,82 @@ _AFC_SSO_GAP_MIN = 0.35      # (normal: 0.30) — slightly stricter for filtered
 _SSO_NORM_RAW_RATIO = 1.2    # norm must exceed raw by 20%+ for SSO
 
 
+def _classify_strict(
+    raw: float, norm: float, ident: float, decl: float, ast: float,
+    *, afc_filtered: bool = False,
+) -> str:
+    """Stage 1: High-confidence classification using optimized thresholds.
+
+    Returns a definitive classification or ``"INCONCLUSIVE"`` for
+    cases that don't meet the strict criteria.
+    """
+    sso_decl_min = _AFC_SSO_DECL_MIN if afc_filtered else _SSO_DECL_MIN
+    sso_gap_min = _AFC_SSO_GAP_MIN if afc_filtered else _SSO_GAP_MIN
+
+    # ── DIRECT_COPY: all channels high (verbatim or near-verbatim copy)
+    if raw > _DC_RAW_MIN and ident > _DC_IDENT_MIN:
+        return "DIRECT_COPY"
+
+    # ── SSO_COPYING: API surface preserved, implementation differs
+    norm_raw_ok = (norm > raw * _SSO_NORM_RAW_RATIO) if raw > 0.01 else (norm > 0.05)
+    if (raw < _SSO_RAW_MAX and decl >= sso_decl_min
+            and (ident - raw) >= sso_gap_min and ast > _SSO_AST_MIN
+            and norm_raw_ok):
+        return "SSO_COPYING"
+
+    # ── OBFUSCATED_CLONE: raw and ident low, but AST reveals structure
+    if raw < _OBC_RAW_MAX and ident < _OBC_IDENT_MAX and ast > _OBC_AST_MIN:
+        return "OBFUSCATED_CLONE"
+
+    # ── DOMAIN_CONVERGENCE: similar domain vocabulary but different API
+    if ident > _CONV_IDENT_MIN and decl < _CONV_DECL_MAX and raw < _CONV_RAW_MAX:
+        return "DOMAIN_CONVERGENCE"
+
+    return "INCONCLUSIVE"
+
+
+# Relaxed thresholds — baseline values before Stage 3 optimisation.
+# Used for Stage 2 SUSPICIOUS classification to recover recall.
+_RELAXED_DC_RAW_MIN = 0.50    # (strict: 0.65)
+_RELAXED_SSO_DECL_MIN = 0.50  # (strict: 0.60)
+_RELAXED_SSO_GAP_MIN = 0.25   # (strict: 0.30)
+
+
+def _classify_relaxed(
+    raw: float, norm: float, ident: float, decl: float, ast: float,
+    comment: float,
+) -> str:
+    """Stage 2: Medium-confidence classification using baseline thresholds.
+
+    Only called when Stage 1 returns ``"INCONCLUSIVE"``.
+    Returns ``"SUSPICIOUS_COPY"``, ``"SUSPICIOUS_SSO"``, or
+    ``"INCONCLUSIVE"`` for borderline cases.
+
+    SUSPICIOUS grades are **advisory** — they flag cases for manual
+    review and are NOT counted as positive detections in precision
+    metrics.
+    """
+    # ── SUSPICIOUS_COPY: raw 0.50–0.65 (just below strict DC threshold)
+    if raw > _RELAXED_DC_RAW_MIN and ident > _DC_IDENT_MIN:
+        return "SUSPICIOUS_COPY"
+
+    # ── SUSPICIOUS_COPY via comment signal: code slightly modified but
+    #    comments/strings identical (copying with cosmetic changes)
+    if raw > 0.40 and comment > 0.60:
+        return "SUSPICIOUS_COPY"
+
+    # ── SUSPICIOUS_SSO: API similarity just below strict SSO threshold
+    norm_raw_ok = (norm > raw * _SSO_NORM_RAW_RATIO) if raw > 0.01 else (norm > 0.05)
+    if (raw < _SSO_RAW_MAX + 0.05  # slightly wider band
+            and decl >= _RELAXED_SSO_DECL_MIN
+            and (ident - raw) >= _RELAXED_SSO_GAP_MIN
+            and ast > _SSO_AST_MIN
+            and norm_raw_ok):
+        return "SUSPICIOUS_SSO"
+
+    return "INCONCLUSIVE"
+
+
 def classify_similarity_pattern(
     scores: dict[str, float],
     *,
@@ -576,9 +652,10 @@ def classify_similarity_pattern(
 ) -> str:
     """Classify the similarity pattern based on cross-channel evidence.
 
-    Instead of relying on a single threshold, this function examines
-    the *pattern* of scores across channels to determine the type
-    of similarity:
+    Two-stage classification system:
+
+    **Stage 1 (Strict)** — High-confidence classifications using
+    optimised thresholds from Stage 3 grid search (zero-FP objective):
 
     +-----------------------+------+-------+------+------+
     | Scenario              | raw  | ident | decl |  ast |
@@ -587,11 +664,17 @@ def classify_similarity_pattern(
     | SSO_COPYING           | LOW  | HIGH  | HIGH | MED+ |
     | OBFUSCATED_CLONE      | LOW  | LOW   | LOW  | MED+ |
     | DOMAIN_CONVERGENCE    | LOW  | any   | LOW  | LOW  |
-    +-----------------------+------+-------+------+------+
+    +-----------------------+------+-------+------+------+\
 
-    Thresholds are data-driven, derived from Stage 3 two-phase grid
-    search (84,000 combinations, zero-FP objective).
-    See ``TDD/corpus/optimal_thresholds.json`` for full derivation.
+    **Stage 2 (Relaxed)** — Medium-confidence classifications using
+    baseline thresholds to recover recall for borderline cases:
+
+    +-------------------+------+-------+------+------+\
+    | Scenario          | raw  | ident | decl |  ast |\
+    +-------------------+------+-------+------+------+\
+    | SUSPICIOUS_COPY   | MED  | MED+  |  -   |  -   |\
+    | SUSPICIOUS_SSO    | LOW  | MED   | MED  | MED  |\
+    +-------------------+------+-------+------+------+\
 
     Args:
         scores:       Dict of channel scores as returned by
@@ -604,49 +687,24 @@ def classify_similarity_pattern(
     Returns:
         One of: ``"DIRECT_COPY"``, ``"SSO_COPYING"``,
         ``"OBFUSCATED_CLONE"``, ``"DOMAIN_CONVERGENCE"``,
-        ``"INCONCLUSIVE"``.
+        ``"SUSPICIOUS_COPY"``, ``"SUSPICIOUS_SSO"``,
+        ``"INCONCLUSIVE"``.\
     """
     raw = scores.get("raw_winnowing", 0.0)
     norm = scores.get("normalized_winnowing", 0.0)
     ident = scores.get("identifier_cosine", 0.0)
     decl = scores.get("declaration_cosine", 0.0)
     ast = scores.get("ast_winnowing", 0.0)
+    comment = scores.get("comment_string_overlap", 0.0)
 
-    # Select threshold set based on whether scores are AFC-filtered
-    sso_decl_min = _AFC_SSO_DECL_MIN if afc_filtered else _SSO_DECL_MIN
-    sso_gap_min = _AFC_SSO_GAP_MIN if afc_filtered else _SSO_GAP_MIN
+    # Stage 1: strict (high confidence)
+    cls = _classify_strict(raw, norm, ident, decl, ast,
+                           afc_filtered=afc_filtered)
+    if cls != "INCONCLUSIVE":
+        return cls
 
-    # ── DIRECT_COPY: all channels high (verbatim or near-verbatim copy)
-    if raw > _DC_RAW_MIN and ident > _DC_IDENT_MIN:
-        return "DIRECT_COPY"
-
-    # ── SSO_COPYING: API surface preserved, implementation differs
-    #    Requires:
-    #    1. Low raw (different implementation)
-    #    2. High declaration similarity (shared API surface)
-    #    3. Significant identifier-raw gap (API names vs code)
-    #    4. AST structural similarity above baseline (shared class/method skeleton)
-    #       This condition prevents domain convergence FP where AST is low
-    #    5. Normalized > raw (identifier renaming signal — Type-2 disguise)
-    #       If raw ≈ 0, require norm above a minimum instead of ratio check.
-    #       Corpus analysis: positive median ratio = 1.44, negative ≈ 1.0
-    norm_raw_ok = (norm > raw * _SSO_NORM_RAW_RATIO) if raw > 0.01 else (norm > 0.05)
-    if (raw < _SSO_RAW_MAX and decl >= sso_decl_min
-            and (ident - raw) >= sso_gap_min and ast > _SSO_AST_MIN
-            and norm_raw_ok):
-        return "SSO_COPYING"
-
-    # ── OBFUSCATED_CLONE: raw and ident low, but AST reveals structure
-    #    Threshold tightened to 0.30 to avoid edge-case FP where
-    #    collection classes have borderline AST similarity (e.g. 0.250)
-    if raw < _OBC_RAW_MAX and ident < _OBC_IDENT_MAX and ast > _OBC_AST_MIN:
-        return "OBFUSCATED_CLONE"
-
-    # ── DOMAIN_CONVERGENCE: similar domain vocabulary but different API
-    if ident > _CONV_IDENT_MIN and decl < _CONV_DECL_MAX and raw < _CONV_RAW_MAX:
-        return "DOMAIN_CONVERGENCE"
-
-    return "INCONCLUSIVE"
+    # Stage 2: relaxed (medium confidence — SUSPICIOUS grades)
+    return _classify_relaxed(raw, norm, ident, decl, ast, comment)
 
 
 # ---------------------------------------------------------------------------
