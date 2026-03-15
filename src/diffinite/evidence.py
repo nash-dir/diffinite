@@ -890,4 +890,175 @@ def afc_analysis(
     }
 
 
+# ---------------------------------------------------------------------------
+# Legal defense pattern analysis (Idea-Expression Dichotomy)
+# ---------------------------------------------------------------------------
+
+_LEGAL_DISCLAIMER = (
+    "본 분석은 코드의 구조적 유사도에 대한 기술적 정량 분석이며, "
+    "저작권 침해 여부에 대한 법적 판단은 법원의 권한에 속합니다."
+)
+
+
+def _run_profile_scores(
+    source_a: str, source_b: str, extension: str,
+    *, k: int, w: int, normalize_ast: bool,
+) -> dict[str, float]:
+    """Run fingerprinting with given parameters and return 6-channel scores."""
+    from diffinite.fingerprint import extract_fingerprints
+
+    fp_raw_a = {fp.hash_value for fp in extract_fingerprints(
+        source_a, k=k, w=w, normalize=False, mode="token", extension=extension)}
+    fp_raw_b = {fp.hash_value for fp in extract_fingerprints(
+        source_b, k=k, w=w, normalize=False, mode="token", extension=extension)}
+
+    fp_norm_a = {fp.hash_value for fp in extract_fingerprints(
+        source_a, k=k, w=w, normalize=True, mode="token", extension=extension)}
+    fp_norm_b = {fp.hash_value for fp in extract_fingerprints(
+        source_b, k=k, w=w, normalize=True, mode="token", extension=extension)}
+
+    fp_ast_a = {fp.hash_value for fp in extract_fingerprints(
+        source_a, k=k, w=w, normalize=normalize_ast, mode="ast",
+        extension=extension)}
+    fp_ast_b = {fp.hash_value for fp in extract_fingerprints(
+        source_b, k=k, w=w, normalize=normalize_ast, mode="ast",
+        extension=extension)}
+
+    return compute_channel_scores(
+        fp_raw_a=fp_raw_a, fp_raw_b=fp_raw_b,
+        fp_norm_a=fp_norm_a, fp_norm_b=fp_norm_b,
+        fp_ast_a=fp_ast_a, fp_ast_b=fp_ast_b,
+        source_a=source_a, source_b=source_b,
+        cleaned_a=source_a, cleaned_b=source_b,
+        extension=extension,
+    )
+
+
+def _both_dropped_significantly(
+    raw: dict[str, float], filtered: dict[str, float],
+    drop_threshold: float = 0.20,
+) -> bool:
+    """Check if AFC filtration caused >20% composite drop."""
+    raw_c = raw.get("composite", 0.0)
+    filt_c = filtered.get("composite", 0.0)
+    if raw_c < 0.1:
+        return False
+    return (raw_c - filt_c) / raw_c > drop_threshold
+
+
+def _generate_legal_explanation(
+    pattern: str,
+    ind: dict[str, float],
+    acad: dict[str, float],
+    delta: float,
+) -> str:
+    """Generate natural-language technical interpretation."""
+    raw_w = ind.get("raw_winnowing", 0.0)
+    ast_w = acad.get("ast_winnowing", 0.0)
+    ind_c = ind.get("composite", 0.0)
+    acad_c = acad.get("composite", 0.0)
+
+    explanations = {
+        "CLEAN_ROOM_PROBABLE": (
+            f"Industrial Profile(raw={raw_w:.2f})가 낮고 "
+            f"Academic Profile(ast={ast_w:.2f})가 높으므로, "
+            f"표현의 문자적 복제 없이 동일 아이디어를 독립 구현한 "
+            f"클린룸 설계로 추정됩니다. (delta={delta:+.2f})"
+        ),
+        "LITERAL_COPYING": (
+            f"Industrial(raw={raw_w:.2f})와 "
+            f"Academic(composite={acad_c:.2f}) 모두 높은 유사도이며, "
+            f"프로필 간 격차가 작습니다(delta={delta:+.2f}). "
+            f"표현(Expression)까지 복제된 것을 시사합니다."
+        ),
+        "INDEPENDENT_CREATION": (
+            f"두 프로필 모두 낮은 유사도입니다 "
+            f"(Industrial={ind_c:.2f}, Academic={acad_c:.2f}). "
+            f"독립 작성 코드로 판단됩니다."
+        ),
+        "MERGER_FILTERED": (
+            f"AFC 필터링 후 유사도가 유의미하게 하락했습니다. "
+            f"유사 부분은 디자인 패턴/표준 관용구 등 "
+            f"'합체(Merger)' 요소로 추정됩니다."
+        ),
+        "INCONCLUSIVE": (
+            f"명확한 법적 패턴에 부합하지 않습니다 "
+            f"(Industrial={ind_c:.2f}, Academic={acad_c:.2f}, "
+            f"delta={delta:+.2f}). 수동 검토가 필요합니다."
+        ),
+    }
+    text = explanations.get(pattern, explanations["INCONCLUSIVE"])
+    return f"{text}\n\n[면책조항] {_LEGAL_DISCLAIMER}"
+
+
+def analyze_legal_defense_pattern(
+    source_a: str, source_b: str, extension: str,
+    *,
+    idf: dict[str, float] | None = None,
+) -> dict:
+    """Dual-profile legal defense analysis (Idea-Expression Dichotomy).
+
+    Runs two profiles and compares results to classify into legal
+    defense categories:
+
+    - **CLEAN_ROOM_PROBABLE**: Low industrial + high academic.
+    - **LITERAL_COPYING**: Both profiles high, small delta.
+    - **INDEPENDENT_CREATION**: Both profiles low.
+    - **MERGER_FILTERED**: AFC filtration drops scores >20%.
+    - **INCONCLUSIVE**: No clear match.
+
+    Args:
+        source_a:  Source code of file A.
+        source_b:  Source code of file B.
+        extension: File extension (e.g., ".java").
+        idf:       Optional IDF dict for TF-IDF weighting.
+
+    Returns:
+        Dict with ``industrial_scores``, ``academic_scores``,
+        ``delta``, ``legal_pattern``, ``explanation``.
+    """
+    # Industrial profile: K=5, W=4, no AST normalisation
+    ind = _run_profile_scores(source_a, source_b, extension,
+                              k=5, w=4, normalize_ast=False)
+
+    # Academic profile: K=2, W=3, with AST normalisation
+    acad = _run_profile_scores(source_a, source_b, extension,
+                               k=2, w=3, normalize_ast=True)
+
+    delta = acad.get("composite", 0.0) - ind.get("composite", 0.0)
+
+    # Pattern classification
+    raw_w = ind.get("raw_winnowing", 0.0)
+    acad_ast = acad.get("ast_winnowing", 0.0)
+    acad_c = acad.get("composite", 0.0)
+    ind_c = ind.get("composite", 0.0)
+
+    if raw_w < 0.20 and acad_ast > 0.70 and delta > 0.40:
+        pattern = "CLEAN_ROOM_PROBABLE"
+    elif raw_w > 0.60 and acad_c > 0.70 and abs(delta) < 0.15:
+        pattern = "LITERAL_COPYING"
+    elif ind_c < 0.20 and acad_c < 0.30:
+        pattern = "INDEPENDENT_CREATION"
+    else:
+        pattern = "INCONCLUSIVE"
+
+    # AFC check: merger/scenes-a-faire detection
+    try:
+        afc = afc_analysis(source_a, source_b, extension, idf=idf)
+        if _both_dropped_significantly(afc["raw_scores"],
+                                       afc["filtered_scores"]):
+            pattern = "MERGER_FILTERED"
+    except Exception:
+        pass
+
+    return {
+        "industrial_scores": ind,
+        "academic_scores": acad,
+        "delta": delta,
+        "legal_pattern": pattern,
+        "explanation": _generate_legal_explanation(pattern, ind, acad, delta),
+    }
+
+
+
 
