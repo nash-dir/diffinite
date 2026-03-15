@@ -401,15 +401,18 @@ def comment_string_overlap(
 # ---------------------------------------------------------------------------
 # Composite multi-channel scoring
 # ---------------------------------------------------------------------------
-# Default channel weights — channels with higher forensic significance
-# get more weight.  Weights are normalised at runtime.
+# Default channel weights — ROC AUC-proportional values derived from
+# Stage 3 analysis of 646 pairs.  Higher AUC channels get more weight
+# in the composite score to reduce noise from low-discriminative channels.
+# Previous intuitive weights: raw=1.0, norm=2.0, ast=2.0, ident=1.5,
+# comment=1.0, decl=0.0 (disabled).
 _DEFAULT_WEIGHTS: dict[str, float] = {
-    "raw_winnowing":        1.0,
-    "normalized_winnowing":  2.0,
-    "ast_winnowing":         2.0,
-    "identifier_cosine":     1.5,
-    "comment_string_overlap": 1.0,
-    "declaration_cosine":     0.0,  # opt-in — not included in composite by default
+    "raw_winnowing":        0.720,    # ROC AUC = 0.720 (highest)
+    "normalized_winnowing":  0.717,   # ROC AUC = 0.717
+    "ast_winnowing":         0.702,   # ROC AUC = 0.702
+    "identifier_cosine":     0.587,   # ROC AUC = 0.587
+    "comment_string_overlap": 0.528,  # ROC AUC = 0.528 (lowest)
+    "declaration_cosine":     0.580,  # ROC AUC = 0.580 — now active in composite
 }
 
 # Academic profile weights — tuned via grid search on IR-Plag-Dataset.
