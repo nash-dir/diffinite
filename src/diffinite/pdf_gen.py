@@ -1,10 +1,28 @@
-"""PDF generation, TOC bookmarks, and Bates numbering.
+"""PDF 생성, TOC 북마크, Bates 번호 부여.
 
-Handles:
-* HTML → PDF conversion via ``xhtml2pdf``
-* Divide-and-conquer merging via ``pypdf``
-* Clickable hierarchical bookmarks (Table of Contents)
-* Bates number stamping via ``reportlab``
+법정 제출용 PDF 보고서 생성 파이프라인.
+
+구현:
+    - ``xhtml2pdf``: HTML -> PDF 변환. CSS subset만 지원 (@page, @frame).
+    - ``pypdf``: Divide-and-Conquer 병합. 파일별 개별 PDF -> 최종 통합.
+    - ``reportlab``: Bates 번호 오버레이 (각 페이지 하단 중앙).
+    - 북마크: 계층적 TOC (Cover -> 파일별 Diff -> Deep Compare).
+
+CSS 설계:
+    ``_CSS_BODY``에 모든 스타일을 중앙 집중. xhtml2pdf는 최신 CSS를
+    지원하지 않으므로, 인라인 스타일과 테이블 레이아웃 사용.
+    font-family는 한글 폰트(Noto Sans KR, Malgun Gothic) 포함.
+
+라인 번호 열 너비:
+    ``differ.py``의 ``_calc_ln_width()``가 산정한 동적 너비를 사용.
+    긴 파일(10,000줄+)에서 라인 번호 열이 넘치는 것을 방지.
+
+호출관계:
+    ``pipeline._generate_pdf_report()`` -> ``build_cover_html()``
+    ``pipeline._generate_pdf_report()`` -> ``build_diff_page_html()``
+    ``pipeline._generate_pdf_report()`` -> ``html_to_pdf()``
+    ``pipeline._generate_pdf_report()`` -> ``merge_with_bookmarks()``
+    ``pipeline._generate_pdf_report()`` -> ``add_bates_numbers()``
 """
 
 from __future__ import annotations
