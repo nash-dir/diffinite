@@ -554,8 +554,20 @@ _CONV_IDENT_MIN = 0.20       # (baseline: 0.20)
 _CONV_DECL_MAX = 0.40        # (baseline: 0.40)
 _CONV_RAW_MAX = 0.20         # (baseline: 0.20)
 
+# AFC-specific thresholds — higher bar for SSO when scores come from
+# filtered pipeline.  AFC filtration removes boilerplate identifiers
+# which concentrates remaining identifiers and inflates declaration_cosine
+# by ~1.3–1.7× (see TDD/corpus/afc_score_analysis.py).
+# Guava:Lists filt_decl=0.7285 triggers SSO with normal thresholds.
+_AFC_SSO_DECL_MIN = 0.75     # (normal: 0.60) — +0.15 to absorb filtration inflation
+_AFC_SSO_GAP_MIN = 0.35      # (normal: 0.30) — slightly stricter for filtered scores
 
-def classify_similarity_pattern(scores: dict[str, float]) -> str:
+
+def classify_similarity_pattern(
+    scores: dict[str, float],
+    *,
+    afc_filtered: bool = False,
+) -> str:
     """Classify the similarity pattern based on cross-channel evidence.
 
     Instead of relying on a single threshold, this function examines
@@ -576,8 +588,12 @@ def classify_similarity_pattern(scores: dict[str, float]) -> str:
     See ``TDD/corpus/optimal_thresholds.json`` for full derivation.
 
     Args:
-        scores: Dict of channel scores as returned by
-                ``compute_channel_scores()``.
+        scores:       Dict of channel scores as returned by
+                      ``compute_channel_scores()``.
+        afc_filtered: If True, use stricter AFC-specific thresholds
+                      for SSO detection.  AFC filtration removes
+                      boilerplate which inflates declaration_cosine
+                      by ~1.3–1.7×, requiring higher thresholds.
 
     Returns:
         One of: ``"DIRECT_COPY"``, ``"SSO_COPYING"``,
@@ -588,6 +604,10 @@ def classify_similarity_pattern(scores: dict[str, float]) -> str:
     ident = scores.get("identifier_cosine", 0.0)
     decl = scores.get("declaration_cosine", 0.0)
     ast = scores.get("ast_winnowing", 0.0)
+
+    # Select threshold set based on whether scores are AFC-filtered
+    sso_decl_min = _AFC_SSO_DECL_MIN if afc_filtered else _SSO_DECL_MIN
+    sso_gap_min = _AFC_SSO_GAP_MIN if afc_filtered else _SSO_GAP_MIN
 
     # ── DIRECT_COPY: all channels high (verbatim or near-verbatim copy)
     if raw > _DC_RAW_MIN and ident > _DC_IDENT_MIN:
@@ -600,7 +620,7 @@ def classify_similarity_pattern(scores: dict[str, float]) -> str:
     #    3. Significant identifier-raw gap (API names vs code)
     #    4. AST structural similarity above baseline (shared class/method skeleton)
     #       This condition prevents domain convergence FP where AST is low
-    if raw < _SSO_RAW_MAX and decl >= _SSO_DECL_MIN and (ident - raw) >= _SSO_GAP_MIN and ast > _SSO_AST_MIN:
+    if raw < _SSO_RAW_MAX and decl >= sso_decl_min and (ident - raw) >= sso_gap_min and ast > _SSO_AST_MIN:
         return "SSO_COPYING"
 
     # ── OBFUSCATED_CLONE: raw and ident low, but AST reveals structure
@@ -752,7 +772,9 @@ def afc_analysis(
         "raw_scores": raw_scores,
         "filtered_scores": filtered_scores,
         "filtration_report": filtration_report,
-        "classification": classify_similarity_pattern(filtered_scores),
+        "classification": classify_similarity_pattern(
+            filtered_scores, afc_filtered=True
+        ),
     }
 
 
