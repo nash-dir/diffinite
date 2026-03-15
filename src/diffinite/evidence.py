@@ -539,68 +539,105 @@ def compute_channel_scores(
 # Cross-Channel Classification (Stage 4: Pattern-based SSO detection)
 # ---------------------------------------------------------------------------
 
-# Classification thresholds — data-driven values from Stage 3 grid search.
-# See TDD/corpus/optimal_thresholds.json for derivation.
-# Two-phase optimisation: Phase 1 → zero SSO/DC FP, Phase 2 → max F1.
-#
-# Format: PARAM = optimal_value  # (baseline was X.XX)
-_DC_RAW_MIN = 0.65           # (baseline: 0.50) — raised to suppress short-code FP
-_DC_IDENT_MIN = 0.50         # (baseline: 0.50)
-_SSO_RAW_MAX = 0.20          # (baseline: 0.25) — tightened to block high-raw SSO FP
-_SSO_DECL_MIN = 0.60         # (baseline: 0.50) — raised to suppress academic-code FP
-_SSO_GAP_MIN = 0.30          # (baseline: 0.25) — raised for domain-convergence filtering
-_SSO_AST_MIN = 0.25          # (baseline: 0.25)
-_OBC_RAW_MAX = 0.15          # (baseline: 0.15)
-_OBC_IDENT_MAX = 0.30        # (baseline: 0.30)
-_OBC_AST_MIN = 0.30          # (baseline: 0.30)
-_CONV_IDENT_MIN = 0.20       # (baseline: 0.20)
-_CONV_DECL_MAX = 0.40        # (baseline: 0.40)
-_CONV_RAW_MAX = 0.20         # (baseline: 0.20)
+# ---------------------------------------------------------------------------
+# Classification threshold profiles
+# ---------------------------------------------------------------------------
+# Domain-specific threshold profiles derived from 646-pair corpus analysis.
+# Academic code (short, high base similarity) requires stricter thresholds.
+#   Academic neg: raw_max=0.62, decl_max=0.85, ast_max=1.0, ident_max=0.96
+#   Industrial neg: raw_max=0.05, decl_max=0.40
+# See TDD/corpus/domain_profile_analysis.py for derivation.
 
-# AFC-specific thresholds — higher bar for SSO when scores come from
-# filtered pipeline.  AFC filtration removes boilerplate identifiers
-# which concentrates remaining identifiers and inflates declaration_cosine
-# by ~1.3–1.7× (see TDD/corpus/afc_score_analysis.py).
-# Guava:Lists filt_decl=0.7285 triggers SSO with normal thresholds.
-_AFC_SSO_DECL_MIN = 0.75     # (normal: 0.60) — +0.15 to absorb filtration inflation
-_AFC_SSO_GAP_MIN = 0.35      # (normal: 0.30) — slightly stricter for filtered scores
+_CLASSIFICATION_PROFILES: dict[str, dict[str, float]] = {
+    "industrial": {
+        # Stage 3 grid-search optimised (84K combos, zero-FP objective)
+        "dc_raw_min":    0.65,
+        "dc_ident_min":  0.50,
+        "sso_raw_max":   0.20,
+        "sso_decl_min":  0.60,
+        "sso_gap_min":   0.30,
+        "sso_ast_min":   0.25,
+        "obc_raw_max":   0.15,
+        "obc_ident_max": 0.30,
+        "obc_ast_min":   0.30,
+        "conv_ident_min": 0.20,
+        "conv_decl_max":  0.40,
+        "conv_raw_max":   0.20,
+    },
+    "academic": {
+        # Stricter thresholds for short academic code (neg_raw_max=0.62,
+        # neg_decl_max=0.85). Must be above neg maxima to maintain zero-FP.
+        "dc_raw_min":    0.70,   # (0.65) neg_raw_max=0.62, +margin
+        "dc_ident_min":  0.60,   # (0.50) neg_ident very high
+        "sso_raw_max":   0.15,   # (0.20) tighter for short code
+        "sso_decl_min":  0.90,   # (0.60) neg_decl_max=0.85(!)
+        "sso_gap_min":   0.40,   # (0.30) stricter gap
+        "sso_ast_min":   0.40,   # (0.25) neg_ast reaches 1.0
+        "obc_raw_max":   0.10,   # (0.15)
+        "obc_ident_max": 0.25,   # (0.30)
+        "obc_ast_min":   0.40,   # (0.30) above academic baseline
+        "conv_ident_min": 0.20,
+        "conv_decl_max":  0.30,  # (0.40) tighter
+        "conv_raw_max":   0.15,  # (0.20) tighter
+    },
+}
 
-# Normalized/raw winnowing ratio threshold for Type-2 disguise detection.
-# Positive pairs have median ratio 1.44 (identifier renaming inflates norm).
-# Negative pairs have ratio ≈ 1.0 (no identifier changes).
-# See TDD/corpus/norm_raw_analysis.py for derivation.
-_SSO_NORM_RAW_RATIO = 1.2    # norm must exceed raw by 20%+ for SSO
+# Backward-compatible module-level aliases (industrial profile)
+_p = _CLASSIFICATION_PROFILES["industrial"]
+_DC_RAW_MIN = _p["dc_raw_min"]
+_DC_IDENT_MIN = _p["dc_ident_min"]
+_SSO_RAW_MAX = _p["sso_raw_max"]
+_SSO_DECL_MIN = _p["sso_decl_min"]
+_SSO_GAP_MIN = _p["sso_gap_min"]
+_SSO_AST_MIN = _p["sso_ast_min"]
+_OBC_RAW_MAX = _p["obc_raw_max"]
+_OBC_IDENT_MAX = _p["obc_ident_max"]
+_OBC_AST_MIN = _p["obc_ast_min"]
+_CONV_IDENT_MIN = _p["conv_ident_min"]
+_CONV_DECL_MAX = _p["conv_decl_max"]
+_CONV_RAW_MAX = _p["conv_raw_max"]
+del _p
+
+# AFC-specific thresholds for filtered pipeline (inflation ~1.3-1.7x)
+_AFC_SSO_DECL_MIN = 0.75
+_AFC_SSO_GAP_MIN = 0.35
+
+# Normalized/raw ratio for Type-2 disguise detection (pos median=1.44)
+_SSO_NORM_RAW_RATIO = 1.2
 
 
 def _classify_strict(
     raw: float, norm: float, ident: float, decl: float, ast: float,
-    *, afc_filtered: bool = False,
+    *, afc_filtered: bool = False, profile: str = "industrial",
 ) -> str:
     """Stage 1: High-confidence classification using optimized thresholds.
 
     Returns a definitive classification or ``"INCONCLUSIVE"`` for
     cases that don't meet the strict criteria.
     """
-    sso_decl_min = _AFC_SSO_DECL_MIN if afc_filtered else _SSO_DECL_MIN
-    sso_gap_min = _AFC_SSO_GAP_MIN if afc_filtered else _SSO_GAP_MIN
+    p = _CLASSIFICATION_PROFILES[profile]
 
-    # ── DIRECT_COPY: all channels high (verbatim or near-verbatim copy)
-    if raw > _DC_RAW_MIN and ident > _DC_IDENT_MIN:
+    # AFC overrides for SSO thresholds (only when scores are filtered)
+    sso_decl_min = _AFC_SSO_DECL_MIN if afc_filtered else p["sso_decl_min"]
+    sso_gap_min = _AFC_SSO_GAP_MIN if afc_filtered else p["sso_gap_min"]
+
+    # -- DIRECT_COPY: all channels high (verbatim or near-verbatim copy)
+    if raw > p["dc_raw_min"] and ident > p["dc_ident_min"]:
         return "DIRECT_COPY"
 
-    # ── SSO_COPYING: API surface preserved, implementation differs
+    # -- SSO_COPYING: API surface preserved, implementation differs
     norm_raw_ok = (norm > raw * _SSO_NORM_RAW_RATIO) if raw > 0.01 else (norm > 0.05)
-    if (raw < _SSO_RAW_MAX and decl >= sso_decl_min
-            and (ident - raw) >= sso_gap_min and ast > _SSO_AST_MIN
+    if (raw < p["sso_raw_max"] and decl >= sso_decl_min
+            and (ident - raw) >= sso_gap_min and ast > p["sso_ast_min"]
             and norm_raw_ok):
         return "SSO_COPYING"
 
-    # ── OBFUSCATED_CLONE: raw and ident low, but AST reveals structure
-    if raw < _OBC_RAW_MAX and ident < _OBC_IDENT_MAX and ast > _OBC_AST_MIN:
+    # -- OBFUSCATED_CLONE: raw and ident low, but AST reveals structure
+    if raw < p["obc_raw_max"] and ident < p["obc_ident_max"] and ast > p["obc_ast_min"]:
         return "OBFUSCATED_CLONE"
 
-    # ── DOMAIN_CONVERGENCE: similar domain vocabulary but different API
-    if ident > _CONV_IDENT_MIN and decl < _CONV_DECL_MAX and raw < _CONV_RAW_MAX:
+    # -- DOMAIN_CONVERGENCE: similar domain vocabulary but different API
+    if ident > p["conv_ident_min"] and decl < p["conv_decl_max"] and raw < p["conv_raw_max"]:
         return "DOMAIN_CONVERGENCE"
 
     return "INCONCLUSIVE"
@@ -652,6 +689,7 @@ def classify_similarity_pattern(
     scores: dict[str, float],
     *,
     afc_filtered: bool = False,
+    profile: str = "industrial",
 ) -> str:
     """Classify the similarity pattern based on cross-channel evidence.
 
@@ -702,7 +740,7 @@ def classify_similarity_pattern(
 
     # Stage 1: strict (high confidence)
     cls = _classify_strict(raw, norm, ident, decl, ast,
-                           afc_filtered=afc_filtered)
+                           afc_filtered=afc_filtered, profile=profile)
     if cls != "INCONCLUSIVE":
         return cls
 
