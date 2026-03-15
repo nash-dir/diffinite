@@ -1,23 +1,32 @@
-"""Multi-evidence channel scoring for forensic code comparison.
+"""다중 증거 채널 분석 엔진 — Diffinite의 핵심.
 
-Implements independent analysis channels beyond Winnowing fingerprints,
-inspired by SAFE CodeMatch's 5-algorithm approach.  Each channel captures
-a different facet of code similarity, so their *combined* agreement
-provides far stronger evidence than any single metric.
+6개의 독립 증거 채널을 통해 코드 유사성의 다양한 측면을 정량화하고,
+교차 채널 패턴으로 복사 유형을 분류하며, AFC(Altai) 테스트로 법적
+보호 가능 표현만을 비교한다.
 
-Channels
-========
+모듈 구성:
+    1. **식별자 분석** — 코사인 유사도 (일반 + TF-IDF)
+    2. **주석/문자열 채널** — Jaccard + TF-IDF 코사인
+    3. **Composite 점수** — ROC AUC 비례 가중 앙상블
+    4. **2단계 분류** — Strict (zero-FP) + Relaxed (재현율 보완)
+    5. **AFC 파이프라인** — Computer Associates v. Altai (1992) 구현
+    6. **법리 델타 분석** — 아이디어-표현 이분법 정량화
 
-1. **Identifier Cosine Similarity** — Compares the identifier-name
-   distributions of two files.  High Winnowing + low Identifier score
-   signals intentional renaming (Type-2 disguise).
+설계 원칙:
+    - 각 채널은 독립적으로 해석 가능해야 한다 (단일 채널만으로도 의미).
+    - 분류 임계값은 646쌍 코퍼스에서 grid search로 최적화.
+    - SUSPICIOUS 등급은 정밀도 계산에서 제외 (참고용).
+    - 법리 분석 임계값은 아직 직관적 추정 — 실데이터 교정 필요.
 
-2. **Comment/String Overlap** — Compares author-written natural-language
-   artefacts (comments, string literals) that are often inadvertently
-   preserved during code copying.
+의존:
+    - ``fingerprint.py``: ``_COMMON_KEYWORDS``, 토크나이저
+    - ``ast_normalizer.py``: 선언부 식별자 추출, 구조 선형화
+    - ``languages/``: Java-family 확장자 판별
 
-3. **Composite Score** — Weighted average across all available channels,
-   summarising overall similarity in a single number.
+호출관계 (주요):
+    ``deep_compare._run_multi_channel()`` → ``compute_channel_scores()``
+    ``deep_compare._run_multi_channel()`` → ``classify_similarity_pattern()``
+    ``deep_compare._run_multi_channel()`` → ``afc_analysis()``
 """
 
 from __future__ import annotations
@@ -29,15 +38,16 @@ from typing import Optional
 
 from diffinite.fingerprint import _COMMON_KEYWORDS
 
-# ---------------------------------------------------------------------------
-# Channel 3: Identifier Cosine Similarity
-# ---------------------------------------------------------------------------
-# Simple tokeniser — same regex as fingerprint.py
+# ──────────────────────────────────────────────────────────────────────
+# 식별자 코사인 유사도 채널
+# ──────────────────────────────────────────────────────────────────────
+# fingerprint.py의 _TOKEN_RE와 동일. 두 모듈이 동일한 토크나이저를
+# 사용해야 채널 간 일관성이 보장된다.
 _TOKEN_RE = re.compile(r"[A-Za-z_]\w*|[0-9]+(?:\.[0-9]+)?|[^\s]")
 
-# Noise identifiers — tokens that inflate cosine similarity without
-# indicating SSO.  Includes:
-#  - Java/generic type names (scènes à faire)
+# 노이즈 식별자 — 코사인 유사도를 부풀리지만 SSO를 나타내지 않는 토큰.
+# Java 표준 타입명(scènes à faire)과 단일 문자 변수를 포함.
+# _JAVA_FAMILY_EXTS 가드로 Java 계열에서만 타입명 필터링 적용.
 #  - Single-character loop/generic variables
 _JAVA_TYPE_STOPWORDS = frozenset({
     "String", "Object", "Integer", "Long", "Double", "Float",
@@ -475,35 +485,31 @@ def comment_string_overlap_tfidf(
     return _cosine_from_counters(vec_a, vec_b)
 
 
-# ---------------------------------------------------------------------------
-# Composite multi-channel scoring
-# ---------------------------------------------------------------------------
-# Default channel weights — ROC AUC-proportional values derived from
-# Stage 3 analysis of 646 pairs.  Higher AUC channels get more weight
-# in the composite score to reduce noise from low-discriminative channels.
-# Previous intuitive weights: raw=1.0, norm=2.0, ast=2.0, ident=1.5,
-# comment=1.0, decl=0.0 (disabled).
+# ──────────────────────────────────────────────────────────────────────
+# Composite 다채널 점수 산정
+# ──────────────────────────────────────────────────────────────────────
+# Industrial 기본 가중치: ROC AUC 비례.
+# 646쌍 코퍼스 Stage 3 분석에서 도출. AUC가 높은 채널이 composite에 더 기여.
+# 초기 직관적 가중치(raw=1.0, norm=2.0, ...)는 코퍼스 기반 최적화로 대체됨.
 _DEFAULT_WEIGHTS: dict[str, float] = {
-    "raw_winnowing":        0.720,    # ROC AUC = 0.720 (highest)
+    "raw_winnowing":        0.720,    # ROC AUC = 0.720
     "normalized_winnowing":  0.717,   # ROC AUC = 0.717
     "ast_winnowing":         0.702,   # ROC AUC = 0.702
     "identifier_cosine":     0.587,   # ROC AUC = 0.587
-    "comment_string_overlap": 0.847,  # ROC AUC = 0.847 (re-measured after pipeline improvements)
-    "declaration_cosine":     0.580,  # ROC AUC = 0.580 — now active in composite
+    "comment_string_overlap": 0.847,  # ROC AUC = 0.847 (주석 채널 강화 후 재측정)
+    "declaration_cosine":     0.580,  # ROC AUC = 0.580
 }
 
-# Academic profile weights — tuned via grid search on IR-Plag-Dataset.
-# Short academic code (10–30 lines) shares many common identifiers and
-# comments across independent submissions, so only structure-based
-# Winnowing channels provide reliable discrimination.  Raw winnowing is
-# weighted higher because it captures exact-copy patterns (L1–L3) that
-# normalised fingerprints absorb.
+# Academic 프로파일 가중치: IR-Plag-Dataset grid search 최적화.
+# 학술 코드(10–30줄)는 짧아서 식별자/주석이 독립 작성에서도 높은 cosine을 보임.
+# 따라서 구조 기반 Winnowing 채널만 사용하고 ident/comment = 0.
+# raw를 3.0으로 높인 이유: L1–L3(정확 복사) 탐지를 normalized가 흡수하는 것을 보정.
 _ACADEMIC_WEIGHTS: dict[str, float] = {
     "raw_winnowing":        3.0,
     "normalized_winnowing":  1.0,
     "ast_winnowing":         1.0,
-    "identifier_cosine":     0.0,
-    "comment_string_overlap": 0.0,
+    "identifier_cosine":     0.0,   # 학술 코드는 식별자 유사도 가치 없음
+    "comment_string_overlap": 0.0,  # 학술 코드는 주석 유사도 가치 없음
     "declaration_cosine":     0.0,
 }
 
@@ -612,22 +618,27 @@ def compute_channel_scores(
     return scores
 
 
-# ---------------------------------------------------------------------------
-# Cross-Channel Classification (Stage 4: Pattern-based SSO detection)
-# ---------------------------------------------------------------------------
+# ──────────────────────────────────────────────────────────────────────
+# 2단계 분류 시스템 (Stage 4: 교차 채널 패턴 기반 SSO 탐지)
+# ──────────────────────────────────────────────────────────────────────
 
-# ---------------------------------------------------------------------------
-# Classification threshold profiles
-# ---------------------------------------------------------------------------
-# Domain-specific threshold profiles derived from 646-pair corpus analysis.
-# Academic code (short, high base similarity) requires stricter thresholds.
+# ──────────────────────────────────────────────────────────────────────
+# 도메인별 임계값 프로파일
+# ──────────────────────────────────────────────────────────────────────
+# 646쌍 코퍼스 분석으로 도출. 학술 코드는 짧은 파일 때문에 기본 유사도가 높으므로
+# 임계값을 상향 조정. neg_max(음성 최대값) 이상으로 설정해야 zero-FP 유지.
 #   Academic neg: raw_max=0.62, decl_max=0.85, ast_max=1.0, ident_max=0.96
 #   Industrial neg: raw_max=0.05, decl_max=0.40
-# See TDD/corpus/domain_profile_analysis.py for derivation.
+# 도출 근거: TDD/corpus/domain_profile_analysis.py
 
 _CLASSIFICATION_PROFILES: dict[str, dict[str, float]] = {
     "industrial": {
-        # Stage 3 grid-search optimised (84K combos, zero-FP objective)
+        # 84K 조합 grid search 최적화 (zero-FP 목표)
+        # 각 값의 의미:
+        #   dc_* = DIRECT_COPY 임계값
+        #   sso_* = SSO_COPYING 임계값
+        #   obc_* = OBFUSCATED_CLONE 임계값
+        #   conv_* = DOMAIN_CONVERGENCE 임계값
         "dc_raw_min":    0.65,
         "dc_ident_min":  0.50,
         "sso_raw_max":   0.20,
@@ -675,11 +686,14 @@ _CONV_DECL_MAX = _p["conv_decl_max"]
 _CONV_RAW_MAX = _p["conv_raw_max"]
 del _p
 
-# AFC-specific thresholds for filtered pipeline (inflation ~1.3-1.7x)
+# AFC 전용 임계값 — Filtration이 유사도를 부풀리는 "inflation" 효과(1.3–1.7×)를 보정.
+# 예: 보일러플레이트 제거 후 Jaccard가 0.40 → 0.65로 상승 가능.
 _AFC_SSO_DECL_MIN = 0.75
 _AFC_SSO_GAP_MIN = 0.35
 
-# Normalized/raw ratio for Type-2 disguise detection (pos median=1.44)
+# Normalized/raw 비율: Type-2 난독화 탐지용.
+# 양성 중앙값(positive median) = 1.44. 이하에서 raw와 norm 차이가 작으면
+# 식별자 변경 없는 복사로 판단.
 _SSO_NORM_RAW_RATIO = 1.2
 
 
@@ -687,10 +701,15 @@ def _classify_strict(
     raw: float, norm: float, ident: float, decl: float, ast: float,
     *, afc_filtered: bool = False, profile: str = "industrial",
 ) -> str:
-    """Stage 1: High-confidence classification using optimized thresholds.
+    """Stage 1: 고확신 분류 (zero-FP 목표).
 
-    Returns a definitive classification or ``"INCONCLUSIVE"`` for
-    cases that don't meet the strict criteria.
+    최적화된 임계값으로 확실한 패턴만 분류.
+    어떤 패턴에도 해당하지 않으면 ``INCONCLUSIVE`` 반환 → Stage 2로 위임.
+
+    주의:
+        ``afc_filtered=True``일 때 SSO 임계값이 높아지는 이유:
+        Filtration이 보일러플레이트를 제거하면 유사도 점수가 평균 1.3–1.7×
+        부풀려지므로(inflation), 판단 기준도 상향 보정해야 한다.
     """
     p = _CLASSIFICATION_PROFILES[profile]
 
@@ -720,11 +739,12 @@ def _classify_strict(
     return "INCONCLUSIVE"
 
 
-# Relaxed thresholds — baseline values before Stage 3 optimisation.
-# Used for Stage 2 SUSPICIOUS classification to recover recall.
-_RELAXED_DC_RAW_MIN = 0.50    # (strict: 0.65)
-_RELAXED_SSO_DECL_MIN = 0.50  # (strict: 0.60)
-_RELAXED_SSO_GAP_MIN = 0.25   # (strict: 0.30)
+# Relaxed 임계값 — Stage 3 최적화 이전의 기준선.
+# Stage 1에서 INCONCLUSIVE일 때 Stage 2에서 재현율(recall) 보완용.
+# SUSPICIOUS 분류는 정밀도 계산에 포함하지 않는다 (참고 정보만 제공).
+_RELAXED_DC_RAW_MIN = 0.50    # (strict: 0.65 → 완화)
+_RELAXED_SSO_DECL_MIN = 0.50  # (strict: 0.60 → 완화)
+_RELAXED_SSO_GAP_MIN = 0.25   # (strict: 0.30 → 완화)
 
 
 def _classify_relaxed(
@@ -732,16 +752,18 @@ def _classify_relaxed(
     comment: float,
     *, profile: str = "industrial",
 ) -> str:
-    """Stage 2: Medium-confidence classification using baseline thresholds.
+    """Stage 2: 중확신 분류 (재현율 보완).
 
-    Only called when Stage 1 returns ``"INCONCLUSIVE"``.
-    Returns ``"SUSPICIOUS_COPY"``, ``"SUSPICIOUS_SSO"``, or
-    ``"INCONCLUSIVE"`` for borderline cases.
+    Stage 1이 ``INCONCLUSIVE``일 때만 호출된다.
+    ``SUSPICIOUS_COPY`` / ``SUSPICIOUS_SSO`` / ``INCONCLUSIVE`` 반환.
 
-    SUSPICIOUS grades are **advisory** — they flag cases for manual
-    review and are NOT counted as positive detections in precision
-    metrics.
+    설계 의도:
+        단일 임계값 시스템의 precision-recall 트레이드오프를
+        2단계로 분리하여 양쪽 모두 최적화:
+        - Stage 1 (Strict): 정밀도 우선 → 법적 증거로 사용 가능
+        - Stage 2 (Relaxed): 재현율 우선 → 수동 검토 권고용
     """
+
     p = _CLASSIFICATION_PROFILES.get(profile, _CLASSIFICATION_PROFILES["industrial"])
 
     # ── SUSPICIOUS_COPY: raw 0.50–0.65 (just below strict DC threshold)
