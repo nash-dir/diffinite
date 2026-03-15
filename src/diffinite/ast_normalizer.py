@@ -1,25 +1,32 @@
-"""AST-based token linearization via tree-sitter.
+"""tree-sitter AST 기반 토큰 선형화 엔진.
 
-Parses source code into an Abstract Syntax Tree using tree-sitter, then
-linearizes the tree into a token sequence suitable for the existing
-Winnowing fingerprint pipeline.
+소스코드를 AST로 파싱한 후, 트리를 Winnowing 파이프라인에서
+소비할 수 있는 토큰 시퀀스로 선형화(linearize)한다.
 
-The linearization preserves **structural information** by emitting
-open/close tags for internal nodes (e.g. ``<for_statement>``,
-``</for_statement>``).  Leaf nodes are normalised:
+선형화 규칙:
+    - 내부 노드: open/close 태그 (``<for_statement>``, ``</for_statement>``)
+    - 식별자: ``"ID"`` (Type-2 클론 저항)
+    - 숫자 리터럴: ``"LIT"``
+    - 문자열 리터럴: ``"STR"``
+    - 키워드/연산자: 원본 보존 (구조 시그니처)
 
-* Identifiers → ``"ID"``
-* Numeric literals → ``"LIT"``
-* String literals → ``"STR"``
-* Keywords and operators → preserved as-is
+이 전략의 효과:
+    - 식별자 변경(Type-2) 저항: ID 정규화로 변수명에 무관
+    - 구조 보존: open/close 태그가 중첩 구조를 인코딩
+    - 연산자/키워드 보존: 알고리즘의 "뼈대"를 유지
 
-This makes the resulting fingerprints resilient to both identifier
-renaming (Type-2 clones) and superficial structural shuffling
-(reduces Type-3 false positives).
+추가 기능:
+    - ``extract_declaration_identifiers()``: API 표면 식별자만 추출 (SSO 탐지용)
+    - ``linearize_pdg()``: Program Dependence Graph 선형화 (실험적)
 
-When tree-sitter grammars are not available for a given language,
-the module returns ``None`` so callers can **fall back** to Phase 1
-Token Normalization seamlessly.
+tree-sitter 의존성:
+    tree-sitter는 선택적 의존. 미설치 시 ``None`` 반환으로
+    호출자가 Phase 1 토큰 정규화로 자연스럽게 폴백.
+    ``pip install tree-sitter tree-sitter-java`` 등으로 설치.
+
+호출관계:
+    ``fingerprint.extract_fingerprints(mode='ast')`` -> ``linearize_ast()``
+    ``evidence.declaration_identifier_cosine()`` -> ``extract_declaration_identifiers()``
 """
 
 from __future__ import annotations
