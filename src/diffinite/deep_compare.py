@@ -1,25 +1,34 @@
-"""N:M deep cross-matching engine.
+"""N:M Deep 크로스매칭 엔진.
 
-Uses an **inverted index** of Winnowing fingerprints to efficiently
-find all files in directory B that share logic with each file in
-directory A — even when code has been split or merged across files.
+Winnowing 핑거프린트의 **역 인덱스(Inverted Index)** 를 활용하여,
+코드가 여러 파일로 분산·병합된 경우에도 유사 코드를 효율적으로 탐지한다.
 
-Architecture
-============
+아키텍처:
+    1. ``ProcessPoolExecutor``로 모든 파일의 핑거프린트를 **병렬 추출**.
+    2. B-파일의 해시값으로 역 인덱스 구축: ``hash → {file_ids}``.
+    3. A-파일별로 인덱스 조회 → 후보 B-파일 결정 → Jaccard 계산.
+    4. Multi-channel 모드에서는 6채널 증거 점수 + 분류 + AFC 분석 추가.
 
-1. Extract fingerprints for every file (parallelised with
-   ``ProcessPoolExecutor``).
-2. Build a **global inverted index**: ``hash_value → [(file_id, pos), …]``.
-3. For each file in A, look up its fingerprints in the index to find
-   matching B-files in **O(|fp_A|)** instead of naïve O(N×M).
-4. Compute Jaccard similarity: ``|A ∩ B| / |A ∪ B|``.
+복잡도:
+    - 핑거프린트 추출: O((N+M) × L) — L = 평균 파일 길이, 병렬화로 wall time ↓
+    - 역 인덱스 구축: O(Σ|fp_b|)
+    - A-파일별 조회: O(|fp_a|) — 나이브 O(N×M) 대비 극적 개선
+    - 전체: O((N+M)×L + Σ|fp_a|) ≈ 선형
 
-Multi-channel mode additionally computes:
-- Raw Winnowing (no normalisation)
-- Normalised Winnowing (identifier/literal abstraction)
-- AST Winnowing (tree-sitter linearisation, if available)
-- Identifier Cosine similarity
-- Comment/String Overlap
+병렬화 제약:
+    워커 함수(``_extract_one``, ``_extract_multi``)는 모듈 최상위에 정의해야 한다.
+    ``ProcessPoolExecutor``가 pickle로 함수를 직렬화하기 때문.
+    클래스 메서드나 람다를 사용하면 ``PicklingError`` 발생.
+
+의존:
+    - ``fingerprint.py``: 핑거프린트 추출 파이프라인
+    - ``evidence.py``: multi-channel 모드에서만 lazy import (순환 방지)
+    - ``parser.py``: 주석 제거
+    - ``differ.py``: 파일 읽기 (인코딩 감지)
+
+호출관계:
+    ``pipeline.run_pipeline()`` → ``run_deep_compare()``
+    → ``_run_single_channel()`` 또는 ``_run_multi_channel()``
 """
 
 from __future__ import annotations
@@ -43,24 +52,25 @@ from diffinite.parser import strip_comments
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Worker function (must be top-level for pickling)
-# ---------------------------------------------------------------------------
+# ──────────────────────────────────────────────────────────────────────
+# 워커 함수 (ProcessPoolExecutor 직렬화를 위해 모듈 최상위 정의 필수)
+# ──────────────────────────────────────────────────────────────────────
 def _extract_one(args: tuple) -> tuple[str, set[int], int]:
-    """Extract fingerprints for a single file.
+    """Single-channel 모드용 워커: 단일 파일의 핑거프린트를 추출한다.
 
     Args:
         args: ``(abs_path, rel_path, extension, k, w, normalize, tokenizer)``
+              — tuple 포장은 ``pool.map()`` 인터페이스 제약.
 
     Returns:
-        ``(rel_path, set_of_hash_values, total_fingerprint_count)``
+        ``(rel_path, hash_set, fingerprint_count)``
+        읽기 실패 시 빈 set / count=0 반환.
     """
     abs_path, rel_path, extension, k, w, normalize, tokenizer = args
     text = read_file(abs_path)
     if text is None:
         return rel_path, set(), 0
 
-    # Strip comments for normalisation
     cleaned = strip_comments(text, extension)
     fps = extract_fingerprints(
         cleaned, k=k, w=w, normalize=normalize,
@@ -71,13 +81,19 @@ def _extract_one(args: tuple) -> tuple[str, set[int], int]:
 
 
 def _extract_multi(args: tuple) -> tuple[str, dict[str, set[int]], str, str]:
-    """Extract multi-channel fingerprints for a single file.
+    """Multi-channel 모드용 워커: 3개 채널의 핑거프린트를 동시 추출한다.
 
-    Args:
-        args: ``(abs_path, rel_path, extension, k, w)``
+    추출 채널:
+        - ``raw``: 정규화 없는 원문 토큰 → 문자적 복사(Type-1) 탐지
+        - ``normalized``: ID/LIT 정규화 → 식별자 변경(Type-2) 탐지
+        - ``ast``: tree-sitter 구조 → 구조적 유사성 탐지 (폴백 시 생략)
+
+    AST 채널은 normalized와 결과가 동일하면 저장하지 않는다
+    (tree-sitter 미설치 = 토큰 폴백 = normalized와 동일).
 
     Returns:
         ``(rel_path, {mode: hash_set}, raw_text, cleaned_text)``
+        raw_text/cleaned_text는 나중에 identifier/comment 채널 계산에 필요.
     """
     abs_path, rel_path, extension, k, w = args
     text = read_file(abs_path)
@@ -87,46 +103,47 @@ def _extract_multi(args: tuple) -> tuple[str, dict[str, set[int]], str, str]:
     cleaned = strip_comments(text, extension)
     result: dict[str, set[int]] = {}
 
-    # Raw (no normalisation)
+    # ── 채널 1: Raw (표현 수준 유사도) ──
     fps_raw = extract_fingerprints(
         cleaned, k=k, w=w, normalize=False,
         mode="token", extension=extension,
     )
     result["raw"] = {fp.hash_value for fp in fps_raw}
 
-    # Normalised (Phase 1)
+    # ── 채널 2: Normalized (아이디어 수준 유사도) ──
     fps_norm = extract_fingerprints(
         cleaned, k=k, w=w, normalize=True,
         mode="token", extension=extension,
     )
     result["normalized"] = {fp.hash_value for fp in fps_norm}
 
-    # AST (Phase 2 — may fall back to token if tree-sitter unavailable)
+    # ── 채널 3: AST (구조적 유사도) ──
     fps_ast = extract_fingerprints(
         cleaned, k=k, w=w, normalize=True,
         mode="ast", extension=extension,
     )
     ast_set = {fp.hash_value for fp in fps_ast}
-    # Only store if different from normalised (meaning AST actually worked)
+    # AST 토크나이징이 실제로 작동했을 때만 저장 (토큰 폴백과 구별)
     if ast_set != result["normalized"]:
         result["ast"] = ast_set
 
     return rel_path, result, text, cleaned
 
 
-# ---------------------------------------------------------------------------
-# Inverted index
-# ---------------------------------------------------------------------------
+# ──────────────────────────────────────────────────────────────────────
+# 역 인덱스 (Information Retrieval 표준 기법)
+# ──────────────────────────────────────────────────────────────────────
 def build_inverted_index(
     fp_map: dict[str, set[int]],
 ) -> dict[int, set[str]]:
-    """Build hash_value → {file_ids…} inverted index.
+    """해시값 → 파일 ID 집합의 역 인덱스를 구축한다.
 
-    Args:
-        fp_map: Mapping of ``rel_path → set_of_hash_values``.
+    이 인덱스 덕분에 A-파일의 각 해시를 O(1)로 조회하여
+    공유 해시를 가진 B-파일을 즉시 찾을 수 있다.
+    나이브 쌍-단위 비교 O(N×M) 대비 O(Σ|fp_a|)로 단축.
 
-    Returns:
-        Inverted index mapping each hash to the set of files containing it.
+    메모리: O(Σ|fp_b|) — 대규모 코퍼스에서 수 GB 가능.
+    필요 시 hash 샘플링(MinHash) 검토.
     """
     index: dict[int, set[str]] = defaultdict(set)
     for file_id, hashes in fp_map.items():
@@ -135,11 +152,12 @@ def build_inverted_index(
     return index
 
 
-# ---------------------------------------------------------------------------
-# N:M matching
-# ---------------------------------------------------------------------------
+# ──────────────────────────────────────────────────────────────────────
+# Jaccard 유사도 & N:M 매칭
+# ──────────────────────────────────────────────────────────────────────
 def _jaccard(set_a: set[int], set_b: set[int]) -> float:
-    """Compute Jaccard similarity coefficient."""
+    """두 해시 집합의 Jaccard 유사도 계수. |A∩B| / |A∪B|.
+    양쪽 모두 빈 집합이면 0.0 반환."""
     if not set_a and not set_b:
         return 0.0
     intersection = len(set_a & set_b)
@@ -301,13 +319,18 @@ def _run_multi_channel(
     min_jaccard: float,
     profile: str = "industrial",
 ) -> list[DeepMatchResult]:
-    """Multi-channel deep compare with evidence scoring.
+    """Multi-channel 모드 크로스매칭 + 증거 점수 산정.
 
-    Integrates:
-    - Corpus-level TF-IDF weighting for identifier channels
-    - Cross-channel pattern classification (SSO_COPYING, DIRECT_COPY, etc.)
-    - AFC (Abstraction-Filtration-Comparison) analysis
+    Single-channel 대비 추가 수행:
+    1. **코퍼스 레벨 TF-IDF** — 전체 파일에서 IDF 구축 → 공통 식별자 가중치 하향
+    2. **6채널 증거 점수** — raw/norm/AST/ident/decl/comment
+    3. **교차 채널 분류** — DIRECT_COPY, SSO_COPYING 등 패턴 결정
+    4. **AFC 분석** — Altai 3단계 (Abstraction-Filtration-Comparison)
+
+    ``evidence`` 모듈은 여기서 **lazy import**한다.
+    ``evidence`` → ``fingerprint`` → ``deep_compare`` 순환 방지를 위한 의도적 설계.
     """
+    # 순환 import 방지를 위한 함수 내부 import
     from diffinite.evidence import (
         _build_idf,
         _extract_identifiers,

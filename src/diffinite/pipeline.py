@@ -1,18 +1,33 @@
-"""Pipeline orchestrator.
+"""파이프라인 오케스트레이터.
 
-Ties together collection, parsing, diffing, deep-compare, and report
-generation into a single ``run_pipeline()`` function that is called
-by the CLI.
+Collection → Parsing → Diff → Deep Compare → Report 전체 흐름을 조율하는
+``run_pipeline()`` 함수를 제공한다. CLI에서 직접 호출.
 
-Execution Modes
-===============
-- ``simple`` — 1:1 file matching, diff, report.  No Winnowing.
-- ``deep``   — 1:1 matching + N:M Winnowing cross-matching on leftover files.
+실행 모드:
+    - ``simple``: 1:1 파일 매칭 + diff + 보고서. Winnowing 미사용. 빠름.
+    - ``deep``: 1:1 + N:M Winnowing 크로스매칭 + 다중 증거 채널. 정밀.
 
-Supports multiple output formats:
-  --report-pdf  (default) — merged PDF with bookmarks and Bates numbers.
-  --report-html           — standalone HTML report.
-  --report-md             — Markdown summary report.
+보고서 형식:
+    - ``--report-pdf``: 병합 PDF (북마크 + Bates 번호). 법정 제출용.
+    - ``--report-html``: 독립형 HTML (자기 완결형 CSS/JS).
+    - ``--report-md``: Markdown 요약 (CI/CD 통합용).
+
+PDF 전략 (Divide-and-Conquer):
+    대규모 파일 쌍에서 단일 PDF 변환 시 메모리 폭발을 방지하기 위해,
+    파일별로 개별 PDF를 생성한 후 ``pypdf``로 병합한다.
+    병합 시 파일별 북마크와 Bates 번호를 자동 추가.
+
+의존:
+    - ``collector.py``: 파일 수집 & 매칭
+    - ``parser.py``: 주석 제거
+    - ``differ.py``: Diff 계산 + HTML 생성
+    - ``deep_compare.py``: N:M 크로스매칭
+    - ``evidence.py``: 다중 증거 채널 (deep 모드에서만)
+    - ``pdf_gen.py``: PDF 보고서 생성
+
+호출관계:
+    ``cli.main()`` → ``run_pipeline()``
+    ``run_pipeline()`` → ``_generate_pdf/html/markdown_report()``
 """
 
 from __future__ import annotations

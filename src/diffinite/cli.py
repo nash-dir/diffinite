@@ -1,19 +1,22 @@
-"""CLI entry point for Diffinite.
+"""Diffinite CLI 진입점.
 
-Provides the ``diffinite`` console command via ``argparse``.
+``diffinite`` 콘솔 커맨드의 인자 파싱 및 파이프라인 오케스트레이션.
+``argparse`` 기반 CLI로, ``pipeline.run_pipeline()``을 호출한다.
 
-Execution Modes
-===============
-- ``--mode simple`` : 1:1 file matching only (fast, no Winnowing).
-- ``--mode deep``   : 1:1 + N:M Winnowing cross-matching (default).
+3-Tier 파라미터 시스템:
+    Tier 1: ``--profile`` -- industrial/academic 프리셋 (K, W, T)
+    Tier 2: ``--k-gram/--window/--threshold-deep`` -- 수동 오버라이드
+    Tier 3: ``--grid-search`` -- KxW 감도 분석 스윕
 
-Parameter 3-Tier System (Deep mode)
-====================================
-- Tier 1 — **Profile** (``--profile``): preset K/W/T values.
-- Tier 2 — **Manual Override** (``--k-gram``, ``--window``, ``--threshold-deep``):
-  expert knobs that override the profile.
-- Tier 3 — **Grid Search** (``--grid-search``): sensitivity sweep over K×W
-  combinations, output a Jaccard robustness matrix.
+    우선순위: grid-search > manual > profile.
+    이 캐스케이드로 사용자가 점진적으로 파라미터를 정밀화할 수 있다.
+
+의존:
+    - ``pipeline.py``: 실제 분석 실행
+    - ``models.AnalysisMetadata``: 보고서 재현성 메타데이터
+
+호출관계:
+    ``diffinite`` console_script -> ``main(argv)`` -> ``pipeline.run_pipeline()``
 """
 
 from __future__ import annotations
