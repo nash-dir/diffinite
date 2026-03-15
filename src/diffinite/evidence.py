@@ -562,6 +562,12 @@ _CONV_RAW_MAX = 0.20         # (baseline: 0.20)
 _AFC_SSO_DECL_MIN = 0.75     # (normal: 0.60) — +0.15 to absorb filtration inflation
 _AFC_SSO_GAP_MIN = 0.35      # (normal: 0.30) — slightly stricter for filtered scores
 
+# Normalized/raw winnowing ratio threshold for Type-2 disguise detection.
+# Positive pairs have median ratio 1.44 (identifier renaming inflates norm).
+# Negative pairs have ratio ≈ 1.0 (no identifier changes).
+# See TDD/corpus/norm_raw_analysis.py for derivation.
+_SSO_NORM_RAW_RATIO = 1.2    # norm must exceed raw by 20%+ for SSO
+
 
 def classify_similarity_pattern(
     scores: dict[str, float],
@@ -601,6 +607,7 @@ def classify_similarity_pattern(
         ``"INCONCLUSIVE"``.
     """
     raw = scores.get("raw_winnowing", 0.0)
+    norm = scores.get("normalized_winnowing", 0.0)
     ident = scores.get("identifier_cosine", 0.0)
     decl = scores.get("declaration_cosine", 0.0)
     ast = scores.get("ast_winnowing", 0.0)
@@ -620,7 +627,13 @@ def classify_similarity_pattern(
     #    3. Significant identifier-raw gap (API names vs code)
     #    4. AST structural similarity above baseline (shared class/method skeleton)
     #       This condition prevents domain convergence FP where AST is low
-    if raw < _SSO_RAW_MAX and decl >= sso_decl_min and (ident - raw) >= sso_gap_min and ast > _SSO_AST_MIN:
+    #    5. Normalized > raw (identifier renaming signal — Type-2 disguise)
+    #       If raw ≈ 0, require norm above a minimum instead of ratio check.
+    #       Corpus analysis: positive median ratio = 1.44, negative ≈ 1.0
+    norm_raw_ok = (norm > raw * _SSO_NORM_RAW_RATIO) if raw > 0.01 else (norm > 0.05)
+    if (raw < _SSO_RAW_MAX and decl >= sso_decl_min
+            and (ident - raw) >= sso_gap_min and ast > _SSO_AST_MIN
+            and norm_raw_ok):
         return "SSO_COPYING"
 
     # ── OBFUSCATED_CLONE: raw and ident low, but AST reveals structure
