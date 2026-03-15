@@ -47,17 +47,20 @@ _JAVA_TYPE_STOPWORDS = frozenset({
     "Override", "Deprecated", "SuppressWarnings",
 })
 
+# Extensions where Java-specific filters apply
+_JAVA_FAMILY_EXTS = frozenset({".java", ".kt", ".scala", ".groovy"})
 
-def _is_noise_identifier(token: str) -> bool:
+
+def _is_noise_identifier(token: str, extension: str = ".java") -> bool:
     """Check if *token* is a noise identifier that should be excluded.
 
     Filters:
     - Single-character identifiers (loop vars `i`, `j`, `k`; generics `V`, `K`, `T`)
-    - Java standard type names (scènes à faire)
+    - Java standard type names (only for Java-family languages)
     """
     if len(token) == 1:
         return True  # i, j, k, V, K, T, E, etc.
-    if token in _JAVA_TYPE_STOPWORDS:
+    if extension in _JAVA_FAMILY_EXTS and token in _JAVA_TYPE_STOPWORDS:
         return True
     return False
 
@@ -256,14 +259,6 @@ def _cosine_from_counters(counter_a: Counter, counter_b: Counter) -> float:
     return dot / (mag_a * mag_b)
 
 
-def _jaccard_from_sets(set_a: set, set_b: set) -> float:
-    """Jaccard similarity between two sets."""
-    if not set_a and not set_b:
-        return 0.0
-    union = set_a | set_b
-    if not union:
-        return 0.0
-    return len(set_a & set_b) / len(union)
 
 
 def declaration_identifier_cosine(
@@ -391,8 +386,8 @@ def extract_comments_and_strings(
             # Filter license/copyright lines
             if filter_license and _is_license_line(comment_part):
                 continue
-            # Strip Javadoc tags
-            if filter_javadoc_tags:
+            # Strip Javadoc tags (Java-family only)
+            if filter_javadoc_tags and extension in _JAVA_FAMILY_EXTS:
                 comment_part = _strip_javadoc_tags(comment_part)
             if comment_part:
                 fragments.append(comment_part)
@@ -467,9 +462,9 @@ def comment_string_overlap_tfidf(
     tokens_a: list[str] = []
     tokens_b: list[str] = []
     for frag in frags_a:
-        tokens_a.extend(_IDENT_RE.findall(frag.lower()))
+        tokens_a.extend(_TOKEN_RE.findall(frag.lower()))
     for frag in frags_b:
-        tokens_b.extend(_IDENT_RE.findall(frag.lower()))
+        tokens_b.extend(_TOKEN_RE.findall(frag.lower()))
 
     if not tokens_a or not tokens_b:
         return 0.0
@@ -493,7 +488,7 @@ _DEFAULT_WEIGHTS: dict[str, float] = {
     "normalized_winnowing":  0.717,   # ROC AUC = 0.717
     "ast_winnowing":         0.702,   # ROC AUC = 0.702
     "identifier_cosine":     0.587,   # ROC AUC = 0.587
-    "comment_string_overlap": 0.528,  # ROC AUC = 0.528 (lowest)
+    "comment_string_overlap": 0.847,  # ROC AUC = 0.847 (re-measured after pipeline improvements)
     "declaration_cosine":     0.580,  # ROC AUC = 0.580 — now active in composite
 }
 
@@ -735,6 +730,7 @@ _RELAXED_SSO_GAP_MIN = 0.25   # (strict: 0.30)
 def _classify_relaxed(
     raw: float, norm: float, ident: float, decl: float, ast: float,
     comment: float,
+    *, profile: str = "industrial",
 ) -> str:
     """Stage 2: Medium-confidence classification using baseline thresholds.
 
@@ -746,8 +742,10 @@ def _classify_relaxed(
     review and are NOT counted as positive detections in precision
     metrics.
     """
+    p = _CLASSIFICATION_PROFILES.get(profile, _CLASSIFICATION_PROFILES["industrial"])
+
     # ── SUSPICIOUS_COPY: raw 0.50–0.65 (just below strict DC threshold)
-    if raw > _RELAXED_DC_RAW_MIN and ident > _DC_IDENT_MIN:
+    if raw > _RELAXED_DC_RAW_MIN and ident > p["dc_ident_min"]:
         return "SUSPICIOUS_COPY"
 
     # ── SUSPICIOUS_COPY via comment signal: code slightly modified but
@@ -757,10 +755,10 @@ def _classify_relaxed(
 
     # ── SUSPICIOUS_SSO: API similarity just below strict SSO threshold
     norm_raw_ok = (norm > raw * _SSO_NORM_RAW_RATIO) if raw > 0.01 else (norm > 0.05)
-    if (raw < _SSO_RAW_MAX + 0.05  # slightly wider band
+    if (raw < p["sso_raw_max"] + 0.05  # slightly wider band
             and decl >= _RELAXED_SSO_DECL_MIN
             and (ident - raw) >= _RELAXED_SSO_GAP_MIN
-            and ast > _SSO_AST_MIN
+            and ast > p["sso_ast_min"]
             and norm_raw_ok):
         return "SUSPICIOUS_SSO"
 
@@ -827,7 +825,8 @@ def classify_similarity_pattern(
         return cls
 
     # Stage 2: relaxed (medium confidence — SUSPICIOUS grades)
-    return _classify_relaxed(raw, norm, ident, decl, ast, comment)
+    return _classify_relaxed(raw, norm, ident, decl, ast, comment,
+                             profile=profile)
 
 
 # ---------------------------------------------------------------------------
