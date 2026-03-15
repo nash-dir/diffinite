@@ -318,8 +318,36 @@ _STRING_LITERAL_RE = re.compile(
 )
 
 
+# -- Comment channel filtering constants --
+_LICENSE_KEYWORDS = frozenset({
+    "copyright", "license", "licensed", "apache", "gpl", "mit",
+    "bsd", "mozilla", "lgpl", "permission", "redistribution",
+    "warranty", "merchantability", "all rights reserved",
+})
+_JAVADOC_TAGS = frozenset({
+    "@param", "@return", "@returns", "@throws", "@exception",
+    "@see", "@since", "@version", "@author", "@deprecated",
+    "@Override", "@override", "@link", "@code", "@inheritDoc",
+    "@serial", "@serialField", "@serialData",
+})
+
+
+def _is_license_line(line: str) -> bool:
+    """Check if a comment line is part of a license/copyright header."""
+    lower = line.lower()
+    return any(kw in lower for kw in _LICENSE_KEYWORDS)
+
+
+def _strip_javadoc_tags(fragment: str) -> str:
+    """Remove Javadoc/annotation tag markers from a comment fragment."""
+    for tag in _JAVADOC_TAGS:
+        fragment = fragment.replace(tag, "")
+    return fragment.strip()
+
+
 def extract_comments_and_strings(
     text: str, extension: str,
+    *, filter_license: bool = True, filter_javadoc_tags: bool = True,
 ) -> list[str]:
     """Extract comment and string-literal content from source code.
 
@@ -329,8 +357,10 @@ def extract_comments_and_strings(
     URLs, magic constants) that persists across code copying.
 
     Args:
-        text:      Raw source code (with comments intact).
-        extension: Lowercase file extension (e.g. ``".py"``).
+        text:                Raw source code (with comments intact).
+        extension:           Lowercase file extension (e.g. ``".py"``).
+        filter_license:      If True, skip license/copyright header lines.
+        filter_javadoc_tags: If True, strip Javadoc tag markers.
 
     Returns:
         List of extracted comment/string fragments, each stripped of
@@ -356,6 +386,14 @@ def extract_comments_and_strings(
                     if comment_part.startswith(marker):
                         comment_part = comment_part[len(marker):].strip()
                         break
+            if not comment_part:
+                continue
+            # Filter license/copyright lines
+            if filter_license and _is_license_line(comment_part):
+                continue
+            # Strip Javadoc tags
+            if filter_javadoc_tags:
+                comment_part = _strip_javadoc_tags(comment_part)
             if comment_part:
                 fragments.append(comment_part)
 
@@ -396,6 +434,50 @@ def comment_string_overlap(
     intersection = len(frags_a & frags_b)
     union = len(frags_a | frags_b)
     return intersection / union if union else 0.0
+
+
+def comment_string_overlap_tfidf(
+    text_a: str, text_b: str, extension: str,
+    idf: dict[str, float] | None = None,
+) -> float:
+    """TF-IDF weighted cosine similarity over comment/string tokens.
+
+    Improvement over ``comment_string_overlap()`` which uses Jaccard.
+    Tokenises comment fragments and applies IDF weighting to
+    down-weight common patterns and amplify author-specific content.
+
+    Falls back to ``comment_string_overlap()`` if ``idf`` is None.
+
+    Args:
+        text_a:    Raw source of file A.
+        text_b:    Raw source of file B.
+        extension: Lowercase file extension.
+        idf:       IDF dictionary, or None for Jaccard fallback.
+
+    Returns:
+        Cosine similarity in [0.0, 1.0].
+    """
+    if idf is None:
+        return comment_string_overlap(text_a, text_b, extension)
+
+    frags_a = extract_comments_and_strings(text_a, extension)
+    frags_b = extract_comments_and_strings(text_b, extension)
+
+    # Tokenise fragments into word-level tokens
+    tokens_a: list[str] = []
+    tokens_b: list[str] = []
+    for frag in frags_a:
+        tokens_a.extend(_IDENT_RE.findall(frag.lower()))
+    for frag in frags_b:
+        tokens_b.extend(_IDENT_RE.findall(frag.lower()))
+
+    if not tokens_a or not tokens_b:
+        return 0.0
+
+    vec_a = _tfidf_vector(tokens_a, idf)
+    vec_b = _tfidf_vector(tokens_b, idf)
+
+    return _cosine_from_counters(vec_a, vec_b)
 
 
 # ---------------------------------------------------------------------------
