@@ -194,3 +194,95 @@ class AnalysisMetadata:
 
     grid_search: bool = False
     """True이면 K×W 감도 분석(grid search)이 수행됨."""
+
+    autojunk: bool = True
+    """``difflib.SequenceMatcher``의 autojunk 옵션.
+    False(``--no-autojunk``)로 설정하면 모든 토큰을 동등 취급하여
+    포렌식 정밀 분석에 적합하지만 대형 파일에서 성능이 저하된다."""
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 분류 임계값 (2단계 분류 시스템)
+# ──────────────────────────────────────────────────────────────────────
+@dataclass(frozen=True)
+class ClassificationThresholds:
+    """교차 채널 패턴 기반 2단계 분류의 임계값 프로파일.
+
+    646쌍 코퍼스 grid search에서 도출된 최적 임계값을 ``frozen=True``
+    dataclass로 캡슐화한다. 프로파일(industrial/academic) 추가 시
+    인스턴스만 생성하면 되므로 코드 수정이 불필요하다.
+
+    필드 명명 규칙:
+        ``{category}_{channel}_{bound}``
+        - category: dc(DIRECT_COPY), sso(SSO_COPYING), obc(OBFUSCATED_CLONE),
+                     conv(DOMAIN_CONVERGENCE), susp(SUSPICIOUS)
+        - channel:  raw, ident, decl, gap, ast, comment
+        - bound:    min(이상), max(이하)
+    """
+
+    # ── DIRECT_COPY ──
+    dc_raw_min: float = 0.65
+    dc_ident_min: float = 0.50
+
+    # ── SSO_COPYING ──
+    sso_raw_max: float = 0.20
+    sso_decl_min: float = 0.60
+    sso_gap_min: float = 0.30
+    sso_ast_min: float = 0.25
+
+    # ── OBFUSCATED_CLONE ──
+    obc_raw_max: float = 0.15
+    obc_ident_max: float = 0.30
+    obc_ast_min: float = 0.30
+
+    # ── DOMAIN_CONVERGENCE ──
+    conv_ident_min: float = 0.20
+    conv_decl_max: float = 0.40
+    conv_raw_max: float = 0.20
+
+    # ── SUSPICIOUS (Stage 2 relaxed) ──
+    susp_raw_min: float = 0.50
+    susp_ident_min: float = 0.50
+    susp_sso_ident_min: float = 0.50
+    susp_sso_decl_min: float = 0.50
+    susp_sso_ast_min: float = 0.25
+
+    # ── Comment boost ──
+    comment_boost_min: float = 0.60
+
+
+# ──────────────────────────────────────────────────────────────────────
+# IDEX 법리 분석 임계값
+# ──────────────────────────────────────────────────────────────────────
+@dataclass(frozen=True)
+class IDEXThresholds:
+    """아이디어-표현 이분법 분석(IDEX)의 임계값.
+
+    ``analyze_legal_defense_pattern()``에서 클린룸/리터럴 복사/독립 작성 등을
+    판별하는 데 사용하는 매직넘버를 외부화한다. 코퍼스 ROC AUC 교정 시
+    이 dataclass의 기본값만 변경하면 코드 수정이 불필요하다.
+    """
+
+    cr_raw_max: float = 0.20
+    """CLEAN_ROOM_PROBABLE: Industrial raw winnowing ≤ 이 값이면 후보."""
+
+    cr_ast_min: float = 0.40
+    """CLEAN_ROOM_PROBABLE: Academic AST winnowing ≥ 이 값이면 후보."""
+
+    cr_delta_min: float = 0.15
+    """CLEAN_ROOM_PROBABLE: Academic-Industrial composite delta ≥ 이 값."""
+
+    lc_raw_min: float = 0.70
+    """LITERAL_COPYING: Industrial raw winnowing ≥ 이 값."""
+
+    lc_acad_min: float = 0.60
+    """LITERAL_COPYING: Academic composite ≥ 이 값."""
+
+    lc_delta_max: float = 0.10
+    """LITERAL_COPYING: |delta| ≤ 이 값이면 프로필 간 격차 작음."""
+
+    ic_ind_max: float = 0.10
+    """INDEPENDENT_CREATION: Industrial composite ≤ 이 값."""
+
+    ic_acad_max: float = 0.15
+    """INDEPENDENT_CREATION: Academic composite ≤ 이 값."""

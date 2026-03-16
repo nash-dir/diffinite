@@ -49,8 +49,9 @@ HASH_MOD: int = (1 << 61) - 1
 효율적 모듈러 지수 연산 가능. 충돌 확률 ≈ 1/2^61."""
 
 # 토크나이저 정규식 — 식별자, 숫자, 개별 구두점을 각각 토큰으로 분리.
-# 공백은 버린다. ``_TOKEN_RE``는 evidence.py에서도 참조됨.
-_TOKEN_RE = re.compile(r"[A-Za-z_]\w*|[0-9]+(?:\.[0-9]+)?|[^\s]")
+# 공백은 버린다. evidence.py에서 ``from diffinite.fingerprint import TOKEN_RE``
+# 로 참조하여 채널 간 토크나이저 일관성을 보장한다.
+TOKEN_RE = re.compile(r"[A-Za-z_]\w*|[0-9]+(?:\.[0-9]+)?|[^\s]")
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -103,7 +104,7 @@ def tokenize(source: str, *, normalize: bool = False) -> list[str]:
         입력 ``source``는 이미 주석이 제거된 텍스트여야 한다.
         ``parser.strip_comments()``를 먼저 호출할 것.
     """
-    raw_tokens = _TOKEN_RE.findall(source)
+    raw_tokens = TOKEN_RE.findall(source)
     if not normalize:
         return raw_tokens
 

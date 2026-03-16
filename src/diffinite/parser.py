@@ -142,19 +142,23 @@ def _strip_ifdef_zero(text: str) -> str:
 # 상태 머신
 # ──────────────────────────────────────────────────────────────────────
 class _State(enum.Enum):
-    """2-pass 파서의 4가지 상태.
+    """2-pass 파서의 5가지 상태.
 
-    ``CODE`` → ``IN_STRING``: 문자열 구분자(``"``, ``'``, `` ` ``) 만남
+    ``CODE`` → ``IN_STRING``: 문자열 구분자(``"``, ``'``) 만남
+    ``CODE`` → ``IN_TEMPLATE_LITERAL``: 백틱(`` ` ``) 만남 (JS 템플릿 리터럴)
     ``CODE`` → ``IN_LINE_COMMENT``: 라인 주석 마커 만남
     ``CODE`` → ``IN_BLOCK_COMMENT``: 블록 주석 시작 만남
     ``IN_LINE_COMMENT`` → ``CODE``: 줄 바꿈
     ``IN_BLOCK_COMMENT`` → ``CODE``: 블록 주석 종료 마커 만남
     ``IN_STRING`` → ``CODE``: 닫는 구분자 만남
+    ``IN_TEMPLATE_LITERAL`` → ``CODE``: ``${`` 진입 (depth증가 후 CODE로) / 백틱 닫힘
+    ``CODE`` → ``IN_TEMPLATE_LITERAL``: ``}`` with template_depth > 0
     """
     CODE = "CODE"
     IN_STRING = "IN_STRING"
     IN_LINE_COMMENT = "IN_LINE_COMMENT"
     IN_BLOCK_COMMENT = "IN_BLOCK_COMMENT"
+    IN_TEMPLATE_LITERAL = "IN_TEMPLATE_LITERAL"
 
 
 def _has_any_marker(line: str, spec: CommentSpec) -> bool:
@@ -229,6 +233,7 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
     state = _State.CODE
     string_delim: Optional[str] = None  # 현재 열린 문자열 구분자
     escaped = False                      # 이전 문자가 백슬래시인지
+    template_depth = 0                   # JS 템플릿 리터럴 중첩 깊이
 
     line_markers = spec.line_markers
     block_start = spec.block_start or ""
@@ -291,6 +296,35 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
                 pos += 1
                 continue
 
+            # ── IN_TEMPLATE_LITERAL: ${} 및 닫힘 처리 ──
+            if state is _State.IN_TEMPLATE_LITERAL:
+                if escaped:
+                    line_out.append(ch)
+                    escaped = False
+                    pos += 1
+                    continue
+                if ch == "\\":
+                    escaped = True
+                    line_out.append(ch)
+                    pos += 1
+                    continue
+                # ${} 표현식 진입 → CODE로 전환, depth 증가
+                if ch == "$" and pos + 1 < length and line[pos + 1] == "{":
+                    line_out.append("${")
+                    pos += 2
+                    template_depth += 1
+                    state = _State.CODE
+                    continue
+                # 백틱 닫힘 → CODE 복귀
+                if ch == "`":
+                    line_out.append(ch)
+                    pos += 1
+                    state = _State.CODE
+                    continue
+                line_out.append(ch)
+                pos += 1
+                continue
+
             # ── CODE: 문자열 열림 감지 ──
             if ch in ('"', "'"):
                 triple = ch * 3
@@ -306,12 +340,19 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
                 string_delim = ch
                 continue
 
-            # 백틱 문자열 (JS/Go 템플릿 리터럴)
+            # 백틱 템플릿 리터럴 (JS/Go)
             if ch == "`":
                 line_out.append(ch)
                 pos += 1
-                state = _State.IN_STRING
-                string_delim = "`"
+                state = _State.IN_TEMPLATE_LITERAL
+                continue
+
+            # 중괄호 닫힘: 템플릿 리터럴 내 ${} 표현식 종료 → 템플릿으로 복귀
+            if ch == "}" and template_depth > 0:
+                template_depth -= 1
+                line_out.append(ch)
+                pos += 1
+                state = _State.IN_TEMPLATE_LITERAL
                 continue
 
             # ── CODE: 블록 주석 시작 ──

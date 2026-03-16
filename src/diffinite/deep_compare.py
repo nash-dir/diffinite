@@ -135,6 +135,7 @@ def _extract_multi(args: tuple) -> tuple[str, dict[str, set[int]], str, str]:
 # ──────────────────────────────────────────────────────────────────────
 def build_inverted_index(
     fp_map: dict[str, set[int]],
+    max_entries: int = 10_000_000,
 ) -> dict[int, set[str]]:
     """해시값 → 파일 ID 집합의 역 인덱스를 구축한다.
 
@@ -143,12 +144,22 @@ def build_inverted_index(
     나이브 쌍-단위 비교 O(N×M) 대비 O(Σ|fp_a|)로 단축.
 
     메모리: O(Σ|fp_b|) — 대규모 코퍼스에서 수 GB 가능.
-    필요 시 hash 샘플링(MinHash) 검토.
+    ``max_entries`` 초과 시 경고 로그 출력 후 truncated index 반환.
+    ``--max-index-entries`` CLI 옵션으로 제어 가능.
     """
     index: dict[int, set[str]] = defaultdict(set)
+    entry_count = 0
     for file_id, hashes in fp_map.items():
         for h in hashes:
             index[h].add(file_id)
+            entry_count += 1
+            if entry_count >= max_entries:
+                logger.warning(
+                    "Inverted index truncated at %d entries "
+                    "(--max-index-entries). Some matches may be missed.",
+                    max_entries,
+                )
+                return index
     return index
 
 
@@ -179,6 +190,7 @@ def run_deep_compare(
     tokenizer: str = "token",
     multi_channel: bool = False,
     profile: str = "industrial",
+    max_index_entries: int = 10_000_000,
 ) -> list[DeepMatchResult]:
     """Execute N:M cross-matching between two directories.
 
@@ -212,12 +224,14 @@ def run_deep_compare(
             dir_a, dir_b, files_a, files_b,
             k=k, w=w, workers=workers, min_jaccard=min_jaccard,
             profile=profile,
+            max_index_entries=max_index_entries,
         )
 
     return _run_single_channel(
         dir_a, dir_b, files_a, files_b,
         k=k, w=w, workers=workers, min_jaccard=min_jaccard,
         normalize=normalize, tokenizer=tokenizer,
+        max_index_entries=max_index_entries,
     )
 
 
@@ -233,6 +247,7 @@ def _run_single_channel(
     min_jaccard: float,
     normalize: bool,
     tokenizer: str,
+    max_index_entries: int = 10_000_000,
 ) -> list[DeepMatchResult]:
     """Single-channel deep compare (original implementation)."""
     root_a = Path(dir_a).resolve()
@@ -268,7 +283,7 @@ def _run_single_channel(
             fp_b[rel] = hset
 
     # Build inverted index over B-files
-    inv_b = build_inverted_index(fp_b)
+    inv_b = build_inverted_index(fp_b, max_entries=max_index_entries)
 
     # Query each A-file against the index
     deep_results: list[DeepMatchResult] = []
@@ -318,6 +333,7 @@ def _run_multi_channel(
     workers: int,
     min_jaccard: float,
     profile: str = "industrial",
+    max_index_entries: int = 10_000_000,
 ) -> list[DeepMatchResult]:
     """Multi-channel 모드 크로스매칭 + 증거 점수 산정.
 
@@ -399,7 +415,7 @@ def _run_multi_channel(
 
     # Build inverted index using normalised fingerprints (best general coverage)
     norm_b = {rel: hashes.get("normalized", set()) for rel, hashes in fp_b.items()}
-    inv_b = build_inverted_index(norm_b)
+    inv_b = build_inverted_index(norm_b, max_entries=max_index_entries)
 
     # Query each A-file against the index
     deep_results: list[DeepMatchResult] = []

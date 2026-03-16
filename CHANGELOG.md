@@ -2,6 +2,30 @@
 
 All notable changes to Diffinite will be documented in this file.
 
+## [0.3.0] — 2026-03-16
+
+### Deep Compare & Evidence Analysis (Phase 2)
+- **6-channel evidence scoring** — raw/normalized/AST Winnowing, identifier cosine, declaration cosine, comment/string overlap. Composite weighted by ROC AUC.
+- **2-stage classification** — Strict (zero-FP) + Relaxed (recall補完) → 7-class pattern output (`DIRECT_COPY`, `SSO_COPYING`, `OBFUSCATED_CLONE`, `DOMAIN_CONVERGENCE`, `SUSPICIOUS_COPY`, `SUSPICIOUS_SSO`, `INCONCLUSIVE`).
+- **AFC pipeline** — Altai (1992) Abstraction-Filtration-Comparison. Boilerplate/import filtering with inflation-corrected thresholds.
+- **IDEX analysis** — Dual-profile Idea-Expression Dichotomy → 5 legal defense patterns.
+- **N:M deep cross-matching** — Inverted-index based O(Σ|fp_a|) with parallel fingerprint extraction.
+- **AST/PDG normalizer** — tree-sitter based structural tokenization with boilerplate filtering.
+- **Language registry** — `languages/` package (13 modules, 30+ extensions). `LangSpec` dataclass + central registry.
+- **TF-IDF channels** — Corpus-weighted identifier/declaration/comment cosine scoring.
+
+### TDD Corpus Pipeline (Phase 3)
+- **8-stage validation** — IR-Plag L1-L6, 646-pair corpus, domain convergence (Guava↔JDK), negative control (FP −78%), 84K grid search (Precision 95.5%).
+
+### Quality Enhancements (Phase 4)
+- **`TOKEN_RE` unification** — Consolidated duplicate tokenizer regex from `fingerprint.py` and `evidence.py`.
+- **`ClassificationThresholds` dataclass** — 18-field frozen dataclass replacing `_CLASSIFICATION_PROFILES` dict. Type-safe, IDE-friendly.
+- **`IDEXThresholds` dataclass** — 8-field frozen dataclass for legal defense pattern thresholds.
+- **`--no-autojunk` CLI** — Disable `SequenceMatcher` junk heuristic for forensic precision.
+- **`--max-index-entries` CLI** — Memory cap for inverted index (default 10M, graceful truncation with warning).
+- **JS template literal parser** — 5-state machine (`IN_TEMPLATE_LITERAL`) with `template_depth` counter for `${}` nesting.
+- **Test count**: 253 passed, 4 skipped.
+
 ## [Unreleased] — 2026-03-13
 
 ### Performance
@@ -23,3 +47,4 @@ All notable changes to Diffinite will be documented in this file.
 ### Internal
 - Synchronized `TDD/logic/` with `src/diffinite/` (6 modules).
 - Added integration cross-check test (`TDD/test_integration_crosscheck.py`) covering AOSP and SQLite datasets.
+

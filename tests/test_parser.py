@@ -84,6 +84,28 @@ class TestCFamilyComments:
         assert "int a;" in result
         assert "int b;" in result
 
+    def test_template_literal_basic(self):
+        """JS template literal text should be preserved."""
+        src = 'let msg = `Hello ${name}, welcome!`;\n'
+        result = strip_comments(src, ".js")
+        assert "Hello" in result
+        assert "welcome" in result
+
+    def test_template_literal_comment_inside_expr(self):
+        """Comments inside ${} expressions should be stripped."""
+        src = 'let x = `value: ${foo(a) // inline comment\n}`;\n'
+        result = strip_comments(src, ".js")
+        assert "// inline comment" not in result
+        assert "foo(a)" in result
+
+    def test_template_literal_nested(self):
+        """Nested ${} in template literals should be handled correctly."""
+        src = 'let x = `outer ${a + `inner ${b}`} end`;\n'
+        result = strip_comments(src, ".js")
+        assert "outer" in result
+        assert "inner" in result
+        assert "end" in result
+
 
 class TestHTMLComments:
     """HTML/XML <!-- --> comment stripping."""

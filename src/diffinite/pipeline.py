@@ -451,6 +451,9 @@ def run_pipeline(
     report_pdf: str | None = None,
     report_html: str | None = None,
     report_md: str | None = None,
+    # Forensic options
+    autojunk: bool = True,
+    max_index_entries: int = 10_000_000,
 ) -> None:
     """Execute the full diff-to-report pipeline.
 
@@ -533,7 +536,8 @@ def run_pipeline(
         all_line_counts.append(text_a.count("\n") + 1)
         all_line_counts.append(text_b.count("\n") + 1)
 
-        ratio, additions, deletions = compute_diff(text_a, text_b, by_word)
+        ratio, additions, deletions = compute_diff(text_a, text_b, by_word,
+                                                    autojunk=autojunk)
 
         # Defer HTML generation (need unified ln_col_width)
         results.append(DiffResult(
@@ -576,6 +580,7 @@ def run_pipeline(
             filename_b=m.rel_path_b,
             context_lines=3 if collapse_identical else -1,
             ln_col_width=ln_col_width,
+            autojunk=autojunk,
         )
         results[m_idx] = DiffResult(
             match=r.match,
@@ -599,6 +604,7 @@ def run_pipeline(
             tokenizer=tokenizer,
             multi_channel=multi_channel,
             profile=profile,
+            max_index_entries=max_index_entries,
         )
     elif exec_mode == "simple":
         logger.info("Step 4b: Skipped (simple mode — no Winnowing)")

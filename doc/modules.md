@@ -58,8 +58,9 @@
 
 ### 알고리즘
 - **Fast-path**: 주석 마커가 없는 라인은 즉시 통과 (문자 단위 스캔 불필요)
-- **Slow-path**: 4-state 상태 머신 (`CODE`, `IN_STRING`, `IN_LINE_COMMENT`, `IN_BLOCK_COMMENT`)
+- **Slow-path**: 5-state 상태 머신 (`CODE`, `IN_STRING`, `IN_TEMPLATE_LITERAL`, `IN_LINE_COMMENT`, `IN_BLOCK_COMMENT`)
 - **Pre-pass**: C-family의 `#if 0 … #endif` 블록 제거
+- **`template_depth`**: JS `${}` 중첩 추적 카운터
 
 ### 주요 구조
 - **`COMMENT_SPECS`**: `_RegistryProxy` — `languages/` 레지스트리에서 동적으로 조회
@@ -75,11 +76,11 @@
 | 함수 | 설명 |
 |------|------|
 | `read_file(path)` | `charset-normalizer`로 인코딩 자동 감지 |
-| `compute_diff(text_a, text_b, by_word)` | `(ratio, additions, deletions)` 반환 |
+| `compute_diff(text_a, text_b, by_word, autojunk)` | `(ratio, additions, deletions)` 반환 |
 | `generate_html_diff(...)` | Side-by-side HTML 테이블 (context folding 지원) |
 
 ### 설계 포인트
-- `autojunk=True`: 12K-line 파일에서 **1,824× 성능 향상**, 정확도 손실 <0.03%
+- `autojunk` (기본 `True`): 12K-line 파일에서 **1,824× 성능 향상**. `--no-autojunk`로 비활성화 시 포렌식 정밀 분석 가능
 - `ln_col_width`: 최대 라인 번호 기반 반응형 열 너비
 
 ---
@@ -95,6 +96,7 @@
 | `DEFAULT_W` | 4 | Winnowing 윈도우 (≥8 토큰 공유 보장) |
 | `HASH_BASE` | 257 | Rabin 다항식 해시 밑 |
 | `HASH_MOD` | 2⁶¹−1 | Mersenne 소수 (충돌 최소화) |
+| `TOKEN_RE` | regex | 공유 토크나이저 (evidence.py에서도 import) |
 
 ### 주요 함수
 | 함수 | 설명 |
@@ -112,7 +114,7 @@
 
 ### 알고리즘
 1. `ProcessPoolExecutor`로 병렬 핑거프린트 추출
-2. B-파일의 **역 인덱스** 구축: `hash_value → {file_ids}`
+2. B-파일의 **역 인덱스** 구축: `hash_value → {file_ids}` (`max_entries`로 메모리 제한)
 3. A-파일별 인덱스 조회 → Jaccard 유사도 계산
 
 ### 모드
@@ -160,7 +162,9 @@
 | `DiffResult` | Diff 결과 (ratio, additions, deletions, html_diff) |
 | `FingerprintEntry` | Winnowing 핑거프린트 (hash_value, position, frozen) |
 | `DeepMatchResult` | N:M 매칭 결과 (channel_scores, classification, afc_results) |
-| `AnalysisMetadata` | 실행 파라미터 기록 (재현가능성, frozen) |
+| `AnalysisMetadata` | 실행 파라미터 기록 (재현가능성, frozen, `autojunk` 포함) |
+| `ClassificationThresholds` | 2단계 분류 임계값 프로파일 (frozen, 18 필드) |
+| `IDEXThresholds` | IDEX 법리 분석 임계값 (frozen, 8 필드) |
 
 ---
 

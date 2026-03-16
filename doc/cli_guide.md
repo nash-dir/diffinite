@@ -88,6 +88,7 @@ diffinite dir_a dir_b -o forensic_report.pdf \
 | `--show-filename` | 파일명 표시 |
 | `--collapse-identical` | 동일 코드 블록 접기 (양측 3줄 컨텍스트) |
 | `--by-word` | 단어 단위 비교 (기본: 라인) |
+| `--no-autojunk` | SequenceMatcher junk 휴리스틱 비활성화 (정밀 분석) |
 
 ---
 
@@ -102,6 +103,7 @@ diffinite dir_a dir_b -o forensic_report.pdf \
 | `--window` | 4 | Winnowing 윈도우 크기 |
 | `--threshold-deep` | 0.10 | 최소 Jaccard 유사도 |
 | `--workers` | 4 | 병렬 워커 프로세스 수 |
+| `--max-index-entries` | 10,000,000 | 역 인덱스 최대 항목 (OOM 방지) |
 
 ---
 
