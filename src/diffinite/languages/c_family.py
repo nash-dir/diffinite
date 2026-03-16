@@ -1,4 +1,4 @@
-"""C-family language definitions: C, C++, Objective-C headers."""
+﻿"""C-family language definitions: C, C++, Objective-C headers."""
 
 from diffinite.languages._spec import LangSpec
 from diffinite.languages._registry import register
@@ -38,7 +38,6 @@ register(LangSpec(
     comment=_COMMENT,
     has_ifdef_zero=True,
     keywords=_KEYWORDS,
-    tree_sitter_module="tree_sitter_c",
 ))
 
 register(LangSpec(
@@ -47,5 +46,4 @@ register(LangSpec(
     comment=_COMMENT,
     has_ifdef_zero=True,
     keywords=_KEYWORDS | _CPP_EXTRA,
-    tree_sitter_module="tree_sitter_cpp",
 ))

@@ -127,7 +127,7 @@ class FingerprintEntry:
 class DeepMatchResult:
     """A-파일 하나에 대한 N:M 크로스매칭 결과.
 
-    ``deep_compare._run_single_channel()``이 생성한다. 하나의 A-파일이
+    ``deep_compare.run_deep_compare()``가 생성한다. 하나의 A-파일이
     여러 B-파일과 매칭될 수 있으므로 ``matched_files_b``는 리스트.
     """
 

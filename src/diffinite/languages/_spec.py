@@ -12,7 +12,7 @@ from diffinite.models import CommentSpec
 class LangSpec:
     """Single source of truth for a language or language-family.
 
-    한 언어에 대한 주석 처리, 키워드, AST 매핑 정보를 모두 담는다.
+    한 언어에 대한 주석 처리와 키워드 정보를 담는다.
     새 언어를 추가하려면 이 객체 하나를 생성하고 register() 하면 된다.
     """
 
@@ -27,13 +27,3 @@ class LangSpec:
     # ── Fingerprint Layer ─────────────────────────────────────────
     keywords: frozenset[str] = field(default_factory=frozenset)
 
-    # ── AST Layer (tree-sitter) ───────────────────────────────────
-    tree_sitter_module: Optional[str] = None    # "tree_sitter_java"
-    tree_sitter_func: str = "language"          # 모듈 내 팩토리 함수명
-
-    # 언어별 AST 노드 타입 오버라이드 (None → 패키지 전역 기본값 사용)
-    identifier_types: Optional[frozenset[str]] = None
-    literal_types: Optional[frozenset[str]] = None
-    string_types: Optional[frozenset[str]] = None
-    structure_types: Optional[frozenset[str]] = None
-    statement_types: Optional[frozenset[str]] = None

@@ -54,7 +54,7 @@ def _fingerprint(text: str, k: int = PLAG_K, w: int = PLAG_W) -> set[int]:
     """Extract Winnowing fingerprints for a single source text."""
     cleaned = strip_comments(text, ".java")
     fps = extract_fingerprints(
-        cleaned, k=k, w=w, normalize=False, mode="token", extension=".java",
+        cleaned, k=k, w=w, normalize=False,
     )
     return {fp.hash_value for fp in fps}
 

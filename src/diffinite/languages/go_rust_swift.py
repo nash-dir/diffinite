@@ -1,4 +1,4 @@
-"""Go, Rust, and Swift language definitions."""
+﻿"""Go, Rust, and Swift language definitions."""
 
 from diffinite.languages._spec import LangSpec
 from diffinite.languages._registry import register
@@ -44,7 +44,6 @@ register(LangSpec(
     comment=_C_STYLE_COMMENT,
     has_ifdef_zero=True,
     keywords=_GO_KEYWORDS,
-    tree_sitter_module="tree_sitter_go",
 ))
 
 register(LangSpec(
@@ -53,7 +52,6 @@ register(LangSpec(
     comment=_C_STYLE_COMMENT,
     has_ifdef_zero=True,
     keywords=_RUST_KEYWORDS,
-    tree_sitter_module="tree_sitter_rust",
 ))
 
 register(LangSpec(
@@ -62,5 +60,4 @@ register(LangSpec(
     comment=_C_STYLE_COMMENT,
     has_ifdef_zero=True,
     keywords=_SWIFT_KEYWORDS,
-    tree_sitter_module=None,
 ))

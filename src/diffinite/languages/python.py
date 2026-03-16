@@ -1,4 +1,4 @@
-"""Python language definition."""
+﻿"""Python language definition."""
 
 from diffinite.languages._spec import LangSpec
 from diffinite.languages._registry import register
@@ -32,5 +32,4 @@ register(LangSpec(
     comment=_COMMENT,
     has_ifdef_zero=False,
     keywords=_KEYWORDS,
-    tree_sitter_module="tree_sitter_python",
 ))

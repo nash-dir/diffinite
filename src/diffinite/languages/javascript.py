@@ -1,4 +1,4 @@
-"""JavaScript and TypeScript language definitions."""
+﻿"""JavaScript and TypeScript language definitions."""
 
 from diffinite.languages._spec import LangSpec
 from diffinite.languages._registry import register
@@ -38,7 +38,6 @@ register(LangSpec(
     comment=_COMMENT,
     has_ifdef_zero=True,
     keywords=_JS_KEYWORDS,
-    tree_sitter_module="tree_sitter_javascript",
 ))
 
 register(LangSpec(
@@ -47,8 +46,6 @@ register(LangSpec(
     comment=_COMMENT,
     has_ifdef_zero=True,
     keywords=_JS_KEYWORDS | _TS_EXTRA,
-    tree_sitter_module="tree_sitter_typescript",
-    tree_sitter_func="language_typescript",
 ))
 
 register(LangSpec(
@@ -57,6 +54,4 @@ register(LangSpec(
     comment=_COMMENT,
     has_ifdef_zero=True,
     keywords=_JS_KEYWORDS | _TS_EXTRA,
-    tree_sitter_module="tree_sitter_typescript",
-    tree_sitter_func="language_tsx",
 ))
