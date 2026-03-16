@@ -15,10 +15,9 @@ Stanford MOSS 스타일 문서 핑거프린팅 파이프라인을 구현한다.
 의존:
     - ``models.FingerprintEntry``: 핑거프린트 결과 VO
     - ``languages/``: 키워드 세트 (토큰 정규화용)
-    - ``ast_normalizer``: AST/PDG 모드에서 lazy import
 
 호출관계:
-    ``deep_compare._extract_one()`` / ``_extract_multi()`` → ``extract_fingerprints()``
+    ``deep_compare._extract_one()`` → ``extract_fingerprints()``
     ``extract_fingerprints()`` → ``tokenize()`` → ``rolling_hash()`` → ``winnow()``
 """
 
@@ -242,23 +241,6 @@ def extract_fingerprints(
     if filter_imports:
         source = _IMPORT_RE.sub("", source)
 
-    tokens: list[str] | None = None
-
-    # AST/PDG 모드: tree-sitter 기반 토크나이징 시도
-    if mode in ("ast", "pdg"):
-        try:
-            from diffinite.ast_normalizer import ast_tokenize, pdg_tokenize
-
-            if mode == "pdg":
-                tokens = pdg_tokenize(source, extension)
-            if tokens is None:
-                tokens = ast_tokenize(source, extension)
-        except ImportError:
-            pass  # tree-sitter 미설치 → token 모드 폴백
-
-    # 폴백: Phase 1 flat 토큰 정규화
-    if tokens is None:
-        tokens = tokenize(source, normalize=normalize)
-
+    tokens = tokenize(source, normalize=normalize)
     hashes = rolling_hash(tokens, k)
     return winnow(hashes, w)
