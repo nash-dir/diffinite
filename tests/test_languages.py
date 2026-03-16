@@ -1,8 +1,8 @@
 """Tests for the language specification registry.
 
 Validates that the new ``diffinite.languages`` package matches the
-existing hardcoded data in ``parser.py``, ``fingerprint.py``, and
-``ast_normalizer.py``, ensuring zero regression during migration.
+existing hardcoded data in ``parser.py`` and ``fingerprint.py``,
+ensuring zero regression during migration.
 """
 
 import pytest
@@ -10,7 +10,6 @@ import pytest
 # ── Import the old hardcoded data for comparison ──────────────────
 from diffinite.parser import COMMENT_SPECS, _C_FAMILY_EXTS
 from diffinite.fingerprint import _COMMON_KEYWORDS
-from diffinite.ast_normalizer import _LANG_MAP
 
 # ── Import the new registry API ──────────────────────────────────
 from diffinite.languages import (
@@ -36,14 +35,7 @@ class TestRegistryCompleteness:
                 f"the language registry"
             )
 
-    def test_all_lang_map_extensions_registered(self):
-        """Every extension in the old _LANG_MAP must be in the registry."""
-        registered = set(all_extensions())
-        for ext in _LANG_MAP:
-            assert ext in registered, (
-                f"Extension {ext!r} from _LANG_MAP is missing from "
-                f"the language registry"
-            )
+
 
 
 class TestCommentSpecParity:
@@ -90,22 +82,7 @@ class TestKeywordsParity:
         )
 
 
-class TestTreeSitterParity:
-    """Verify tree-sitter module mappings match old _LANG_MAP."""
 
-    @pytest.mark.parametrize("ext", list(_LANG_MAP.keys()))
-    def test_tree_sitter_mapping(self, ext: str):
-        spec = get_spec(ext)
-        assert spec is not None, f"No LangSpec for {ext!r}"
-        old_module, old_func = _LANG_MAP[ext]
-        assert spec.tree_sitter_module == old_module, (
-            f"{ext}: tree_sitter_module mismatch: "
-            f"{spec.tree_sitter_module!r} != {old_module!r}"
-        )
-        assert spec.tree_sitter_func == old_func, (
-            f"{ext}: tree_sitter_func mismatch: "
-            f"{spec.tree_sitter_func!r} != {old_func!r}"
-        )
 
 
 class TestRegistryIntegrity:

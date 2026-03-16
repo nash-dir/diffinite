@@ -95,22 +95,18 @@ class TestBuildCoverHtml:
         assert "foo.py" in html
         assert "bar.py" in html
 
-    def test_deep_results_with_channel_scores(self):
+    def test_deep_results_display(self):
         deep = [
             DeepMatchResult(
                 file_a="foo.py",
                 matched_files_b=[("bar.py", 50, 0.8)],
-                channel_scores={
-                    "foo.py|bar.py": {
-                        "raw_winnowing": 0.8,
-                        "normalized_winnowing": 0.9,
-                        "composite": 0.85,
-                    }
-                },
+                fingerprint_count_a=100,
             ),
         ]
         html = _cover(deep_results=deep)
-        assert "Multi-Channel" in html or "channel" in html.lower() or "0.8" in html
+        assert "foo.py" in html
+        assert "bar.py" in html
+        assert "50" in html  # shared hashes
 
 
 # ---------------------------------------------------------------------------

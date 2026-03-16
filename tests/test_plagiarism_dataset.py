@@ -1,12 +1,9 @@
 """Plagiarism dataset cross-validation test harness.
 
-Tests Diffinite's multi-channel evidence scoring against the
-IR-Plag-Dataset (Faidhi-Robinson L1–L6 levels), measuring TPR, FPR,
-and F1-Score using the tuned academic profile parameters.
+Tests Diffinite's Winnowing fingerprinting against the IR-Plag-Dataset
+(Faidhi-Robinson L1–L6 levels), measuring TPR, FPR, and F1-Score.
 
-Academic profile (tuned via grid search on IR-Plag-Dataset):
-    K=2, W=3, threshold=0.40
-    Weights: raw_winnowing=3.0, normalized_winnowing=1.0, others=0.0
+Parameters: K=2, W=3, threshold=0.40
 """
 
 from __future__ import annotations
@@ -18,7 +15,7 @@ import pytest
 
 from diffinite.fingerprint import extract_fingerprints
 from diffinite.parser import strip_comments
-from diffinite.evidence import compute_channel_scores, _ACADEMIC_WEIGHTS
+from diffinite.evidence import jaccard_similarity
 
 # ---------------------------------------------------------------------------
 # Dataset paths & constants
@@ -29,11 +26,10 @@ _CASES = sorted(p.name for p in _DATASET_ROOT.iterdir() if p.is_dir()) if _DATAS
 _LEVELS = [f"L{i}" for i in range(1, 7)]
 _DATA_EXISTS = _DATASET_ROOT.is_dir() and len(_CASES) > 0
 
-# Academic profile parameters (tuned via grid search)
-ACADEMIC_K = 2
-ACADEMIC_W = 3
-ACADEMIC_THRESHOLD = 0.40
-ACADEMIC_WEIGHTS = _ACADEMIC_WEIGHTS
+# Parameters
+PLAG_K = 2
+PLAG_W = 3
+PLAG_THRESHOLD = 0.40
 
 pytestmark = pytest.mark.skipif(
     not _DATA_EXISTS,
@@ -54,46 +50,25 @@ def _read_java(path: Path) -> str | None:
     return None
 
 
-def _fingerprint(text: str, k: int = ACADEMIC_K, w: int = ACADEMIC_W) -> dict:
-    """Extract multi-channel fingerprints for a single source text."""
+def _fingerprint(text: str, k: int = PLAG_K, w: int = PLAG_W) -> set[int]:
+    """Extract Winnowing fingerprints for a single source text."""
     cleaned = strip_comments(text, ".java")
-    fp_raw = extract_fingerprints(
+    fps = extract_fingerprints(
         cleaned, k=k, w=w, normalize=False, mode="token", extension=".java",
     )
-    fp_norm = extract_fingerprints(
-        cleaned, k=k, w=w, normalize=True, mode="token", extension=".java",
-    )
-    return {
-        "raw": {fp.hash_value for fp in fp_raw},
-        "normalized": {fp.hash_value for fp in fp_norm},
-        "text": text,
-        "cleaned": cleaned,
-    }
+    return {fp.hash_value for fp in fps}
 
 
-def _similarity(fp_a: dict, fp_b: dict) -> float:
-    """Compute composite similarity with academic weights."""
-    scores = compute_channel_scores(
-        fp_raw_a=fp_a["raw"], fp_raw_b=fp_b["raw"],
-        fp_norm_a=fp_a["normalized"], fp_norm_b=fp_b["normalized"],
-        source_a=fp_a["text"], source_b=fp_b["text"],
-        cleaned_a=fp_a["cleaned"], cleaned_b=fp_b["cleaned"],
-        extension=".java",
-        weights=ACADEMIC_WEIGHTS,
-    )
-    return scores.get("composite", 0.0)
+def _similarity(fp_a: set[int], fp_b: set[int]) -> float:
+    """Compute Jaccard similarity."""
+    return jaccard_similarity(fp_a, fp_b)
 
 
 # ---------------------------------------------------------------------------
 # Data collection & metrics
 # ---------------------------------------------------------------------------
 def _collect_all_scores():
-    """Collect positive (plagiarized) and negative (non-plagiarized) scores.
-
-    For each of the 7 cases, compares the original file against:
-    - All plagiarized variants (L1–L6) → positive pairs
-    - All non-plagiarized submissions → negative pairs
-    """
+    """Collect positive (plagiarized) and negative (non-plagiarized) scores."""
     pos_scores: dict[str, list[float]] = defaultdict(list)
     neg_scores: list[float] = []
 
@@ -169,17 +144,17 @@ def _compute_metrics(pos_scores, neg_scores, threshold):
 # Fixtures
 # ---------------------------------------------------------------------------
 @pytest.fixture(scope="module")
-def academic_metrics():
-    """Compute academic-profile metrics once for the module."""
+def plag_metrics():
+    """Compute metrics once for the module."""
     pos_scores, neg_scores = _collect_all_scores()
-    return _compute_metrics(pos_scores, neg_scores, ACADEMIC_THRESHOLD)
+    return _compute_metrics(pos_scores, neg_scores, PLAG_THRESHOLD)
 
 
 # ---------------------------------------------------------------------------
 # Tests — TPR per plagiarism level
 # ---------------------------------------------------------------------------
 class TestPlagiarismTPR:
-    """True-positive rate per plagiarism level (academic profile).
+    """True-positive rate per plagiarism level.
 
     Target TPRs reflect difficulty: L1–L4 (surface changes) ≥ 90%,
     L5 (control-flow) ≥ 70%, L6 (logic restructuring) ≥ 50%.
@@ -193,11 +168,11 @@ class TestPlagiarismTPR:
         ("L5", 0.70),
         ("L6", 0.50),
     ])
-    def test_level_tpr(self, academic_metrics, level, min_tpr):
-        tpr = academic_metrics["level_tpr"].get(level, 0.0)
+    def test_level_tpr(self, plag_metrics, level, min_tpr):
+        tpr = plag_metrics["level_tpr"].get(level, 0.0)
         assert tpr >= min_tpr, (
             f"{level}: TPR={tpr:.4f} < {min_tpr} "
-            f"(K={ACADEMIC_K}, W={ACADEMIC_W}, T={ACADEMIC_THRESHOLD})"
+            f"(K={PLAG_K}, W={PLAG_W}, T={PLAG_THRESHOLD})"
         )
 
 
@@ -207,21 +182,20 @@ class TestPlagiarismTPR:
 class TestPlagiarismAggregates:
     """Aggregate F1-Score, recall, and precision checks."""
 
-    def test_f1_above_target(self, academic_metrics):
-        f1 = academic_metrics["f1"]
+    def test_f1_above_target(self, plag_metrics):
+        f1 = plag_metrics["f1"]
         assert f1 >= 0.85, (
             f"F1={f1:.4f} < 0.85 "
-            f"(P={academic_metrics['precision']:.4f}, "
-            f"R={academic_metrics['recall']:.4f})"
+            f"(P={plag_metrics['precision']:.4f}, "
+            f"R={plag_metrics['recall']:.4f})"
         )
 
-    def test_recall_above_minimum(self, academic_metrics):
-        recall = academic_metrics["recall"]
+    def test_recall_above_minimum(self, plag_metrics):
+        recall = plag_metrics["recall"]
         assert recall >= 0.90, f"Recall={recall:.4f} < 0.90"
 
-    def test_precision_improved(self, academic_metrics):
-        precision = academic_metrics["precision"]
-        # Must be better than baseline industrial precision (0.7717)
+    def test_precision_improved(self, plag_metrics):
+        precision = plag_metrics["precision"]
         assert precision > 0.77, (
-            f"Precision={precision:.4f} ≤ 0.77 (baseline industrial)"
+            f"Precision={precision:.4f} ≤ 0.77 (baseline)"
         )

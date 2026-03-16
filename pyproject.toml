@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "diffinite"
 version = "0.3.0"
-description = "Forensic source-code comparison tool — Winnowing fingerprints, AST analysis, multi-evidence scoring, and professional PDF reports for IP litigation & code audit"
+description = "Forensic source-code comparison tool — Winnowing fingerprints and professional PDF reports for IP litigation & code audit"
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
@@ -15,7 +15,7 @@ authors = [
 keywords = [
     "diff", "pdf", "source-code", "comparison", "bates-number",
     "forensics", "code-audit", "plagiarism-detection", "winnowing",
-    "ast", "tree-sitter", "clone-detection", "multi-evidence",
+    "clone-detection",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -45,18 +45,7 @@ dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
 ]
-ast = [
-    "tree-sitter>=0.23.0",
-    "tree-sitter-python>=0.23.0",
-    "tree-sitter-java>=0.23.0",
-    "tree-sitter-javascript>=0.23.0",
-    "tree-sitter-c>=0.23.0",
-    "tree-sitter-cpp>=0.23.0",
-    "tree-sitter-c-sharp>=0.23.0",
-    "tree-sitter-go>=0.23.0",
-    "tree-sitter-rust>=0.23.0",
-    "tree-sitter-typescript>=0.23.0",
-]
+
 
 [project.urls]
 Homepage = "https://github.com/nash-dir/diffinite"

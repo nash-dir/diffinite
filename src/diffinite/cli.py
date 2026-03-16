@@ -3,14 +3,6 @@
 ``diffinite`` 콘솔 커맨드의 인자 파싱 및 파이프라인 오케스트레이션.
 ``argparse`` 기반 CLI로, ``pipeline.run_pipeline()``을 호출한다.
 
-3-Tier 파라미터 시스템:
-    Tier 1: ``--profile`` -- industrial/academic 프리셋 (K, W, T)
-    Tier 2: ``--k-gram/--window/--threshold-deep`` -- 수동 오버라이드
-    Tier 3: ``--grid-search`` -- KxW 감도 분석 스윕
-
-    우선순위: grid-search > manual > profile.
-    이 캐스케이드로 사용자가 점진적으로 파라미터를 정밀화할 수 있다.
-
 의존:
     - ``pipeline.py``: 실제 분석 실행
     - ``models.AnalysisMetadata``: 보고서 재현성 메타데이터
@@ -34,17 +26,6 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
-
-# ---------------------------------------------------------------------------
-# Profile presets (Tier 1)
-# ---------------------------------------------------------------------------
-PROFILES: dict[str, dict[str, int | float]] = {
-    "industrial": {"k": 5, "w": 4, "t": 0.10},
-    "academic":   {"k": 2, "w": 3, "t": 0.40},
-}
-
-# Sentinel value used to detect whether the user explicitly set --k-gram etc.
-_SENTINEL = -1.0
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -184,63 +165,40 @@ def main(argv: list[str] | None = None) -> None:
         help="Generate a Markdown summary report at the given path",
     )
 
-    # ── Deep compare options (3-Tier parameter system) ────────────────
+    # ── Deep compare options ──────────────────────────────────────────
     deep_group = parser.add_argument_group(
         "Deep Compare",
         "Winnowing-based N:M cross-matching options (only active in "
-        "'--mode deep').\n\n"
-        "Tier 1 — Profile: preset K/W/T via --profile.\n"
-        "Tier 2 — Manual Override: --k-gram, --window, --threshold-deep.\n"
-        "Tier 3 — Grid Search: --grid-search sweeps K×W combinations.",
-    )
-    deep_group.add_argument(
-        "--profile",
-        choices=["industrial", "academic"],
-        default="industrial",
-        help=(
-            "Detection profile (Tier 1). "
-            "'industrial' (default): K=5, W=4, T=0.10 (substantial similarity). "
-            "'academic': K=2, W=3, T=0.40 (strict snippet detection)."
-        ),
+        "'--mode deep').",
     )
     deep_group.add_argument(
         "--k-gram", "--kgram-size",
         type=int,
-        default=None,
+        default=DEFAULT_K,
         dest="k_gram",
         help=(
-            "K-gram token window size (Tier 2 override). "
-            "Overrides the profile default."
+            f"K-gram token window size (default: {DEFAULT_K}). "
+            "Schleimer 2003, §4.2."
         ),
     )
     deep_group.add_argument(
         "--window", "--window-size",
         type=int,
-        default=None,
+        default=DEFAULT_W,
         dest="window",
         help=(
-            "Winnowing window size (Tier 2 override). "
-            "Overrides the profile default."
+            f"Winnowing window size (default: {DEFAULT_W}). "
+            "Density guarantee: ≥(W+K−1) shared tokens always detected."
         ),
     )
     deep_group.add_argument(
         "--threshold-deep", "--min-jaccard",
         type=float,
-        default=None,
+        default=0.05,
         dest="threshold_deep",
         help=(
-            "Minimum Jaccard similarity to report (Tier 2 override). "
-            "Overrides the profile default."
-        ),
-    )
-    deep_group.add_argument(
-        "--grid-search",
-        action="store_true",
-        default=False,
-        help=(
-            "Enable parameter sensitivity analysis (Tier 3). "
-            "Sweeps K=[2..7] × W=[2..6] and outputs a Jaccard "
-            "robustness matrix. Only active in '--mode deep'."
+            "Minimum Jaccard similarity to report (default: 0.05). "
+            "Below 5%% is considered noise."
         ),
     )
     deep_group.add_argument(
@@ -250,34 +208,12 @@ def main(argv: list[str] | None = None) -> None:
         help="Number of parallel worker processes for fingerprint extraction (default: 4)",
     )
     deep_group.add_argument(
-        "--tokenizer",
-        choices=["token", "ast", "pdg"],
-        default="token",
-        help=(
-            "Fingerprint tokenisation strategy: "
-            "'token' (Phase 1 flat tokens, default), "
-            "'ast' (Phase 2 tree-sitter AST linearization), "
-            "'pdg' (Phase 4 PDG normalization). "
-            "Falls back to 'token' when tree-sitter is unavailable."
-        ),
-    )
-    deep_group.add_argument(
         "--normalize",
         action="store_true",
         default=False,
         help=(
             "Normalize identifiers to ID and literals to LIT before "
             "fingerprinting (improves Type-2 clone detection)"
-        ),
-    )
-    deep_group.add_argument(
-        "--multi-channel",
-        action="store_true",
-        default=False,
-        help=(
-            "Enable multi-evidence channel analysis: raw/normalised/AST "
-            "Winnowing, identifier cosine similarity, comment/string overlap. "
-            "Produces a comprehensive evidence matrix in the report."
         ),
     )
 
@@ -309,21 +245,12 @@ def main(argv: list[str] | None = None) -> None:
 
     args = parser.parse_args(argv)
 
-    # ── Tier cascade: resolve K, W, T ─────────────────────────────────
-    profile_vals = PROFILES[args.profile]
-    resolved_k = args.k_gram if args.k_gram is not None else int(profile_vals["k"])
-    resolved_w = args.window if args.window is not None else int(profile_vals["w"])
-    resolved_t = args.threshold_deep if args.threshold_deep is not None else float(profile_vals["t"])
-
     # Build analysis metadata (embedded in every report for transparency)
     metadata = AnalysisMetadata(
         exec_mode=args.mode,
-        profile=args.profile,
-        k=resolved_k,
-        w=resolved_w,
-        threshold=resolved_t,
-        tokenizer=args.tokenizer,
-        grid_search=args.grid_search,
+        k=args.k_gram,
+        w=args.window,
+        threshold=args.threshold_deep,
         autojunk=not args.no_autojunk,
     )
 
@@ -344,14 +271,10 @@ def main(argv: list[str] | None = None) -> None:
         # Execution mode & deep compare
         exec_mode=args.mode,
         workers=args.workers,
-        kgram_size=resolved_k,
-        window_size=resolved_w,
-        min_jaccard=resolved_t,
+        kgram_size=args.k_gram,
+        window_size=args.window,
+        min_jaccard=args.threshold_deep,
         normalize=args.normalize,
-        tokenizer=args.tokenizer,
-        multi_channel=args.multi_channel,
-        profile=args.profile,
-        grid_search=args.grid_search,
         metadata=metadata,
         # Forensic options
         autojunk=not args.no_autojunk,

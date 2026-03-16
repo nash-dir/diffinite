@@ -5,7 +5,7 @@ Collection → Parsing → Diff → Deep Compare → Report 전체 흐름을 조
 
 실행 모드:
     - ``simple``: 1:1 파일 매칭 + diff + 보고서. Winnowing 미사용. 빠름.
-    - ``deep``: 1:1 + N:M Winnowing 크로스매칭 + 다중 증거 채널. 정밀.
+    - ``deep``: 1:1 + N:M Winnowing 크로스매칭. 정밀.
 
 보고서 형식:
     - ``--report-pdf``: 병합 PDF (북마크 + Bates 번호). 법정 제출용.
@@ -22,7 +22,6 @@ PDF 전략 (Divide-and-Conquer):
     - ``parser.py``: 주석 제거
     - ``differ.py``: Diff 계산 + HTML 생성
     - ``deep_compare.py``: N:M 크로스매칭
-    - ``evidence.py``: 다중 증거 채널 (deep 모드에서만)
     - ``pdf_gen.py``: PDF 보고서 생성
 
 호출관계:
@@ -60,15 +59,9 @@ logger = logging.getLogger(__name__)
 # Helpers
 # ---------------------------------------------------------------------------
 def _compute_ln_col_width(line_counts: list[int]) -> int:
-    """Compute a unified line-number column width for all diff pages.
-
-    ``line_counts`` should contain the line count of every file
-    (both A and B sides).  The returned pixel width accommodates
-    the longest line number with appropriate padding.
-    """
+    """Compute a unified line-number column width for all diff pages."""
     max_ln = max(line_counts) if line_counts else 1
     digits = len(str(max_ln))
-    # 7px per digit + 10px padding, minimum 28px
     return max(28, digits * 7 + 10)
 
 
@@ -79,12 +72,9 @@ def _build_metadata_banner_md(meta: AnalysisMetadata) -> str:
         f"| Parameter | Value |",
         f"|-----------|-------|",
         f"| **Execution Mode** | `{meta.exec_mode}` |",
-        f"| **Profile** | `{meta.profile}` |",
         f"| **K-gram (K)** | `{meta.k}` |",
         f"| **Window (W)** | `{meta.w}` |",
         f"| **Threshold (T)** | `{meta.threshold:.2f}` |",
-        f"| **Tokenizer** | `{meta.tokenizer}` |",
-        f"| **Grid Search** | `{'Yes' if meta.grid_search else 'No'}` |",
         "",
     ]
     return "\n".join(lines)
@@ -99,79 +89,10 @@ def _build_metadata_banner_html(meta: AnalysisMetadata) -> str:
         'background:#f0f7ff;font-size:11px;">\n'
         "<strong>📋 Analysis Configuration</strong><br>\n"
         f"<strong>Mode:</strong> {html_mod.escape(meta.exec_mode)} &nbsp;|&nbsp; "
-        f"<strong>Profile:</strong> {html_mod.escape(meta.profile)} &nbsp;|&nbsp; "
         f"<strong>K=</strong>{meta.k}, <strong>W=</strong>{meta.w}, "
-        f"<strong>T=</strong>{meta.threshold:.2f} &nbsp;|&nbsp; "
-        f"<strong>Tokenizer:</strong> {html_mod.escape(meta.tokenizer)}"
-        + (
-            " &nbsp;|&nbsp; <strong>Grid Search:</strong> Yes"
-            if meta.grid_search
-            else ""
-        )
-        + "\n</div>\n"
+        f"<strong>T=</strong>{meta.threshold:.2f}"
+        "\n</div>\n"
     )
-
-
-# ---------------------------------------------------------------------------
-# Grid-search sensitivity analysis
-# ---------------------------------------------------------------------------
-_GRID_K_RANGE = range(2, 8)   # K ∈ [2..7]
-_GRID_W_RANGE = range(2, 7)   # W ∈ [2..6]
-
-
-def _run_grid_search(
-    dir_a: str,
-    dir_b: str,
-    files_a: list[str],
-    files_b: list[str],
-    *,
-    workers: int = 4,
-    normalize: bool = False,
-    tokenizer: str = "token",
-    profile: str = "industrial",
-) -> str:
-    """Sweep K×W combinations and return a sensitivity matrix as text.
-
-    Returns Markdown table showing average Jaccard per (K, W) pair.
-    """
-    from diffinite.deep_compare import run_deep_compare
-
-    header_w = [f"W={w}" for w in _GRID_W_RANGE]
-    lines = [
-        "## Parameter Sensitivity Matrix (Grid Search)\n",
-        "Average Jaccard similarity across all matched file pairs "
-        "for each (K, W) combination.\n",
-        "| K \\ W | " + " | ".join(header_w) + " |",
-        "|-------|" + "|".join(["------:" for _ in _GRID_W_RANGE]) + "|",
-    ]
-
-    for k in _GRID_K_RANGE:
-        row_cells: list[str] = []
-        for w in _GRID_W_RANGE:
-            try:
-                dr = run_deep_compare(
-                    dir_a, dir_b, files_a, files_b,
-                    k=k, w=w,
-                    workers=workers,
-                    min_jaccard=0.0,  # include all matches
-                    normalize=normalize,
-                    tokenizer=tokenizer,
-                    profile=profile,
-                )
-                # Average Jaccard across all matched pairs
-                all_jaccards: list[float] = []
-                for r in dr:
-                    for _, _, jac in r.matched_files_b:
-                        all_jaccards.append(jac)
-                avg = sum(all_jaccards) / len(all_jaccards) if all_jaccards else 0.0
-                row_cells.append(f"{avg*100:.1f}%")
-            except Exception as exc:
-                logger.warning("Grid search K=%d W=%d failed: %s", k, w, exc)
-                row_cells.append("ERR")
-        lines.append(f"| **K={k}** | " + " | ".join(row_cells) + " |")
-
-    lines.append("")
-    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +110,6 @@ def _generate_markdown_report(
     output_path: str,
     *,
     metadata: AnalysisMetadata | None = None,
-    grid_search_text: str = "",
 ) -> None:
     """Generate a Markdown summary report."""
     unit = "word" if by_word else "line"
@@ -198,7 +118,6 @@ def _generate_markdown_report(
     lines: list[str] = []
     lines.append("# Diffinite — Source Code Diff Report\n")
 
-    # Analysis metadata (transparency)
     if metadata:
         lines.append(_build_metadata_banner_md(metadata))
 
@@ -236,68 +155,14 @@ def _generate_markdown_report(
 
     # Deep Compare
     if deep_results:
-        has_channels = any(dr.channel_scores for dr in deep_results)
-        if has_channels:
-            has_classification = any(dr.classification for dr in deep_results)
-            has_afc = any(dr.afc_results for dr in deep_results)
-
-            lines.append("\n## Deep Compare — Multi-Evidence Channel Matrix\n")
-            header = "| A File | B File | Raw | Normalized | AST | Identifier | Comment/Str | Composite |"
-            separator = "|--------|--------|:---:|:----------:|:---:|:----------:|:-----------:|:---------:|"
-            if has_classification:
-                header += " Classification |"
-                separator += ":--------------:|"
-            lines.append(header)
-            lines.append(separator)
-
-            ch_names = [
-                "raw_winnowing", "normalized_winnowing", "ast_winnowing",
-                "identifier_cosine", "comment_string_overlap", "composite",
-            ]
-            afc_lines: list[str] = []
-            for dr in deep_results:
-                for b_file, shared, jaccard in dr.matched_files_b:
-                    ch = dr.channel_scores.get(b_file, {})
-                    cells = " | ".join(
-                        f"{ch.get(cn, 0)*100:.1f}%" if ch.get(cn) is not None else "—"
-                        for cn in ch_names
-                    )
-                    cls_cell = ""
-                    if has_classification:
-                        cls_label = dr.classification.get(b_file, "—")
-                        cls_cell = f" {cls_label} |"
-                    lines.append(f"| `{dr.file_a}` | `{b_file}` | {cells} |{cls_cell}")
-
-                    # Collect AFC data
-                    if has_afc:
-                        afc = dr.afc_results.get(b_file, {})
-                        filt_report = afc.get("filtration_report", [])
-                        afc_cls = afc.get("classification", "")
-                        if filt_report or afc_cls:
-                            afc_lines.append(
-                                f"- **{dr.file_a} ↔ {b_file}** — AFC: {afc_cls}"
-                            )
-                            for item in filt_report:
-                                afc_lines.append(f"  - {item}")
-
-            # AFC summary
-            if afc_lines:
-                lines.append("\n### AFC Filtration Summary\n")
-                lines.extend(afc_lines)
-        else:
-            lines.append("\n## Deep Compare — N:M Cross-Match Results\n")
-            lines.append("| A File | B File(s) | Shared Hashes | Jaccard |")
-            lines.append("|--------|-----------|:-------------:|:-------:|")
-            for dr in deep_results:
-                for b_file, shared, jaccard in dr.matched_files_b:
-                    lines.append(
-                        f"| `{dr.file_a}` | `{b_file}` | {shared} | {jaccard*100:.1f}% |"
-                    )
-
-    # Grid search matrix
-    if grid_search_text:
-        lines.append("")
-        lines.append(grid_search_text)
+        lines.append("\n## Deep Compare — N:M Cross-Match Results\n")
+        lines.append("| A File | B File(s) | Shared Hashes | Jaccard |")
+        lines.append("|--------|-----------|:-------------:|:-------:|")
+        for dr in deep_results:
+            for b_file, shared, jaccard in dr.matched_files_b:
+                lines.append(
+                    f"| `{dr.file_a}` | `{b_file}` | {shared} | {jaccard*100:.1f}% |"
+                )
 
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -321,7 +186,6 @@ def _generate_html_report(
     ln_col_width: int = 28,
     *,
     metadata: AnalysisMetadata | None = None,
-    grid_search_text: str = "",
 ) -> None:
     """Generate a standalone HTML report with all diffs inline."""
     cover_html_body = build_cover_html(
@@ -330,15 +194,6 @@ def _generate_html_report(
         deep_results=deep_results,
         metadata=metadata,
     )
-
-    # Grid search section (convert MD table to simple HTML)
-    grid_html = ""
-    if grid_search_text:
-        grid_html = (
-            '<div style="margin-top:30px;">'
-            + _grid_search_md_to_html(grid_search_text)
-            + "</div>"
-        )
 
     # Append all inline diffs
     unit = "word" if by_word else "line"
@@ -375,7 +230,6 @@ def _generate_html_report(
 </head>
 <body>
 {cover_html_body}
-{grid_html}
 <hr style="margin:40px 0">
 {"<hr style='margin:40px 0'>".join(diff_sections)}
 </body>
@@ -385,35 +239,6 @@ def _generate_html_report(
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(full_html, encoding="utf-8")
     logger.info("HTML report → %s", out.resolve())
-
-
-def _grid_search_md_to_html(md_text: str) -> str:
-    """Convert grid-search Markdown table to simple HTML table."""
-    import re
-    lines = [l.strip() for l in md_text.strip().split("\n") if l.strip()]
-    html_parts = ['<h2>Parameter Sensitivity Matrix (Grid Search)</h2>']
-
-    for line in lines:
-        if line.startswith("#") or line.startswith("Average") or line.startswith("|---"):
-            if line.startswith("Average"):
-                html_parts.append(f"<p>{html_mod.escape(line)}</p>")
-            continue
-        if line.startswith("|"):
-            cells = [c.strip() for c in line.split("|")[1:-1]]
-            if any("K" in c and "W" in c for c in cells):
-                # header row
-                html_parts.append('<table class="deep"><tr>')
-                for c in cells:
-                    html_parts.append(f"<th>{html_mod.escape(c)}</th>")
-                html_parts.append("</tr>")
-            else:
-                html_parts.append("<tr>")
-                for c in cells:
-                    html_parts.append(f"<td>{html_mod.escape(c)}</td>")
-                html_parts.append("</tr>")
-
-    html_parts.append("</table>")
-    return "\n".join(html_parts)
 
 
 # ---------------------------------------------------------------------------
@@ -442,10 +267,6 @@ def run_pipeline(
     window_size: int = DEFAULT_W,
     min_jaccard: float = 0.05,
     normalize: bool = False,
-    tokenizer: str = "token",
-    multi_channel: bool = False,
-    profile: str = "industrial",
-    grid_search: bool = False,
     metadata: AnalysisMetadata | None = None,
     # Multi-format output
     report_pdf: str | None = None,
@@ -475,7 +296,6 @@ def run_pipeline(
         --report-md             — Markdown summary table.
     """
     # Determine effective output paths
-    # If no explicit format is specified, default to PDF
     if report_pdf is None and report_html is None and report_md is None:
         report_pdf = output_pdf
 
@@ -483,12 +303,9 @@ def run_pipeline(
     if metadata is None:
         metadata = AnalysisMetadata(
             exec_mode=exec_mode,
-            profile=profile,
             k=kgram_size,
             w=window_size,
             threshold=min_jaccard,
-            tokenizer=tokenizer,
-            grid_search=grid_search,
         )
 
     # Step 1 — collect & match
@@ -532,14 +349,12 @@ def run_pipeline(
             text_a = strip_comments(text_a, ext, squash_blanks=squash_blanks)
             text_b = strip_comments(text_b, ext, squash_blanks=squash_blanks)
 
-        # Track line counts for unified responsive width
         all_line_counts.append(text_a.count("\n") + 1)
         all_line_counts.append(text_b.count("\n") + 1)
 
         ratio, additions, deletions = compute_diff(text_a, text_b, by_word,
                                                     autojunk=autojunk)
 
-        # Defer HTML generation (need unified ln_col_width)
         results.append(DiffResult(
             match=m,
             ratio=ratio,
@@ -554,7 +369,6 @@ def run_pipeline(
                 ln_col_width, max(all_line_counts) if all_line_counts else 0)
 
     # Generate HTML diffs with unified column width
-    diff_idx = 0
     for m_idx, m in enumerate(matches):
         r = results[m_idx]
         if r.error:
@@ -601,26 +415,10 @@ def run_pipeline(
             k=kgram_size, w=window_size,
             workers=workers, min_jaccard=min_jaccard,
             normalize=normalize,
-            tokenizer=tokenizer,
-            multi_channel=multi_channel,
-            profile=profile,
             max_index_entries=max_index_entries,
         )
     elif exec_mode == "simple":
         logger.info("Step 4b: Skipped (simple mode — no Winnowing)")
-
-    # Grid Search (only in deep mode + --grid-search)
-    grid_search_text = ""
-    if grid_search and exec_mode == "deep":
-        logger.info("Step 4c: Running Grid Search sensitivity analysis …")
-        grid_search_text = _run_grid_search(
-            dir_a, dir_b, files_a, files_b,
-            workers=workers,
-            normalize=normalize,
-            tokenizer=tokenizer,
-            profile=profile,
-        )
-        logger.info("  Grid Search complete")
 
     # ── Output generation ─────────────────────────────────────────────
 
@@ -632,7 +430,6 @@ def run_pipeline(
             dir_a, dir_b, by_word, compare_comment,
             deep_results, report_md,
             metadata=metadata,
-            grid_search_text=grid_search_text,
         )
 
     # HTML report
@@ -643,7 +440,6 @@ def run_pipeline(
             dir_a, dir_b, by_word, compare_comment,
             deep_results, report_html, ln_col_width,
             metadata=metadata,
-            grid_search_text=grid_search_text,
         )
 
     # PDF report
@@ -661,7 +457,6 @@ def run_pipeline(
             unit=unit,
             total_files=total_files,
             metadata=metadata,
-            grid_search_text=grid_search_text,
         )
 
     logger.info("Done ✓")
@@ -689,7 +484,6 @@ def _generate_pdf_report(
     unit: str,
     total_files: int,
     metadata: AnalysisMetadata | None = None,
-    grid_search_text: str = "",
 ) -> None:
     """Generate PDF report with divide-and-conquer merging."""
     if no_merge:
@@ -705,7 +499,6 @@ def _generate_pdf_report(
             dir_a, dir_b, by_word, compare_comment,
             deep_results=deep_results,
             metadata=metadata,
-            grid_search_text=grid_search_text,
         )
         if no_merge:
             cover_dest = str(out_dir / "000_cover.pdf")  # type: ignore[possibly-undefined]
