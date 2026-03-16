@@ -69,11 +69,12 @@ Strict에서 `INCONCLUSIVE` 시 relaxed 임계값으로 재시도.
 ### 도메인 프로파일
 
 ```python
-_CLASSIFICATION_PROFILES = {
-    "industrial": { ... },  # 실무 코드
-    "academic":   { ... },  # 학술 코드 (더 엄격한 임계값)
-}
+INDUSTRIAL_THRESHOLDS = ClassificationThresholds()     # 기본값
+ACADEMIC_THRESHOLDS = ClassificationThresholds(        # 상향 조정
+    dc_raw_min=0.70, sso_decl_min=0.90, ...
+)
 ```
+- `ClassificationThresholds` frozen dataclass (18 필드) — 타입 안전, IDE 자동완성
 - Academic 프로파일은 짧은 코드의 높은 기본 유사도를 반영하여 임계값 상향
 - `_classify_relaxed()`도 `profile` kwarg으로 프로파일-aware
 
@@ -114,12 +115,13 @@ Step 3: Comparison     — 보호 가능 표현만 재점수화
 
 | 패턴 | 조건 | 법적 해석 |
 |------|------|----------|
-| `CLEAN_ROOM_PROBABLE` | raw<0.20, acad_ast>0.70, delta>0.40 | 클린룸 설계 |
-| `LITERAL_COPYING` | raw>0.60, acad>0.70, delta<0.15 | 표현 복제 |
-| `INDEPENDENT_CREATION` | ind<0.20, acad<0.30 | 독립 작성 |
+| `CLEAN_ROOM_PROBABLE` | raw < `cr_raw_max`, ast > `cr_ast_min`, delta > `cr_delta_min` | 클린룸 설계 |
+| `LITERAL_COPYING` | raw > `lc_raw_min`, acad > `lc_acad_min`, delta < `lc_delta_max` | 표현 복제 |
+| `INDEPENDENT_CREATION` | ind < `ic_ind_max`, acad < `ic_acad_max` | 독립 작성 |
 | `MERGER_FILTERED` | AFC 후 composite >20% 하락 | 합체(Merger) 원칙 |
 | `INCONCLUSIVE` | 기타 | 수동 검토 필요 |
 
+> 임계값은 `IDEXThresholds` frozen dataclass (8 필드)로 외부화.  
 > ⚠️ 법리 분석 임계값은 직관적 추정이며, 실제 클린룸 사례 데이터로 교정 필요.  
 > 모든 출력에 법적 면책 조항이 포함된다.
 
@@ -133,4 +135,4 @@ Step 3: Comparison     — 보호 가능 표현만 재점수화
 - **Java Family Guard**: `_JAVA_FAMILY_EXTS = {".java", ".kt", ".scala", ".groovy"}`
 
 ### TF-IDF 코사인
-`comment_string_overlap_tfidf()`: `_TOKEN_RE` 토크나이저 + `_tfidf_vector()` + `_cosine_from_counters()` 패턴 사용. IDF 없으면 기존 Jaccard 폴백.
+`comment_string_overlap_tfidf()`: `TOKEN_RE` 토크나이저 (fingerprint.py에서 import) + `_tfidf_vector()` + `_cosine_from_counters()` 패턴 사용. IDF 없으면 기존 Jaccard 폴백.

@@ -281,6 +281,32 @@ def main(argv: list[str] | None = None) -> None:
         ),
     )
 
+    # ── Forensic options ──────────────────────────────────────────────
+    forensic_group = parser.add_argument_group(
+        "Forensic",
+        "Options for forensic precision analysis.",
+    )
+    forensic_group.add_argument(
+        "--no-autojunk",
+        action="store_true",
+        default=False,
+        help=(
+            "Disable SequenceMatcher's autojunk heuristic. "
+            "All tokens are treated equally — slower but more precise "
+            "for forensic analysis."
+        ),
+    )
+    forensic_group.add_argument(
+        "--max-index-entries",
+        type=int,
+        default=10_000_000,
+        dest="max_index_entries",
+        help=(
+            "Maximum entries in the inverted index for Deep Compare. "
+            "Prevents OOM on massive corpora (default: 10,000,000)."
+        ),
+    )
+
     args = parser.parse_args(argv)
 
     # ── Tier cascade: resolve K, W, T ─────────────────────────────────
@@ -298,6 +324,7 @@ def main(argv: list[str] | None = None) -> None:
         threshold=resolved_t,
         tokenizer=args.tokenizer,
         grid_search=args.grid_search,
+        autojunk=not args.no_autojunk,
     )
 
     run_pipeline(
@@ -326,6 +353,9 @@ def main(argv: list[str] | None = None) -> None:
         profile=args.profile,
         grid_search=args.grid_search,
         metadata=metadata,
+        # Forensic options
+        autojunk=not args.no_autojunk,
+        max_index_entries=args.max_index_entries,
         # Multi-format output
         report_pdf=args.report_pdf,
         report_html=args.report_html,

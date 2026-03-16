@@ -145,21 +145,19 @@ register(".kt", _KOTLIN_SPEC)
 
 ## 분류 프로파일 추가
 
-`evidence.py`의 `_CLASSIFICATION_PROFILES` 에 새 프로파일 추가:
+`evidence.py`에 새 `ClassificationThresholds` 인스턴스를 생성:
 
 ```python
-_CLASSIFICATION_PROFILES = {
-    "industrial": { ... },
-    "academic":   { ... },
-    "custom":     {       # ← 새 프로파일
-        "dc_raw_min":   0.55,
-        "dc_ident_min": 0.35,
-        ...
-    },
-}
+from diffinite.models import ClassificationThresholds
+
+CUSTOM_THRESHOLDS = ClassificationThresholds(
+    dc_raw_min=0.55,
+    dc_ident_min=0.35,
+    # ... 18 필드 (미지정 시 industrial 기본값)
+)
 ```
 
-`cli.py`의 `PROFILES` 및 `--profile` choices에도 반영 필요.
+`_THRESHOLDS_MAP`에 등록 후 `cli.py`의 `PROFILES` 및 `--profile` choices에도 반영 필요.
 
 ---
 

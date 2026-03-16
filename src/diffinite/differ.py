@@ -79,16 +79,18 @@ def compute_diff(
     text_a: str,
     text_b: str,
     by_word: bool = False,
+    autojunk: bool = True,
 ) -> Tuple[float, int, int]:
     """두 텍스트의 유사도, 추가/삭제 수를 계산한다.
 
-    ``autojunk=True`` 사용 — 큰 파일에서 극적인 성능 향상을 제공하지만,
+    ``autojunk=True`` (기본) — 큰 파일에서 극적인 성능 향상을 제공하지만,
     반복 토큰(세미콜론, 중괄호 등)을 junk로 처리할 수 있다.
-    포렌식 용도에서는 ratio 값을 절대적 기준이 아닌 참고치로 사용해야 한다.
+    ``autojunk=False`` (``--no-autojunk``) — 모든 토큰을 동등 취급하여
+    포렌식 정밀 분석에 적합하지만 대형 파일에서 성능이 저하된다.
 
     Args:
-        by_word: True이면 공백 기준 단어 분할, False이면 라인 분할.
-                 단어 모드는 줄바꿈/정렬 변경에 강건하지만 처리 시간 증가.
+        by_word:   True이면 공백 기준 단어 분할, False이면 라인 분할.
+        autojunk:  ``difflib.SequenceMatcher``의 autojunk 옵션.
 
     Returns:
         ``(ratio, additions, deletions)``
@@ -102,7 +104,7 @@ def compute_diff(
         seq_a = text_a.splitlines(keepends=True)
         seq_b = text_b.splitlines(keepends=True)
 
-    matcher = difflib.SequenceMatcher(None, seq_a, seq_b, autojunk=True)
+    matcher = difflib.SequenceMatcher(None, seq_a, seq_b, autojunk=autojunk)
     ratio = matcher.ratio()
 
     additions = 0
@@ -164,6 +166,7 @@ def generate_html_diff(
     filename_b: str = "",
     context_lines: int = CONTEXT_LINES,
     ln_col_width: int | None = None,
+    autojunk: bool = True,
 ) -> str:
     """구문 강조 + context folding이 적용된 side-by-side diff HTML을 생성한다.
 
@@ -176,6 +179,7 @@ def generate_html_diff(
         ln_col_width:  라인 번호 열의 픽셀 너비. ``None``이면 자동 계산.
                        ``pipeline.py``가 전체 파일의 최대 라인수로 일괄 결정하여
                        모든 diff 페이지에서 동일한 너비를 보장한다.
+        autojunk:      ``difflib.SequenceMatcher``의 autojunk 옵션.
 
     Returns:
         ``<table class="difftbl">`` HTML 문자열.
@@ -194,7 +198,7 @@ def generate_html_diff(
     lexer_a = _get_lexer(filename_a) if filename_a else TextLexer(stripnl=False)
     lexer_b = _get_lexer(filename_b) if filename_b else TextLexer(stripnl=False)
 
-    matcher = difflib.SequenceMatcher(None, lines_a, lines_b, autojunk=True)
+    matcher = difflib.SequenceMatcher(None, lines_a, lines_b, autojunk=autojunk)
     rows: list[str] = []
 
     def _row(

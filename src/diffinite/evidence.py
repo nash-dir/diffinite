@@ -36,14 +36,11 @@ import re
 from collections import Counter
 from typing import Optional
 
-from diffinite.fingerprint import _COMMON_KEYWORDS
+from diffinite.fingerprint import _COMMON_KEYWORDS, TOKEN_RE
 
 # ──────────────────────────────────────────────────────────────────────
 # 식별자 코사인 유사도 채널
 # ──────────────────────────────────────────────────────────────────────
-# fingerprint.py의 _TOKEN_RE와 동일. 두 모듈이 동일한 토크나이저를
-# 사용해야 채널 간 일관성이 보장된다.
-_TOKEN_RE = re.compile(r"[A-Za-z_]\w*|[0-9]+(?:\.[0-9]+)?|[^\s]")
 
 # 노이즈 식별자 — 코사인 유사도를 부풀리지만 SSO를 나타내지 않는 토큰.
 # Java 표준 타입명(scènes à faire)과 단일 문자 변수를 포함.
@@ -75,7 +72,7 @@ def _is_noise_identifier(token: str, extension: str = ".java") -> bool:
     return False
 
 
-def _extract_identifiers(source: str) -> list[str]:
+def _extract_identifiers(source: str, extension: str = ".java") -> list[str]:
     """Extract identifier tokens (excluding keywords and noise identifiers).
 
     Filters out language keywords, single-character variables (loop/generics),
@@ -83,21 +80,25 @@ def _extract_identifiers(source: str) -> list[str]:
 
     Args:
         source: Source code text (comments already stripped).
+        extension: File extension for language-specific filtering.
 
     Returns:
         List of identifier strings.
     """
-    tokens = _TOKEN_RE.findall(source)
+    tokens = TOKEN_RE.findall(source)
     return [
         t for t in tokens
         if t not in _COMMON_KEYWORDS
         and (t[0].isalpha() or t[0] == '_')
-        and not _is_noise_identifier(t)
+        and not _is_noise_identifier(t, extension)
     ]
 
 
 
-def identifier_cosine(source_a: str, source_b: str) -> float:
+def identifier_cosine(
+    source_a: str, source_b: str,
+    extension: str = ".java",
+) -> float:
     """Compute cosine similarity between identifier frequency vectors.
 
     A high score means the two files share the same variable/function
@@ -108,12 +109,13 @@ def identifier_cosine(source_a: str, source_b: str) -> float:
     Args:
         source_a: Comment-stripped source of file A.
         source_b: Comment-stripped source of file B.
+        extension: File extension for language-specific filtering.
 
     Returns:
         Cosine similarity ∈ [0.0, 1.0].
     """
-    ids_a = Counter(_extract_identifiers(source_a))
-    ids_b = Counter(_extract_identifiers(source_b))
+    ids_a = Counter(_extract_identifiers(source_a, extension))
+    ids_b = Counter(_extract_identifiers(source_b, extension))
 
     if not ids_a or not ids_b:
         return 0.0
@@ -206,8 +208,8 @@ def identifier_cosine_tfidf(
     if idf is None:
         return identifier_cosine(source_a, source_b)
 
-    ids_a = _extract_identifiers(source_a)
-    ids_b = _extract_identifiers(source_b)
+    ids_a = _extract_identifiers(source_a, extension=".java")
+    ids_b = _extract_identifiers(source_b, extension=".java")
 
     vec_a = _tfidf_vector(ids_a, idf)
     vec_b = _tfidf_vector(ids_b, idf)
@@ -472,9 +474,9 @@ def comment_string_overlap_tfidf(
     tokens_a: list[str] = []
     tokens_b: list[str] = []
     for frag in frags_a:
-        tokens_a.extend(_TOKEN_RE.findall(frag.lower()))
+        tokens_a.extend(TOKEN_RE.findall(frag.lower()))
     for frag in frags_b:
-        tokens_b.extend(_TOKEN_RE.findall(frag.lower()))
+        tokens_b.extend(TOKEN_RE.findall(frag.lower()))
 
     if not tokens_a or not tokens_b:
         return 0.0
@@ -622,69 +624,63 @@ def compute_channel_scores(
 # 2단계 분류 시스템 (Stage 4: 교차 채널 패턴 기반 SSO 탐지)
 # ──────────────────────────────────────────────────────────────────────
 
-# ──────────────────────────────────────────────────────────────────────
-# 도메인별 임계값 프로파일
-# ──────────────────────────────────────────────────────────────────────
+from diffinite.models import ClassificationThresholds, IDEXThresholds
+
 # 646쌍 코퍼스 분석으로 도출. 학술 코드는 짧은 파일 때문에 기본 유사도가 높으므로
 # 임계값을 상향 조정. neg_max(음성 최대값) 이상으로 설정해야 zero-FP 유지.
 #   Academic neg: raw_max=0.62, decl_max=0.85, ast_max=1.0, ident_max=0.96
 #   Industrial neg: raw_max=0.05, decl_max=0.40
 # 도출 근거: TDD/corpus/domain_profile_analysis.py
 
-_CLASSIFICATION_PROFILES: dict[str, dict[str, float]] = {
-    "industrial": {
-        # 84K 조합 grid search 최적화 (zero-FP 목표)
-        # 각 값의 의미:
-        #   dc_* = DIRECT_COPY 임계값
-        #   sso_* = SSO_COPYING 임계값
-        #   obc_* = OBFUSCATED_CLONE 임계값
-        #   conv_* = DOMAIN_CONVERGENCE 임계값
-        "dc_raw_min":    0.65,
-        "dc_ident_min":  0.50,
-        "sso_raw_max":   0.20,
-        "sso_decl_min":  0.60,
-        "sso_gap_min":   0.30,
-        "sso_ast_min":   0.25,
-        "obc_raw_max":   0.15,
-        "obc_ident_max": 0.30,
-        "obc_ast_min":   0.30,
-        "conv_ident_min": 0.20,
-        "conv_decl_max":  0.40,
-        "conv_raw_max":   0.20,
-    },
-    "academic": {
-        # Stricter thresholds for short academic code (neg_raw_max=0.62,
-        # neg_decl_max=0.85). Must be above neg maxima to maintain zero-FP.
-        "dc_raw_min":    0.70,   # (0.65) neg_raw_max=0.62, +margin
-        "dc_ident_min":  0.60,   # (0.50) neg_ident very high
-        "sso_raw_max":   0.15,   # (0.20) tighter for short code
-        "sso_decl_min":  0.90,   # (0.60) neg_decl_max=0.85(!)
-        "sso_gap_min":   0.40,   # (0.30) stricter gap
-        "sso_ast_min":   0.40,   # (0.25) neg_ast reaches 1.0
-        "obc_raw_max":   0.10,   # (0.15)
-        "obc_ident_max": 0.25,   # (0.30)
-        "obc_ast_min":   0.40,   # (0.30) above academic baseline
-        "conv_ident_min": 0.20,
-        "conv_decl_max":  0.30,  # (0.40) tighter
-        "conv_raw_max":   0.15,  # (0.20) tighter
-    },
+INDUSTRIAL_THRESHOLDS = ClassificationThresholds()
+"""Industrial 프로파일 (기본값). 84K 조합 grid search 최적화 (zero-FP 목표)."""
+
+ACADEMIC_THRESHOLDS = ClassificationThresholds(
+    dc_raw_min=0.70,
+    dc_ident_min=0.60,
+    sso_raw_max=0.15,
+    sso_decl_min=0.90,
+    sso_gap_min=0.40,
+    sso_ast_min=0.40,
+    obc_raw_max=0.10,
+    obc_ident_max=0.25,
+    obc_ast_min=0.40,
+    conv_ident_min=0.20,
+    conv_decl_max=0.30,
+    conv_raw_max=0.15,
+    susp_raw_min=0.55,
+    susp_ident_min=0.55,
+    susp_sso_ident_min=0.55,
+    susp_sso_decl_min=0.55,
+    susp_sso_ast_min=0.40,
+    comment_boost_min=0.60,
+)
+"""Academic 프로파일. neg_max 분석 기반 상향 조정."""
+
+_THRESHOLDS_MAP: dict[str, ClassificationThresholds] = {
+    "industrial": INDUSTRIAL_THRESHOLDS,
+    "academic": ACADEMIC_THRESHOLDS,
 }
 
+
+def _get_thresholds(profile: str = "industrial") -> ClassificationThresholds:
+    """프로파일 이름으로 임계값 dataclass를 반환한다."""
+    return _THRESHOLDS_MAP.get(profile, INDUSTRIAL_THRESHOLDS)
+
+
 # Backward-compatible module-level aliases (industrial profile)
-_p = _CLASSIFICATION_PROFILES["industrial"]
-_DC_RAW_MIN = _p["dc_raw_min"]
-_DC_IDENT_MIN = _p["dc_ident_min"]
-_SSO_RAW_MAX = _p["sso_raw_max"]
-_SSO_DECL_MIN = _p["sso_decl_min"]
-_SSO_GAP_MIN = _p["sso_gap_min"]
-_SSO_AST_MIN = _p["sso_ast_min"]
-_OBC_RAW_MAX = _p["obc_raw_max"]
-_OBC_IDENT_MAX = _p["obc_ident_max"]
-_OBC_AST_MIN = _p["obc_ast_min"]
-_CONV_IDENT_MIN = _p["conv_ident_min"]
-_CONV_DECL_MAX = _p["conv_decl_max"]
-_CONV_RAW_MAX = _p["conv_raw_max"]
-del _p
+_DC_RAW_MIN = INDUSTRIAL_THRESHOLDS.dc_raw_min
+_DC_IDENT_MIN = INDUSTRIAL_THRESHOLDS.dc_ident_min
+_SSO_RAW_MAX = INDUSTRIAL_THRESHOLDS.sso_raw_max
+_SSO_DECL_MIN = INDUSTRIAL_THRESHOLDS.sso_decl_min
+_SSO_GAP_MIN = INDUSTRIAL_THRESHOLDS.sso_gap_min
+_SSO_AST_MIN = INDUSTRIAL_THRESHOLDS.sso_ast_min
+_OBC_RAW_MAX = INDUSTRIAL_THRESHOLDS.obc_raw_max
+_OBC_IDENT_MAX = INDUSTRIAL_THRESHOLDS.obc_ident_max
+_OBC_AST_MIN = INDUSTRIAL_THRESHOLDS.obc_ast_min
+_CONV_IDENT_MIN = INDUSTRIAL_THRESHOLDS.conv_ident_min
+_CONV_DECL_MAX = INDUSTRIAL_THRESHOLDS.conv_decl_max
+_CONV_RAW_MAX = INDUSTRIAL_THRESHOLDS.conv_raw_max
 
 # AFC 전용 임계값 — Filtration이 유사도를 부풀리는 "inflation" 효과(1.3–1.7×)를 보정.
 # 예: 보일러플레이트 제거 후 Jaccard가 0.40 → 0.65로 상승 가능.
@@ -711,39 +707,38 @@ def _classify_strict(
         Filtration이 보일러플레이트를 제거하면 유사도 점수가 평균 1.3–1.7×
         부풀려지므로(inflation), 판단 기준도 상향 보정해야 한다.
     """
-    p = _CLASSIFICATION_PROFILES[profile]
+    p = _get_thresholds(profile)
 
     # AFC overrides for SSO thresholds (only when scores are filtered)
-    sso_decl_min = _AFC_SSO_DECL_MIN if afc_filtered else p["sso_decl_min"]
-    sso_gap_min = _AFC_SSO_GAP_MIN if afc_filtered else p["sso_gap_min"]
+    sso_decl_min = _AFC_SSO_DECL_MIN if afc_filtered else p.sso_decl_min
+    sso_gap_min = _AFC_SSO_GAP_MIN if afc_filtered else p.sso_gap_min
 
     # -- DIRECT_COPY: all channels high (verbatim or near-verbatim copy)
-    if raw > p["dc_raw_min"] and ident > p["dc_ident_min"]:
+    if raw > p.dc_raw_min and ident > p.dc_ident_min:
         return "DIRECT_COPY"
 
     # -- SSO_COPYING: API surface preserved, implementation differs
     norm_raw_ok = (norm > raw * _SSO_NORM_RAW_RATIO) if raw > 0.01 else (norm > 0.05)
-    if (raw < p["sso_raw_max"] and decl >= sso_decl_min
-            and (ident - raw) >= sso_gap_min and ast > p["sso_ast_min"]
+    if (raw < p.sso_raw_max and decl >= sso_decl_min
+            and (ident - raw) >= sso_gap_min and ast > p.sso_ast_min
             and norm_raw_ok):
         return "SSO_COPYING"
 
     # -- OBFUSCATED_CLONE: raw and ident low, but AST reveals structure
-    if raw < p["obc_raw_max"] and ident < p["obc_ident_max"] and ast > p["obc_ast_min"]:
+    if raw < p.obc_raw_max and ident < p.obc_ident_max and ast > p.obc_ast_min:
         return "OBFUSCATED_CLONE"
 
     # -- DOMAIN_CONVERGENCE: similar domain vocabulary but different API
-    if ident > p["conv_ident_min"] and decl < p["conv_decl_max"] and raw < p["conv_raw_max"]:
+    if ident > p.conv_ident_min and decl < p.conv_decl_max and raw < p.conv_raw_max:
         return "DOMAIN_CONVERGENCE"
 
     return "INCONCLUSIVE"
 
 
-# Relaxed 임계값 — Stage 3 최적화 이전의 기준선.
-# Stage 1에서 INCONCLUSIVE일 때 Stage 2에서 재현율(recall) 보완용.
-# SUSPICIOUS 분류는 정밀도 계산에 포함하지 않는다 (참고 정보만 제공).
-_RELAXED_DC_RAW_MIN = 0.50    # (strict: 0.65 → 완화)
-_RELAXED_SSO_DECL_MIN = 0.50  # (strict: 0.60 → 완화)
+# Relaxed 임계값은 ClassificationThresholds의 susp_* 필드로 통합됨.
+# 아래 상수는 backward-compatibility용.
+_RELAXED_DC_RAW_MIN = INDUSTRIAL_THRESHOLDS.susp_raw_min
+_RELAXED_SSO_DECL_MIN = INDUSTRIAL_THRESHOLDS.susp_sso_decl_min
 _RELAXED_SSO_GAP_MIN = 0.25   # (strict: 0.30 → 완화)
 
 
@@ -764,23 +759,23 @@ def _classify_relaxed(
         - Stage 2 (Relaxed): 재현율 우선 → 수동 검토 권고용
     """
 
-    p = _CLASSIFICATION_PROFILES.get(profile, _CLASSIFICATION_PROFILES["industrial"])
+    p = _get_thresholds(profile)
 
     # ── SUSPICIOUS_COPY: raw 0.50–0.65 (just below strict DC threshold)
-    if raw > _RELAXED_DC_RAW_MIN and ident > p["dc_ident_min"]:
+    if raw > p.susp_raw_min and ident > p.susp_ident_min:
         return "SUSPICIOUS_COPY"
 
     # ── SUSPICIOUS_COPY via comment signal: code slightly modified but
     #    comments/strings identical (copying with cosmetic changes)
-    if raw > 0.40 and comment > 0.60:
+    if raw > 0.40 and comment > p.comment_boost_min:
         return "SUSPICIOUS_COPY"
 
     # ── SUSPICIOUS_SSO: API similarity just below strict SSO threshold
     norm_raw_ok = (norm > raw * _SSO_NORM_RAW_RATIO) if raw > 0.01 else (norm > 0.05)
-    if (raw < p["sso_raw_max"] + 0.05  # slightly wider band
-            and decl >= _RELAXED_SSO_DECL_MIN
+    if (raw < p.sso_raw_max + 0.05  # slightly wider band
+            and decl >= p.susp_sso_decl_min
             and (ident - raw) >= _RELAXED_SSO_GAP_MIN
-            and ast > p["sso_ast_min"]
+            and ast > p.susp_sso_ast_min
             and norm_raw_ok):
         return "SUSPICIOUS_SSO"
 
@@ -1006,8 +1001,18 @@ _LEGAL_DISCLAIMER = (
 def _run_profile_scores(
     source_a: str, source_b: str, extension: str,
     *, k: int, w: int, normalize_ast: bool,
+    raw_source_a: str | None = None,
+    raw_source_b: str | None = None,
 ) -> dict[str, float]:
-    """Run fingerprinting with given parameters and return 6-channel scores."""
+    """Run fingerprinting with given parameters and return 6-channel scores.
+
+    Args:
+        source_a:       Comment-stripped source of file A (for fingerprinting).
+        source_b:       Comment-stripped source of file B (for fingerprinting).
+        raw_source_a:   Raw (with comments) source A for comment channel.
+                        If None, ``source_a`` is used (comment channel will be 0).
+        raw_source_b:   Raw (with comments) source B for comment channel.
+    """
     from diffinite.fingerprint import extract_fingerprints
 
     fp_raw_a = {fp.hash_value for fp in extract_fingerprints(
@@ -1031,7 +1036,8 @@ def _run_profile_scores(
         fp_raw_a=fp_raw_a, fp_raw_b=fp_raw_b,
         fp_norm_a=fp_norm_a, fp_norm_b=fp_norm_b,
         fp_ast_a=fp_ast_a, fp_ast_b=fp_ast_b,
-        source_a=source_a, source_b=source_b,
+        source_a=raw_source_a if raw_source_a is not None else source_a,
+        source_b=raw_source_b if raw_source_b is not None else source_b,
         cleaned_a=source_a, cleaned_b=source_b,
         extension=extension,
     )
@@ -1130,17 +1136,18 @@ def analyze_legal_defense_pattern(
 
     delta = acad.get("composite", 0.0) - ind.get("composite", 0.0)
 
-    # Pattern classification
+    # Pattern classification (IDEXThresholds로 외부화)
+    t = IDEXThresholds()
     raw_w = ind.get("raw_winnowing", 0.0)
     acad_ast = acad.get("ast_winnowing", 0.0)
     acad_c = acad.get("composite", 0.0)
     ind_c = ind.get("composite", 0.0)
 
-    if raw_w < 0.20 and acad_ast > 0.70 and delta > 0.40:
+    if raw_w < t.cr_raw_max and acad_ast > t.cr_ast_min and delta > t.cr_delta_min:
         pattern = "CLEAN_ROOM_PROBABLE"
-    elif raw_w > 0.60 and acad_c > 0.70 and abs(delta) < 0.15:
+    elif raw_w > t.lc_raw_min and acad_c > t.lc_acad_min and abs(delta) < t.lc_delta_max:
         pattern = "LITERAL_COPYING"
-    elif ind_c < 0.20 and acad_c < 0.30:
+    elif ind_c < t.ic_ind_max and acad_c < t.ic_acad_max:
         pattern = "INDEPENDENT_CREATION"
     else:
         pattern = "INCONCLUSIVE"
