@@ -26,7 +26,6 @@ Winnowing 핑거프린트의 **역 인덱스(Inverted Index)** 를 활용하여,
 
 호출관계:
     ``pipeline.run_pipeline()`` → ``run_deep_compare()``
-    → ``_run_single_channel()``
 """
 
 from __future__ import annotations
@@ -41,7 +40,6 @@ from diffinite.differ import read_file
 from diffinite.fingerprint import (
     DEFAULT_K,
     DEFAULT_W,
-    FingerprintEntry,
     extract_fingerprints,
 )
 from diffinite.models import DeepMatchResult
@@ -57,14 +55,14 @@ def _extract_one(args: tuple) -> tuple[str, set[int], int]:
     """단일 파일의 핑거프린트를 추출한다.
 
     Args:
-        args: ``(abs_path, rel_path, extension, k, w, normalize, tokenizer)``
+        args: ``(abs_path, rel_path, extension, k, w, normalize)``
               — tuple 포장은 ``pool.map()`` 인터페이스 제약.
 
     Returns:
         ``(rel_path, hash_set, fingerprint_count)``
         읽기 실패 시 빈 set / count=0 반환.
     """
-    abs_path, rel_path, extension, k, w, normalize, tokenizer = args
+    abs_path, rel_path, extension, k, w, normalize = args
     text = read_file(abs_path)
     if text is None:
         return rel_path, set(), 0
@@ -72,7 +70,6 @@ def _extract_one(args: tuple) -> tuple[str, set[int], int]:
     cleaned = strip_comments(text, extension)
     fps = extract_fingerprints(
         cleaned, k=k, w=w, normalize=normalize,
-        mode=tokenizer, extension=extension,
     )
     hash_set = {fp.hash_value for fp in fps}
     return rel_path, hash_set, len(fps)
@@ -135,7 +132,6 @@ def run_deep_compare(
     workers: int = 4,
     min_jaccard: float = 0.05,
     normalize: bool = False,
-    tokenizer: str = "token",
     max_index_entries: int = 10_000_000,
 ) -> list[DeepMatchResult]:
     """Execute N:M cross-matching between two directories.
@@ -153,45 +149,21 @@ def run_deep_compare(
         workers: Number of parallel worker processes.
         min_jaccard: Minimum Jaccard similarity to include in results.
         normalize: If *True*, normalise tokens before fingerprinting.
-        tokenizer: Tokenisation strategy (``"token"``).
 
     Returns:
         List of :class:`DeepMatchResult` for every A-file that has at
         least one B-file match above the threshold.
     """
-    return _run_single_channel(
-        dir_a, dir_b, files_a, files_b,
-        k=k, w=w, workers=workers, min_jaccard=min_jaccard,
-        normalize=normalize, tokenizer=tokenizer,
-        max_index_entries=max_index_entries,
-    )
-
-
-def _run_single_channel(
-    dir_a: str,
-    dir_b: str,
-    files_a: list[str],
-    files_b: list[str],
-    *,
-    k: int,
-    w: int,
-    workers: int,
-    min_jaccard: float,
-    normalize: bool,
-    tokenizer: str,
-    max_index_entries: int = 10_000_000,
-) -> list[DeepMatchResult]:
-    """Single-channel deep compare."""
     root_a = Path(dir_a).resolve()
     root_b = Path(dir_b).resolve()
 
     # Prepare work items
     items_a = [
-        (str(root_a / f), f, Path(f).suffix.lower(), k, w, normalize, tokenizer)
+        (str(root_a / f), f, Path(f).suffix.lower(), k, w, normalize)
         for f in files_a
     ]
     items_b = [
-        (str(root_b / f), f, Path(f).suffix.lower(), k, w, normalize, tokenizer)
+        (str(root_b / f), f, Path(f).suffix.lower(), k, w, normalize)
         for f in files_b
     ]
 

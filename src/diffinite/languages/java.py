@@ -1,4 +1,4 @@
-"""JVM language family: Java, Kotlin, Scala."""
+﻿"""JVM language family: Java, Kotlin, Scala."""
 
 from diffinite.languages._spec import LangSpec
 from diffinite.languages._registry import register
@@ -30,7 +30,6 @@ register(LangSpec(
     comment=_COMMENT,
     has_ifdef_zero=True,
     keywords=_JAVA_KEYWORDS,
-    tree_sitter_module="tree_sitter_java",
 ))
 
 register(LangSpec(
@@ -42,7 +41,6 @@ register(LangSpec(
         "fun", "val", "var", "when", "object", "companion",
         "data", "sealed", "suspend", "coroutine",
     }),
-    tree_sitter_module=None,  # tree-sitter-kotlin 차후 추가
 ))
 
 register(LangSpec(
@@ -54,5 +52,4 @@ register(LangSpec(
         "def", "val", "var", "object", "trait", "sealed",
         "implicit", "lazy", "match", "yield",
     }),
-    tree_sitter_module=None,
 ))

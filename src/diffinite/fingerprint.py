@@ -48,8 +48,7 @@ HASH_MOD: int = (1 << 61) - 1
 효율적 모듈러 지수 연산 가능. 충돌 확률 ≈ 1/2^61."""
 
 # 토크나이저 정규식 — 식별자, 숫자, 개별 구두점을 각각 토큰으로 분리.
-# 공백은 버린다. evidence.py에서 ``from diffinite.fingerprint import TOKEN_RE``
-# 로 참조하여 채널 간 토크나이저 일관성을 보장한다.
+# 공백은 버린다.
 TOKEN_RE = re.compile(r"[A-Za-z_]\w*|[0-9]+(?:\.[0-9]+)?|[^\s]")
 
 
@@ -218,23 +217,17 @@ def extract_fingerprints(
     w: int = DEFAULT_W,
     *,
     normalize: bool = False,
-    mode: str = "token",
-    extension: str = "",
     filter_imports: bool = False,
 ) -> list[FingerprintEntry]:
     """소스코드에서 핑거프린트를 추출하는 통합 API.
 
-    내부적으로 ``tokenize → rolling_hash → winnow`` 파이프라인을 실행하되,
-    ``mode``에 따라 토크나이저를 전환한다:
-
-    - ``"token"``: Phase 1 flat 토큰 정규화 (기본). 빠르고 안정적.
-    - ``"ast"``: Phase 2 tree-sitter AST 선형화. 구조 정보 보존.
-    - ``"pdg"``: Phase 4 PDG 정규화. dead code 필터 + 의존성 재정렬.
-
-    AST/PDG 실패 시 자동으로 token 모드로 폴백한다.
-    tree-sitter 미설치 환경에서도 안전하게 동작.
+    ``tokenize → rolling_hash → winnow`` 파이프라인을 실행한다.
 
     Args:
+        source: 주석 제거된 소스코드.
+        k: K-gram 크기.
+        w: Winnowing 윈도우 크기.
+        normalize: True이면 Type-2 클론 탐지용 토큰 정규화 적용.
         filter_imports: True이면 Java import/package 문 제거.
                         공유 import로 인한 위양성(FP)을 줄이는 데 유효.
     """
