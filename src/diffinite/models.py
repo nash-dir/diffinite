@@ -172,3 +172,29 @@ class AnalysisMetadata:
     """``difflib.SequenceMatcher``의 autojunk 옵션.
     False(``--no-autojunk``)로 설정하면 모든 토큰을 동등 취급하여
     포렌식 정밀 분석에 적합하지만 대형 파일에서 성능이 저하된다."""
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 파일 해시 엔트리 (증거 무결성)
+# ──────────────────────────────────────────────────────────────────────
+@dataclass(frozen=True)
+class FileHashEntry:
+    """분석 대상 파일 하나의 SHA-256 해시 기록.
+
+    ``evidence.compute_file_hashes()``가 생성한다.
+    ``manifest.sha256.json``과 ``--hash`` 리포트 테이블에 사용.
+
+    ``frozen=True``로 생성 후 변경 불가 — 무결성 기록의 불변성 보장.
+    """
+
+    rel_path: str
+    """디렉토리 기준 상대경로 (POSIX 스타일)."""
+
+    sha256: str
+    """SHA-256 hex digest (64자)."""
+
+    size_bytes: int
+    """파일 크기 (바이트)."""
+
+    modified_at: str
+    """파일 최종 수정 시각 (ISO 8601)."""
