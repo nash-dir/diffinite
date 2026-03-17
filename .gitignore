@@ -30,3 +30,7 @@ example/*/
 !example/benchmark/
 example/benchmark/*
 !example/benchmark/*.md
+
+# AI Agent
+.agent
+AGENTS.md
