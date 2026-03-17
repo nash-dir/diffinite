@@ -12,5 +12,10 @@ __pycache__/
 
 # Legacy & dev artifacts
 legacy/
-TDD/
-example/
+
+# Example — track only *.py and benchmark/*.md
+# Downloaded data is gitignored (re-download via: python example/download_examples.py)
+example/*/
+!example/benchmark/
+example/benchmark/*
+!example/benchmark/*.md

@@ -1,8 +1,8 @@
 # Diffinite
 
-**Forensic source-code comparison tool for IP litigation and code audit.**
+**Source-code comparison tool for code audit and similarity analysis.**
 
-Diffinite compares two directories of source code and produces professional PDF/HTML reports with syntax-highlighted side-by-side diffs. It uses [Winnowing fingerprints](https://theory.stanford.edu/~aiken/publications/papers/sigmod03.pdf) (Schleimer et al., 2003 — the algorithm behind Stanford MOSS) for N:M cross-matching to detect code reuse even across renamed, split, or merged files.
+Diffinite compares two directories of source code and produces professional PDF/HTML reports with syntax-highlighted side-by-side diffs. It uses [Winnowing fingerprints](https://theory.stanford.edu/~aiken/publications/papers/sigmod03.pdf) (Schleimer et al., 2003 — the algorithm that also forms the basis of [Stanford MOSS](https://theory.stanford.edu/~aiken/moss/)) for N:M cross-matching to detect code reuse even across renamed, split, or merged files.
 
 > **Design Principle**: Diffinite reports **how similar** and **where similar**. It does not classify the type of copying — that is the expert witness's job.
 
@@ -94,17 +94,7 @@ When running in `deep` mode (default), the report includes an N:M cross-matching
 | **Matched Files (B)** | All files from directory B that share fingerprints above the Jaccard threshold |
 | **Jaccard** | `|A∩B| / |A∪B|` — the fraction of shared Winnowing fingerprints. A Jaccard of `0.73` means 73% of the code fingerprints are shared between the two files. |
 
-### Understanding Jaccard Similarity
-
-| Jaccard | Interpretation |
-|:-------:|----------------|
-| **0.80 – 1.00** | Very high overlap. Near-identical code or copy with minor edits. |
-| **0.50 – 0.79** | Substantial overlap. Significant shared code structure. |
-| **0.20 – 0.49** | Moderate overlap. Some shared patterns — could be common idioms or partial reuse. |
-| **0.05 – 0.19** | Low overlap. Likely coincidental similarity or shared libraries. |
-| **< 0.05** | Noise. Not reported (below default `--threshold-deep`). |
-
-> **Note**: These ranges are descriptive guidelines, not classifications. Diffinite does not make legal judgments about the nature of any similarity.
+Jaccard similarity is a well-defined set metric: `|A∩B| / |A∪B|`. Its interpretation depends on the domain, code size, and language. Diffinite reports the raw value without attaching qualitative labels.
 
 ### Page Annotations
 
@@ -274,8 +264,8 @@ diffinite/
 │   ├── models.py           # Data classes
 │   ├── pdf_gen.py          # PDF/HTML report generation
 │   └── languages/          # Per-language specs (30+ extensions)
-├── tests/                  # 216 tests
-├── example/                # Example source code for testing
+├── tests/
+├── example/                # Benchmark datasets (see below)
 ├── AGENTS.md               # AI agent development guidelines
 ├── pyproject.toml
 ├── LICENSE                 # Apache 2.0
@@ -284,9 +274,92 @@ diffinite/
 
 ---
 
+## Benchmarks
+
+Download the example datasets first, then run the benchmarks yourself:
+
+```bash
+python example/download_examples.py          # download all datasets
+python example/download_examples.py --dataset aosp  # or download one
+```
+
+Pre-generated benchmark reports (Markdown) are in `example/benchmark/`.
+
+### 1. Google v. Oracle — API Header Similarity
+
+**Why this dataset**: The [Oracle v. Google](https://en.wikipedia.org/wiki/Google_LLC_v._Oracle_America,_Inc.) case is the landmark SSO (Structure, Sequence, Organization) copyright dispute. Google's Android reimplemented Java API declarations. The code *bodies* are independently written, but the API *signatures* are necessarily similar.
+
+```bash
+diffinite example/Case-Oracle/AOSP_Google example/Case-Oracle/OpenJDK_Oracle \
+    --no-comments --report-md example/benchmark/case_oracle.md
+```
+
+| File | Match (difflib) | Jaccard (Winnowing) |
+|------|:-:|:-:|
+| `ArrayList.java` | 9.0% | 7.3% |
+| `Collections.java` | 4.5% | — |
+| `String.java` | 3.3% | 7.3% |
+
+**Observation**: Low Match and Jaccard scores confirm these are **independent implementations** of the same API specification. The shared fingerprints come from identical method signatures, not copied logic.
+
+### 2. Eclipse Collections v. OpenJDK — Negative Control
+
+**Why this dataset**: Eclipse Collections and OpenJDK solve similar problems (collection frameworks) but are developed by different teams with no code sharing. This is the **expected baseline for independent work** in the same domain.
+
+```bash
+diffinite example/Case-NegativeControl/Eclipse_Collections example/Case-NegativeControl/OpenJDK \
+    --no-comments --report-md example/benchmark/case_negative.md
+```
+
+| File A | File B | Match | Jaccard |
+|--------|--------|:-:|:-:|
+| `StringIterate.java` | `String.java` | 2.4% | — |
+| `FastList.java` | `ArrayList.java` | 1.5% | — |
+
+**Observation**: No cross-matches above the 5% Jaccard threshold. This is the correct result — independent projects should show near-zero similarity.
+
+### 3. IR-Plag Case 01 — Known Plagiarism
+
+**Why this dataset**: [IR-Plag](https://github.com/oscarkarnalim/sourcecodeplagiarismdataset) is a publicly available plagiarism corpus with labeled modification levels (L1=verbatim copy through L6=heavy restructuring).
+
+```bash
+diffinite example/plagiarism/case-01/original example/plagiarism/case-01/plagiarized \
+    --normalize --no-comments --report-md example/benchmark/plagiarism_case01.md
+```
+
+| Original | Plagiarized | Jaccard |
+|----------|-------------|:-:|
+| `T1.java` | `L1/04/T1.java` | 100.0% |
+| `T1.java` | `L1/06/HelloWorld.java` | 100.0% |
+| `T1.java` | `L1/05/HelloWorld.java` | 92.3% |
+| `T1.java` | `L4/01/L4.java` | 57.9% |
+| `T1.java` | `L5/03/WelcomeToJava.java` | 39.1% |
+| `T1.java` | `L6/02/Main.java` | 31.0% |
+
+**Observation**: Jaccard decreases monotonically as the plagiarism level increases (L1→L6). Verbatim copies score 100%. Heavily restructured copies (L5, L6) still show 30–40% shared fingerprints.
+
+### 4. AOSP Framework — Same Codebase, Minor Edits
+
+**Why this dataset**: Two versions of Android's `Handler`/`Looper`/`Message` framework. Small evolutionary changes between versions.
+
+```bash
+diffinite example/aosp/left example/aosp/right \
+    --no-comments --report-md example/benchmark/aosp.md
+```
+
+| File | Match (difflib) | Jaccard |
+|------|:-:|:-:|
+| `Handler.java` | 88.6% | — |
+| `Looper.java` | 90.0% | 77.1% |
+| `Message.java` | 96.3% | — |
+
+**Observation**: High Match and Jaccard scores correctly reflect that these are minor revisions of the same codebase.
+
+---
+
 ## Winnowing Algorithm
 
-Diffinite uses the **Winnowing** algorithm (Schleimer, Wilkerson, Aiken. *"Winnowing: Local Algorithms for Document Fingerprinting."* SIGMOD 2003) — the same algorithm that powers [Stanford MOSS](https://theory.stanford.edu/~aiken/moss/).
+Diffinite uses the **Winnowing** algorithm (Schleimer, Wilkerson, Aiken. *"Winnowing: Local Algorithms for Document Fingerprinting."* SIGMOD 2003), which also forms the basis of [Stanford MOSS](https://theory.stanford.edu/~aiken/moss/).
 
 **Pipeline**: `source → tokenize → K-gram → rolling hash → winnow → fingerprint set`
 
@@ -300,6 +373,16 @@ The algorithm provides a **density guarantee**: any shared token sequence of len
 | `W` (window) | `4` | Window of 4 fingerprints → minimum detectable sequence = 8 tokens. |
 | `HASH_BASE` | `257` | Standard Rabin hash base (prime). |
 | `HASH_MOD` | `2⁶¹ − 1` | Mersenne prime — efficient modular arithmetic, minimal collision probability. |
+
+---
+
+## Limitations
+
+- **General-purpose tokenizer**: Uses a single regex tokenizer for all languages, not language-specific parsers. Accuracy may vary across languages.
+- **Position-independent**: Winnowing fingerprints are order-independent within a window. Code with reordered functions may produce higher similarity than expected.
+- **No corpus-based analysis**: Each comparison is pairwise. There is no built-in corpus-wide frequency weighting (e.g., TF-IDF) to down-weight common idioms.
+- **Binary and obfuscated code**: Not supported. Diffinite operates on source code text only.
+- **Not a legal opinion**: Similarity scores are mathematical measurements, not legal conclusions. Professional review is required before use in any legal proceeding.
 
 ---
 
