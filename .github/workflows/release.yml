@@ -12,6 +12,7 @@ permissions:
 jobs:
   # ─────────────────────────────────────────────
   # Stage 1: Build standalone binaries (3 platforms)
+  # PyInstaller onedir mode → archive the folder
   # Gate: if this fails, nothing else runs.
   # ─────────────────────────────────────────────
   build-binaries:
@@ -22,15 +23,15 @@ jobs:
         include:
           - os: windows-latest
             platform: win-x64
-            ext: .exe
+            exe: diffinite.exe
             archive: zip
           - os: ubuntu-latest
             platform: linux-x64
-            ext: ""
+            exe: diffinite
             archive: tar.gz
-          - os: macos-latest
+          - os: macos-13
             platform: darwin-x64
-            ext: ""
+            exe: diffinite
             archive: tar.gz
     runs-on: ${{ matrix.os }}
 
@@ -55,40 +56,40 @@ jobs:
           pip install -e ".[dev]"
           pip install pyinstaller
 
-      - name: Build binary
+      - name: Build binary (onedir)
         run: pyinstaller diffinite.spec
 
       - name: Verify binary runs
         shell: bash
-        run: ./dist/diffinite${{ matrix.ext }} --help
+        run: ./dist/diffinite/${{ matrix.exe }} --help
         env:
           PYTHONIOENCODING: utf-8
-
-      - name: Compute SHA-256
-        shell: bash
-        run: |
-          cd dist
-          sha256sum diffinite${{ matrix.ext }} > diffinite${{ matrix.ext }}.sha256
-          cat diffinite${{ matrix.ext }}.sha256
 
       - name: Package (zip)
         if: matrix.archive == 'zip'
         shell: bash
         run: |
           cd dist
-          7z a ../diffinite-${{ matrix.platform }}.zip diffinite${{ matrix.ext }} diffinite${{ matrix.ext }}.sha256
+          7z a ../diffinite-${{ matrix.platform }}.zip diffinite/
 
       - name: Package (tar.gz)
         if: matrix.archive == 'tar.gz'
         run: |
           cd dist
-          tar -czf ../diffinite-${{ matrix.platform }}.tar.gz diffinite${{ matrix.ext }} diffinite${{ matrix.ext }}.sha256
+          tar -czf ../diffinite-${{ matrix.platform }}.tar.gz diffinite/
+
+      - name: Compute archive SHA-256
+        shell: bash
+        run: |
+          sha256sum diffinite-${{ matrix.platform }}.* > diffinite-${{ matrix.platform }}.sha256
+          cat diffinite-${{ matrix.platform }}.sha256
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: binary-${{ matrix.platform }}
-          path: diffinite-${{ matrix.platform }}.*
+          path: |
+            diffinite-${{ matrix.platform }}.*
 
       - name: Upload to Release
         if: github.event_name == 'release'
@@ -98,13 +99,29 @@ jobs:
             diffinite-${{ matrix.platform }}.*
 
   # ─────────────────────────────────────────────
-  # Stage 2: Build & publish VSCode extension
-  # Runs only after ALL binary builds succeed.
+  # Stage 2: Build & publish platform-specific VSCode extensions
+  # Each OS gets its own VSIX with only its native binary.
   # ─────────────────────────────────────────────
   publish-vsce:
-    name: Publish VSCode Extension
+    name: Publish VSIX (${{ matrix.target }})
     needs: build-binaries
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: win32-x64
+            platform: win-x64
+            archive: zip
+            runner: ubuntu-latest
+          - target: linux-x64
+            platform: linux-x64
+            archive: tar.gz
+            runner: ubuntu-latest
+          - target: darwin-x64
+            platform: darwin-x64
+            archive: tar.gz
+            runner: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - uses: actions/checkout@v4
@@ -122,48 +139,24 @@ jobs:
         working-directory: vscode-extension
         run: npx tsc -p ./
 
-      # Download platform binaries from build-binaries job
-      - name: Download Windows binary
+      - name: Download platform binary
         uses: actions/download-artifact@v4
         with:
-          name: binary-win-x64
+          name: binary-${{ matrix.platform }}
           path: vscode-extension/tmp
-        continue-on-error: true
 
-      - name: Download Linux binary
-        uses: actions/download-artifact@v4
-        with:
-          name: binary-linux-x64
-          path: vscode-extension/tmp
-        continue-on-error: true
-
-      - name: Download macOS binary
-        uses: actions/download-artifact@v4
-        with:
-          name: binary-darwin-x64
-          path: vscode-extension/tmp
-        continue-on-error: true
-
-      - name: Extract and place binaries
+      - name: Extract and place binary
         working-directory: vscode-extension
         run: |
-          mkdir -p bin/win-x64 bin/linux-x64 bin/darwin-x64
+          mkdir -p bin/${{ matrix.platform }}
 
-          if [ -f tmp/diffinite-win-x64.zip ]; then
-            unzip tmp/diffinite-win-x64.zip -d bin/win-x64/
-            echo "✓ Windows binary placed"
-          fi
-
-          if [ -f tmp/diffinite-linux-x64.tar.gz ]; then
-            tar -xzf tmp/diffinite-linux-x64.tar.gz -C bin/linux-x64/
-            chmod +x bin/linux-x64/diffinite
-            echo "✓ Linux binary placed"
-          fi
-
-          if [ -f tmp/diffinite-darwin-x64.tar.gz ]; then
-            tar -xzf tmp/diffinite-darwin-x64.tar.gz -C bin/darwin-x64/
-            chmod +x bin/darwin-x64/diffinite
-            echo "✓ macOS binary placed"
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            unzip tmp/diffinite-${{ matrix.platform }}.zip -d bin/${{ matrix.platform }}/
+            echo "✓ ${{ matrix.platform }} binary placed (zip)"
+          else
+            tar -xzf tmp/diffinite-${{ matrix.platform }}.tar.gz -C bin/${{ matrix.platform }}/
+            chmod -R +x bin/${{ matrix.platform }}/diffinite/
+            echo "✓ ${{ matrix.platform }} binary placed (tar.gz)"
           fi
 
           rm -rf tmp
@@ -174,6 +167,7 @@ jobs:
           echo '{
             "commit": "${{ github.sha }}",
             "tag": "${{ github.event.release.tag_name || github.ref_name }}",
+            "target": "${{ matrix.target }}",
             "built_at": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"
           }' > bin/build-info.json
           cat bin/build-info.json
@@ -181,14 +175,14 @@ jobs:
       - name: Install vsce
         run: npm install -g @vscode/vsce
 
-      - name: Package VSIX
+      - name: Package platform-specific VSIX
         working-directory: vscode-extension
-        run: vsce package --no-dependencies
+        run: vsce package --target ${{ matrix.target }} --no-dependencies
 
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4
         with:
-          name: vsix
+          name: vsix-${{ matrix.target }}
           path: vscode-extension/*.vsix
 
       - name: Upload VSIX to Release
@@ -200,15 +194,15 @@ jobs:
       - name: Publish to VSCode Marketplace
         if: github.event_name == 'release'
         working-directory: vscode-extension
-        run: vsce publish --no-dependencies -p ${{ secrets.VSCE_PAT }}
+        run: vsce publish --target ${{ matrix.target }} --no-dependencies -p ${{ secrets.VSCE_PAT }}
 
   # ─────────────────────────────────────────────
   # Stage 3: Publish to PyPI
-  # Runs only after VSCE succeeds (which requires binaries).
+  # Runs after binary builds succeed (parallel with VSCE).
   # ─────────────────────────────────────────────
   publish-pypi:
     name: Publish to PyPI
-    needs: publish-vsce
+    needs: build-binaries
     runs-on: ubuntu-latest
     environment:
       name: pypi
