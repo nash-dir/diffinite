@@ -3,7 +3,7 @@
 import pytest
 
 from diffinite.models import DiffResult, FileMatch, DeepMatchResult
-from diffinite.pdf_gen import build_cover_html, build_diff_page_html
+from diffinite.pdf_gen import build_cover_body, build_diff_page_html
 
 
 # ---------------------------------------------------------------------------
@@ -29,8 +29,8 @@ def _make_results():
 
 
 def _cover(results=None, *, deep_results=None):
-    """Shorthand wrapper for build_cover_html with required positional args."""
-    return build_cover_html(
+    """Shorthand wrapper for build_cover_body with required positional args."""
+    return build_cover_body(
         results or _make_results(),
         unmatched_a=[],
         unmatched_b=[],
@@ -72,7 +72,7 @@ class TestBuildCoverHtml:
         assert isinstance(html, str)
 
     def test_unmatched_files_shown(self):
-        html = build_cover_html(
+        html = build_cover_body(
             _make_results(),
             unmatched_a=["orphan_a.py"],
             unmatched_b=["orphan_b.py"],
