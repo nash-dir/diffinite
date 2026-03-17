@@ -164,6 +164,12 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help="Generate a Markdown summary report at the given path",
     )
+    format_group.add_argument(
+        "--report-json",
+        metavar="PATH",
+        default=None,
+        help="Generate a JSON report at the given path (for programmatic use)",
+    )
 
     # ── Deep compare options ──────────────────────────────────────────
     deep_group = parser.add_argument_group(
@@ -242,6 +248,26 @@ def main(argv: list[str] | None = None) -> None:
             "Prevents OOM on massive corpora (default: 10,000,000)."
         ),
     )
+    forensic_group.add_argument(
+        "--hash",
+        action="store_true",
+        default=False,
+        dest="embed_hash",
+        help=(
+            "Embed SHA-256 hash table in PDF/HTML report cover page. "
+            "A manifest.sha256.json is always generated regardless of this flag."
+        ),
+    )
+    forensic_group.add_argument(
+        "--bundle",
+        metavar="PATH",
+        default=None,
+        dest="bundle_path",
+        help=(
+            "Create evidence bundle zip at PATH. Includes source files, "
+            "generated reports, and integrity manifest."
+        ),
+    )
 
     args = parser.parse_args(argv)
 
@@ -279,10 +305,14 @@ def main(argv: list[str] | None = None) -> None:
         # Forensic options
         autojunk=not args.no_autojunk,
         max_index_entries=args.max_index_entries,
+        # Evidence integrity
+        embed_hash=args.embed_hash,
+        bundle_path=args.bundle_path,
         # Multi-format output
         report_pdf=args.report_pdf,
         report_html=args.report_html,
         report_md=args.report_md,
+        report_json=args.report_json,
     )
 
 

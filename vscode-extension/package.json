@@ -1,0 +1,48 @@
+{
+  "name": "diffinite",
+  "displayName": "Diffinite — Source Code Comparison",
+  "description": "Forensic source-code comparison with Winnowing fingerprints and professional reports for IP litigation & code audit",
+  "version": "0.1.0",
+  "publisher": "nash-dir",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "diffinite.compare",
+        "title": "Diffinite: Compare Directories"
+      }
+    ],
+    "configuration": {
+      "title": "Diffinite",
+      "properties": {
+        "diffinite.pythonPath": {
+          "type": "string",
+          "default": "python",
+          "description": "Path to Python interpreter with diffinite installed"
+        },
+        "diffinite.defaultMode": {
+          "type": "string",
+          "default": "deep",
+          "enum": ["simple", "deep"],
+          "description": "Default execution mode"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0"
+  }
+}

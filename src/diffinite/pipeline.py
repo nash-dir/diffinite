@@ -32,6 +32,7 @@ PDF 전략 (Divide-and-Conquer):
 from __future__ import annotations
 
 import html as html_mod
+import json
 import logging
 import os
 import tempfile
@@ -40,6 +41,11 @@ from pathlib import Path
 from diffinite.collector import collect_files, match_files, FUZZY_THRESHOLD
 from diffinite.deep_compare import run_deep_compare
 from diffinite.differ import compute_diff, generate_html_diff, read_file
+from diffinite.evidence import (
+    compute_file_hashes,
+    create_evidence_bundle,
+    write_manifest,
+)
 from diffinite.fingerprint import DEFAULT_K, DEFAULT_W
 from diffinite.models import AnalysisMetadata, DiffResult, DeepMatchResult
 from diffinite.parser import strip_comments
@@ -48,6 +54,7 @@ from diffinite.pdf_gen import (
     add_bates_numbers,
     build_cover_body,
     build_diff_page_html,
+    build_hash_table_html,
     html_to_pdf,
     merge_with_bookmarks,
     stamp_bates_inplace,
@@ -172,6 +179,94 @@ def _generate_markdown_report(
 
 
 # ---------------------------------------------------------------------------
+# JSON report generator (for VSCode Extension consumption)
+# ---------------------------------------------------------------------------
+def _generate_json_report(
+    results: list[DiffResult],
+    unmatched_a: list[str],
+    unmatched_b: list[str],
+    dir_a: str,
+    dir_b: str,
+    by_word: bool,
+    compare_comment: bool,
+    deep_results: list[DeepMatchResult] | None,
+    output_path: str,
+    *,
+    metadata: AnalysisMetadata | None = None,
+) -> None:
+    """Generate a JSON report for programmatic consumption.
+
+    Serializes all analysis results including HTML diffs so that
+    external tools (e.g. VSCode Extension) can render them without
+    re-running the pipeline.
+    """
+    unit = "word" if by_word else "line"
+    comment_mode = "included" if compare_comment else "excluded"
+
+    meta_dict = None
+    if metadata is not None:
+        meta_dict = {
+            "exec_mode": metadata.exec_mode,
+            "k": metadata.k,
+            "w": metadata.w,
+            "threshold": metadata.threshold,
+            "autojunk": metadata.autojunk,
+        }
+
+    result_list = []
+    for r in results:
+        result_list.append({
+            "file_a": r.match.rel_path_a,
+            "file_b": r.match.rel_path_b,
+            "name_similarity": r.match.similarity,
+            "ratio": r.ratio,
+            "additions": r.additions,
+            "deletions": r.deletions,
+            "html_diff": r.html_diff,
+            "error": r.error,
+        })
+
+    deep_list = None
+    if deep_results is not None:
+        deep_list = []
+        for dr in deep_results:
+            deep_list.append({
+                "file_a": dr.file_a,
+                "fingerprint_count_a": dr.fingerprint_count_a,
+                "matches": [
+                    {
+                        "file_b": b_file,
+                        "shared_hashes": shared,
+                        "jaccard": jaccard,
+                    }
+                    for b_file, shared, jaccard in dr.matched_files_b
+                ],
+            })
+
+    report = {
+        "metadata": meta_dict,
+        "dir_a": dir_a,
+        "dir_b": dir_b,
+        "comparison_unit": unit,
+        "comment_mode": comment_mode,
+        "summary": {
+            "matched_pairs": len(results),
+            "unmatched_a": len(unmatched_a),
+            "unmatched_b": len(unmatched_b),
+        },
+        "results": result_list,
+        "deep_results": deep_list,
+        "unmatched_a": unmatched_a,
+        "unmatched_b": unmatched_b,
+    }
+
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info("JSON report → %s", out.resolve())
+
+
+# ---------------------------------------------------------------------------
 # HTML report generator (standalone, self-contained)
 # ---------------------------------------------------------------------------
 def _generate_html_report(
@@ -187,6 +282,7 @@ def _generate_html_report(
     ln_col_width: int = 28,
     *,
     metadata: AnalysisMetadata | None = None,
+    hash_table_html: str | None = None,
 ) -> None:
     """Generate a standalone HTML report with all diffs inline."""
     cover_html_body = build_cover_body(
@@ -194,6 +290,7 @@ def _generate_html_report(
         dir_a, dir_b, by_word, compare_comment,
         deep_results=deep_results,
         metadata=metadata,
+        hash_table_html=hash_table_html,
     )
 
     # Append all inline diffs
@@ -273,9 +370,13 @@ def run_pipeline(
     report_pdf: str | None = None,
     report_html: str | None = None,
     report_md: str | None = None,
+    report_json: str | None = None,
     # Forensic options
     autojunk: bool = True,
     max_index_entries: int = 10_000_000,
+    # Evidence integrity
+    embed_hash: bool = False,
+    bundle_path: str | None = None,
 ) -> None:
     """Execute the full diff-to-report pipeline.
 
@@ -297,7 +398,7 @@ def run_pipeline(
         --report-md             — Markdown summary table.
     """
     # Determine effective output paths
-    if report_pdf is None and report_html is None and report_md is None:
+    if report_pdf is None and report_html is None and report_md is None and report_json is None:
         report_pdf = output_pdf
 
     # Build default metadata if caller didn't provide one
@@ -322,6 +423,17 @@ def run_pipeline(
         "  Matched pairs: %d  |  Unmatched A: %d  |  Unmatched B: %d",
         len(matches), len(unmatched_a), len(unmatched_b),
     )
+
+    # Step 1b — compute file hashes (always)
+    logger.info("Step 1b: Computing SHA-256 hashes …")
+    hashes_a = compute_file_hashes(dir_a, files_a)
+    hashes_b = compute_file_hashes(dir_b, files_b)
+    logger.info("  Hashed: %d (A) + %d (B) files", len(hashes_a), len(hashes_b))
+
+    # Build hash table HTML if --hash requested
+    hash_table_html: str | None = None
+    if embed_hash:
+        hash_table_html = build_hash_table_html(hashes_a, hashes_b)
 
     root_a = Path(dir_a).resolve()
     root_b = Path(dir_b).resolve()
@@ -423,6 +535,16 @@ def run_pipeline(
 
     # ── Output generation ─────────────────────────────────────────────
 
+    # JSON report
+    if report_json:
+        logger.info("Generating JSON report …")
+        _generate_json_report(
+            results, unmatched_a, unmatched_b,
+            dir_a, dir_b, by_word, compare_comment,
+            deep_results, report_json,
+            metadata=metadata,
+        )
+
     # Markdown report
     if report_md:
         logger.info("Generating Markdown report …")
@@ -441,6 +563,7 @@ def run_pipeline(
             dir_a, dir_b, by_word, compare_comment,
             deep_results, report_html, ln_col_width,
             metadata=metadata,
+            hash_table_html=hash_table_html,
         )
 
     # PDF report
@@ -458,6 +581,36 @@ def run_pipeline(
             unit=unit,
             total_files=total_files,
             metadata=metadata,
+            hash_table_html=hash_table_html,
+        )
+
+    logger.info("Done (reports) ✓")
+
+    # ── Evidence integrity (always) ───────────────────────────────────
+    all_report_paths = [
+        p for p in [report_pdf, report_html, report_md, report_json]
+        if p and Path(p).exists()
+    ]
+
+    # Determine manifest output location (next to first report, or cwd)
+    if all_report_paths:
+        manifest_dir = str(Path(all_report_paths[0]).parent)
+    else:
+        manifest_dir = "."
+    manifest_path = os.path.join(manifest_dir, "manifest.sha256.json")
+
+    write_manifest(
+        dir_a, dir_b, hashes_a, hashes_b,
+        all_report_paths, manifest_path,
+    )
+
+    # Evidence bundle (--bundle)
+    if bundle_path:
+        logger.info("Creating evidence bundle …")
+        create_evidence_bundle(
+            dir_a, dir_b,
+            manifest_path, all_report_paths,
+            bundle_path,
         )
 
     logger.info("Done ✓")
@@ -485,6 +638,7 @@ def _generate_pdf_report(
     unit: str,
     total_files: int,
     metadata: AnalysisMetadata | None = None,
+    hash_table_html: str | None = None,
 ) -> None:
     """Generate PDF report with divide-and-conquer merging."""
     if no_merge:
@@ -500,6 +654,7 @@ def _generate_pdf_report(
             dir_a, dir_b, by_word, compare_comment,
             deep_results=deep_results,
             metadata=metadata,
+            hash_table_html=hash_table_html,
         )
         cover_html = _html_wrap("Diffinite — Cover", cover_body)
         if no_merge:

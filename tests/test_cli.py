@@ -95,3 +95,15 @@ class TestAnnotationsAndReportFlags:
             "-o", str(tmp_path / "out.pdf"),
             "--threshold", "80",
         ])
+
+    def test_report_json_accepted(self, tmp_path):
+        """--report-json flag is accepted and generates output."""
+        d_a = tmp_path / "a"; d_a.mkdir()
+        d_b = tmp_path / "b"; d_b.mkdir()
+        json_path = str(tmp_path / "out.json")
+        main([
+            str(d_a), str(d_b),
+            "--report-json", json_path,
+        ])
+        from pathlib import Path
+        assert Path(json_path).exists()
