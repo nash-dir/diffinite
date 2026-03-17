@@ -29,8 +29,8 @@ jobs:
             platform: linux-x64
             exe: diffinite
             archive: tar.gz
-          - os: macos-13
-            platform: darwin-x64
+          - os: macos-latest
+            platform: darwin-arm64
             exe: diffinite
             archive: tar.gz
     runs-on: ${{ matrix.os }}
@@ -117,8 +117,8 @@ jobs:
             platform: linux-x64
             archive: tar.gz
             runner: ubuntu-latest
-          - target: darwin-x64
-            platform: darwin-x64
+          - target: darwin-arm64
+            platform: darwin-arm64
             archive: tar.gz
             runner: ubuntu-latest
     runs-on: ${{ matrix.runner }}

@@ -99,7 +99,7 @@ export function defaultOptions(): DiffiniteOptions {
 const PLATFORM_MAP: Record<string, string> = {
   win32: "win-x64",
   linux: "linux-x64",
-  darwin: "darwin-x64",
+  darwin: "darwin-arm64",
 };
 
 /**
