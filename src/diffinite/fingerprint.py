@@ -4,9 +4,9 @@ Stanford MOSS 스타일 문서 핑거프린팅 파이프라인을 구현한다.
 전체 흐름: Tokenize → K-gram → Rolling Hash → Winnow → Fingerprint Set
 
 핵심 보장:
-    **밀도 보장 (Density Guarantee)** — 두 문서가 ≥ (W + K − 1) 토큰의
+    **밀도 보장 (Density Guarantee)** -- 두 문서가 >= (W + K - 1) 토큰의
     공통 부분 문자열을 공유하면, 반드시 1개 이상의 공통 핑거프린트가 생성된다.
-    현재 설정(K=5, W=4)에서 ≥ 8 토큰 공유 시 탐지 보장.
+    현재 설정(K=5, W=4)에서 >= 8 토큰 공유 시 탐지 보장.
 
 참조:
     Schleimer, Wilkerson, Aiken. "Winnowing: Local Algorithms for Document

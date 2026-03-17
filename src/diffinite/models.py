@@ -163,7 +163,7 @@ class AnalysisMetadata:
     """K-gram 크기. 커질수록 정밀도 ↑ / 재현율 ↓."""
 
     w: int
-    """Winnowing 윈도우 크기. 밀도 보장: ≥(W+K-1) 토큰 공유 시 반드시 탐지."""
+    """Winnowing 윈도우 크기. 밀도 보장: >=(W+K-1) 토큰 공유 시 반드시 탐지."""
 
     threshold: float
     """최소 Jaccard 유사도 임계값. 이 미만의 매칭은 결과에서 제외."""
