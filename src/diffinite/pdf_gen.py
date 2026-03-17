@@ -39,7 +39,7 @@ from reportlab.lib.pagesizes import A4, landscape
 from reportlab.pdfgen import canvas
 from xhtml2pdf import pisa
 
-from diffinite.models import DeepMatchResult, DiffResult
+from diffinite.models import DeepMatchResult, DiffResult, FileHashEntry
 
 logger = logging.getLogger(__name__)
 
@@ -219,6 +219,43 @@ def _ratio_badge(ratio: float) -> str:
     return f'<span class="badge {cls}">{pct:.1f}%</span>'
 
 
+def build_hash_table_html(
+    hashes_a: list[FileHashEntry],
+    hashes_b: list[FileHashEntry],
+) -> str:
+    """Build an HTML table showing SHA-256 hashes for all analyzed files.
+
+    Used when ``--hash`` is specified to embed integrity data
+    directly in the PDF/HTML cover page.
+    """
+    parts: list[str] = []
+    parts.append('<h2>&#128274; Evidence Integrity — SHA-256 Hashes</h2>\n')
+
+    for label, hashes in [("Directory A", hashes_a), ("Directory B", hashes_b)]:
+        if not hashes:
+            continue
+        parts.append(f'<h3>{html.escape(label)}</h3>\n')
+        parts.append(
+            '<table class="summary">\n'
+            '<tr><th>#</th><th>File</th><th>SHA-256</th>'
+            '<th>Size (bytes)</th></tr>\n'
+        )
+        for idx, h in enumerate(hashes, 1):
+            # Show first 16 + last 8 chars of hash for readability
+            short_hash = f'{h.sha256[:16]}…{h.sha256[-8:]}'
+            parts.append(
+                f'<tr>'
+                f'<td>{idx}</td>'
+                f'<td>{html.escape(h.rel_path)}</td>'
+                f'<td style="font-family:monospace;font-size:8px">{short_hash}</td>'
+                f'<td>{h.size_bytes:,}</td>'
+                f'</tr>\n'
+            )
+        parts.append('</table>\n')
+
+    return ''.join(parts)
+
+
 def _html_wrap(
     title: str,
     body: str,
@@ -330,6 +367,7 @@ def build_cover_body(
     *,
     deep_results: Optional[list[DeepMatchResult]] = None,
     metadata: Optional["AnalysisMetadata"] = None,
+    hash_table_html: Optional[str] = None,
 ) -> str:
     """Build the cover-page body fragment (no DOCTYPE/html/head wrapper)."""
     from diffinite.models import AnalysisMetadata as _AM  # avoid circular at module level
@@ -436,6 +474,8 @@ def build_cover_body(
 {unmatched_html}
 {deep_html}
 """
+    if hash_table_html:
+        body += hash_table_html
     return body
 
 
