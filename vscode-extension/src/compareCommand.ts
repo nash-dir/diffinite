@@ -37,10 +37,16 @@ export async function compareDirectories(
   const dirB = uriB[0].fsPath;
 
   // Step 3: Collect options
+  console.log('[Diffinite] Step 3: Collecting options…');
   const options = await collectOptions(context);
-  if (!options) { return; }  // cancelled
+  console.log('[Diffinite] Options received:', options);
+  if (!options) {
+    console.log('[Diffinite] Options was undefined — user cancelled or panel closed early');
+    return;
+  }
 
   // Step 4: Run analysis with progress
+  console.log('[Diffinite] Step 4: Starting analysis…', { dirA, dirB, options });
   try {
     const report = await vscode.window.withProgress(
       {
@@ -52,10 +58,15 @@ export async function compareDirectories(
     );
 
     // Step 5: Show results
+    console.log('[Diffinite] Step 5: Analysis complete, showing results…', {
+      matched: report.summary?.matched_pairs,
+      resultsCount: report.results?.length,
+    });
     showResults(context, report, options);
 
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
+    console.error('[Diffinite] Analysis FAILED:', msg);
     vscode.window.showErrorMessage(`Diffinite analysis failed: ${msg}`);
   }
 }

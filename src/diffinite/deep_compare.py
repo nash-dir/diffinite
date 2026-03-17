@@ -31,6 +31,7 @@ Winnowing 핑거프린트의 **역 인덱스(Inverted Index)** 를 활용하여,
 from __future__ import annotations
 
 import logging
+import multiprocessing
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -176,7 +177,8 @@ def run_deep_compare(
     fp_b: dict[str, set[int]] = {}
 
     all_items = items_a + items_b
-    with ProcessPoolExecutor(max_workers=workers) as pool:
+    ctx = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
         results = list(pool.map(_extract_one, all_items))
 
     for i, (rel, hset, cnt) in enumerate(results):

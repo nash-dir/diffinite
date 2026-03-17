@@ -24,6 +24,10 @@ export interface DiffiniteOptions {
   kGram: number;
   window: number;
   thresholdDeep: number;
+  pageNumber: boolean;
+  fileNumber: boolean;
+  batesNumber: boolean;
+  hash: boolean;
 }
 
 /** Structure of the JSON report produced by `diffinite --report-json`. */
@@ -80,6 +84,10 @@ export function defaultOptions(): DiffiniteOptions {
     kGram: 5,
     window: 4,
     thresholdDeep: 0.05,
+    pageNumber: true,
+    fileNumber: true,
+    batesNumber: true,
+    hash: true,
   };
 }
 
@@ -132,6 +140,10 @@ function buildArgs(opts: DiffiniteOptions): string[] {
   args.push("--k-gram", String(opts.kGram));
   args.push("--window", String(opts.window));
   args.push("--threshold-deep", String(opts.thresholdDeep));
+  if (opts.pageNumber) { args.push("--page-number"); }
+  if (opts.fileNumber) { args.push("--file-number"); }
+  if (opts.batesNumber) { args.push("--bates-number"); }
+  if (opts.hash) { args.push("--hash"); }
   return args;
 }
 
@@ -142,7 +154,9 @@ function spawnDiffinite(
   extraArgs: string[]
 ): ReturnType<typeof spawn> {
   const { exe, prefixArgs } = resolveBinary();
-  return spawn(exe, [...prefixArgs, ...extraArgs]);
+  const allArgs = [...prefixArgs, ...extraArgs];
+  console.log('[Diffinite] Spawning:', exe, allArgs.join(' '));
+  return spawn(exe, allArgs);
 }
 
 /**
@@ -173,7 +187,9 @@ export async function runAnalysis(
     });
 
     proc.on("close", (code) => {
+      console.log('[Diffinite] Process exited with code:', code);
       if (code !== 0) {
+        console.error('[Diffinite] stderr:', stderr);
         reject(new Error(`diffinite exited with code ${code}:\n${stderr}`));
         return;
       }
