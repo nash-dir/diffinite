@@ -44,8 +44,9 @@ from diffinite.fingerprint import DEFAULT_K, DEFAULT_W
 from diffinite.models import AnalysisMetadata, DiffResult, DeepMatchResult
 from diffinite.parser import strip_comments
 from diffinite.pdf_gen import (
+    _html_wrap,
     add_bates_numbers,
-    build_cover_html,
+    build_cover_body,
     build_diff_page_html,
     html_to_pdf,
     merge_with_bookmarks,
@@ -188,7 +189,7 @@ def _generate_html_report(
     metadata: AnalysisMetadata | None = None,
 ) -> None:
     """Generate a standalone HTML report with all diffs inline."""
-    cover_html_body = build_cover_html(
+    cover_html_body = build_cover_body(
         results, unmatched_a, unmatched_b,
         dir_a, dir_b, by_word, compare_comment,
         deep_results=deep_results,
@@ -494,12 +495,13 @@ def _generate_pdf_report(
 
     with tempfile.TemporaryDirectory(prefix="diffinite_") as tmpdir:
         # (1) Cover page
-        cover_html = build_cover_html(
+        cover_body = build_cover_body(
             results, unmatched_a, unmatched_b,
             dir_a, dir_b, by_word, compare_comment,
             deep_results=deep_results,
             metadata=metadata,
         )
+        cover_html = _html_wrap("Diffinite — Cover", cover_body)
         if no_merge:
             cover_dest = str(out_dir / "000_cover.pdf")  # type: ignore[possibly-undefined]
         else:

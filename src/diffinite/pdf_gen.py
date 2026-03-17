@@ -18,7 +18,7 @@ CSS 설계:
     긴 파일(10,000줄+)에서 라인 번호 열이 넘치는 것을 방지.
 
 호출관계:
-    ``pipeline._generate_pdf_report()`` -> ``build_cover_html()``
+    ``pipeline._generate_pdf_report()`` -> ``build_cover_body()``
     ``pipeline._generate_pdf_report()`` -> ``build_diff_page_html()``
     ``pipeline._generate_pdf_report()`` -> ``html_to_pdf()``
     ``pipeline._generate_pdf_report()`` -> ``merge_with_bookmarks()``
@@ -319,7 +319,7 @@ def _build_annotation_html(
 # ---------------------------------------------------------------------------
 # Cover page
 # ---------------------------------------------------------------------------
-def build_cover_html(
+def build_cover_body(
     results: list[DiffResult],
     unmatched_a: list[str],
     unmatched_b: list[str],
@@ -331,7 +331,7 @@ def build_cover_html(
     deep_results: Optional[list[DeepMatchResult]] = None,
     metadata: Optional["AnalysisMetadata"] = None,
 ) -> str:
-    """Build the cover-page HTML with summary table and deep compare."""
+    """Build the cover-page body fragment (no DOCTYPE/html/head wrapper)."""
     from diffinite.models import AnalysisMetadata as _AM  # avoid circular at module level
 
     unit = "word" if by_word else "line"
@@ -436,7 +436,7 @@ def build_cover_html(
 {unmatched_html}
 {deep_html}
 """
-    return _html_wrap("Diffinite — Cover", body)
+    return body
 
 
 # ---------------------------------------------------------------------------
