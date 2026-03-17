@@ -1,10 +1,10 @@
 # Changelog
 
-## [0.1.0] — 2026-03-17
+## [0.3.0] — 2026-03-17
 
 ### Added
 
-- Initial release
+- Initial Marketplace release (version synced with PyPI)
 - **Compare Directories** command with GUI options panel
 - Scrollable block-by-block diff viewer
 - Report export (PDF / HTML / Markdown)
