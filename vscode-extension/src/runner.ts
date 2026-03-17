@@ -114,8 +114,8 @@ function resolveBinary(): { exe: string; prefixArgs: string[] } {
   const platformDir = PLATFORM_MAP[process.platform];
 
   if (platformDir) {
-    // __dirname is "out/", binary is in "bin/{platform}/"
-    const bundled = path.join(__dirname, "..", "bin", platformDir, `diffinite${ext}`);
+    // __dirname is "out/", binary is in "bin/{platform}/diffinite/" (onedir bundle)
+    const bundled = path.join(__dirname, "..", "bin", platformDir, "diffinite", `diffinite${ext}`);
     if (fs.existsSync(bundled)) {
       return { exe: bundled, prefixArgs: [] };
     }

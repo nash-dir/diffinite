@@ -1,12 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec for diffinite standalone binary.
 
-Produces a single-file executable that includes all Python
-dependencies. Used by CI (build-binaries.yml) to create
-platform-specific binaries for the VSCode Extension bundle.
+Produces a one-directory (onedir) bundle that includes all Python
+dependencies. Onedir mode avoids antivirus false-positive detections
+that frequently occur with single-file executables.
+
+Used by CI (release.yml) to create platform-specific bundles
+for the VSCode Extension and GitHub Release assets.
 
 Usage:
     pyinstaller diffinite.spec
+    # Output: dist/diffinite/  (directory containing diffinite executable + libs)
 """
 
 import sys
@@ -78,13 +82,12 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
+# Onedir mode: EXE only contains scripts (no binaries/datas)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,
     name='diffinite',
     debug=False,
     bootloader_ignore_signals=False,
@@ -98,4 +101,16 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+# COLLECT gathers exe + binaries + data into dist/diffinite/ folder
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='diffinite',
 )
