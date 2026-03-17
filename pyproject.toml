@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "diffinite"
-version = "0.3.0"
+version = "0.4.0"
 description = "Forensic source-code comparison tool — Winnowing fingerprints and professional PDF reports for IP litigation & code audit"
 readme = "README.md"
 license = {text = "Apache-2.0"}
