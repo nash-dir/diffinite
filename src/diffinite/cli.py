@@ -194,7 +194,7 @@ def main(argv: list[str] | None = None) -> None:
         dest="window",
         help=(
             f"Winnowing window size (default: {DEFAULT_W}). "
-            "Density guarantee: ≥(W+K−1) shared tokens always detected."
+            "Density guarantee: >=(W+K-1) shared tokens always detected."
         ),
     )
     deep_group.add_argument(
