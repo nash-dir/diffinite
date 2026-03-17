@@ -4,6 +4,13 @@
   "description": "Forensic source-code comparison with Winnowing fingerprints and professional reports for IP litigation & code audit",
   "version": "0.1.0",
   "publisher": "nash-dir",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nash-dir/diffinite"
+  },
+  "icon": "icon.png",
+  "keywords": ["diff", "code comparison", "forensic", "winnowing", "plagiarism"],
   "engines": {
     "vscode": "^1.85.0"
   },
