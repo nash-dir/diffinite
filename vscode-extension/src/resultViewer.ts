@@ -44,31 +44,32 @@ export function showResults(
         });
 
         if (uri) {
-          await vscode.window.withProgress(
-            {
-              location: vscode.ProgressLocation.Notification,
-              title: "Diffinite",
-              cancellable: false,
-            },
-            async (progress) => {
-              try {
+          try {
+            await vscode.window.withProgress(
+              {
+                location: vscode.ProgressLocation.Notification,
+                title: "Diffinite",
+                cancellable: false,
+              },
+              async (progress) => {
                 await runExport(
                   report.dir_a, report.dir_b,
                   options, format, uri.fsPath, progress
                 );
-                const action = await vscode.window.showInformationMessage(
-                  `${format.toUpperCase()} report saved.`,
-                  "Open File"
-                );
-                if (action === "Open File") {
-                  vscode.env.openExternal(uri);
-                }
-              } catch (err: unknown) {
-                const msg = err instanceof Error ? err.message : String(err);
-                vscode.window.showErrorMessage(`Export failed: ${msg}`);
               }
+            );
+            // Show success message outside withProgress so spinner closes immediately
+            const action = await vscode.window.showInformationMessage(
+              `${format.toUpperCase()} report saved.`,
+              "Open File"
+            );
+            if (action === "Open File") {
+              vscode.env.openExternal(uri);
             }
-          );
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            vscode.window.showErrorMessage(`Export failed: ${msg}`);
+          }
         }
       }
     },
@@ -341,6 +342,15 @@ const CSS = `
   .difftbl .add { background: rgba(78, 201, 176, 0.15); }
   .difftbl .empty { background: rgba(255,255,255,0.02); }
   .difftbl tr.fold td { text-align: center; color: var(--fg-dim); background: rgba(255,255,255,0.04); }
+
+  /* difflib HtmlDiff inline change markers */
+  .diff_chg { background: rgba(255, 200, 50, 0.25); border-radius: 2px; text-decoration: none; }
+  .diff_add { background: rgba(78, 201, 176, 0.25); border-radius: 2px; }
+  .diff_sub { background: rgba(241, 76, 76, 0.25); border-radius: 2px; }
+  .diff_next { display: none; }
+
+  /* Override Pygments error token red border (inline style: border: 1px solid #F00) */
+  .block-diff span[style*="border"] { border: none !important; }
 
   /* Badge */
   .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; color: #fff; }

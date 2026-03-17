@@ -31,8 +31,8 @@ export function collectOptions(
     panel.webview.onDidReceiveMessage(
       (msg: { command: string; options?: DiffiniteOptions }) => {
         if (msg.command === "run" && msg.options) {
+          resolve(msg.options);  // resolve BEFORE dispose
           panel.dispose();
-          resolve(msg.options);
         } else if (msg.command === "cancel") {
           panel.dispose();
           resolve(undefined);
@@ -106,6 +106,26 @@ function buildOptionsHtml(defaults: DiffiniteOptions): string {
       <div class="field">
         <label for="thresholdDeep">Min Jaccard threshold</label>
         <input type="number" id="thresholdDeep" value="${defaults.thresholdDeep}" min="0" max="1" step="0.01">
+      </div>
+    </section>
+
+    <section>
+      <h2>Report Options</h2>
+      <div class="field checkbox">
+        <input type="checkbox" id="pageNumber" ${defaults.pageNumber ? "checked" : ""}>
+        <label for="pageNumber">Show page numbers (Page n / N)</label>
+      </div>
+      <div class="field checkbox">
+        <input type="checkbox" id="fileNumber" ${defaults.fileNumber ? "checked" : ""}>
+        <label for="fileNumber">Show file numbers (File n / N)</label>
+      </div>
+      <div class="field checkbox">
+        <input type="checkbox" id="batesNumber" ${defaults.batesNumber ? "checked" : ""}>
+        <label for="batesNumber">Stamp Bates numbers</label>
+      </div>
+      <div class="field checkbox">
+        <input type="checkbox" id="hash" ${defaults.hash ? "checked" : ""}>
+        <label for="hash">Embed SHA-256 file hashes in report</label>
       </div>
     </section>
 
@@ -281,6 +301,10 @@ const OPTIONS_JS = `
       kGram: Number(document.getElementById('kGram').value),
       window: Number(document.getElementById('window').value),
       thresholdDeep: Number(document.getElementById('thresholdDeep').value),
+      pageNumber: document.getElementById('pageNumber').checked,
+      fileNumber: document.getElementById('fileNumber').checked,
+      batesNumber: document.getElementById('batesNumber').checked,
+      hash: document.getElementById('hash').checked,
     };
     vscode.postMessage({ command: 'run', options });
   });

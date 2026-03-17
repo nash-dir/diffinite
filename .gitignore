@@ -9,6 +9,7 @@ __pycache__/
 # IDE / OS
 .env
 .pytest_cache/
+report/
 
 # Legacy & dev artifacts
 legacy/
