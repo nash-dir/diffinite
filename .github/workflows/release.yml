@@ -213,7 +213,17 @@ jobs:
       - name: Publish to VSCode Marketplace
         if: github.event_name == 'release'
         working-directory: vscode-extension
-        run: vsce publish --target ${{ matrix.target }} --no-dependencies -p ${{ secrets.VSCE_PAT }}
+        timeout-minutes: 10
+        continue-on-error: true
+        run: |
+          VSIX_FILE=$(ls *.vsix | head -1)
+          echo "Publishing $VSIX_FILE..."
+          for i in 1 2 3; do
+            echo "Attempt $i/3..."
+            vsce publish --packagePath "$VSIX_FILE" -p ${{ secrets.VSCE_PAT }} && break
+            echo "Attempt $i failed, waiting 30s..."
+            sleep 30
+          done
 
   # ─────────────────────────────────────────────
   # Stage 3: Publish to PyPI
