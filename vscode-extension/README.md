@@ -13,8 +13,10 @@ Compare two directories of source code with [Winnowing fingerprints](https://the
 - **1:1 File Matching** — Pairs files across two directories using fuzzy name matching, then computes line-by-line or word-by-word diffs with syntax highlighting.
 - **N:M Cross-Matching (Deep Mode)** — Winnowing fingerprint-based Jaccard similarity across all file pairs. Detects code reuse even across renamed, split, or merged files.
 - **Comment Stripping** — 5-state FSM parser supporting 30+ file extensions (`.py`, `.js`, `.ts`, `.java`, `.c`, `.cpp`, `.go`, `.rs`, `.rb`, `.sql`, `.html`, `.css`, and more).
+- **Moved Block Detection** — Detects code blocks that were moved (not just added/deleted) and highlights them in purple (original position) and blue (moved destination).
 - **Multiple Report Formats** — Export to PDF, HTML, or Markdown.
-- **Forensic Annotations** — Page numbers, file numbers, Bates stamps, filenames on every page.
+- **Forensic Annotations** — Page numbers, file numbers, Bates stamps (with configurable prefix/suffix/start number), filenames on every page.
+- **Bates Presets** — Save case-specific Bates configurations (prefix, suffix, starting number) as reusable presets in VSCode settings.
 - **GUI Options Panel** — Configure all analysis parameters visually without touching the CLI.
 - **Bundled Binary Support** — Ships with standalone binaries when available; falls back to Python if needed.
 
@@ -67,6 +69,8 @@ Summary table for each matched file pair:
 Side-by-side diff for each matched pair:
 - 🟢 **Green** — Lines present only in File B (additions)
 - 🔴 **Red** — Lines present only in File A (deletions)
+- 🟣 **Purple** — Lines moved from this position (with `--detect-moved`)
+- 🔵 **Blue** — Lines moved to this position (with `--detect-moved`)
 - No highlight — Identical lines (with configurable context folding)
 
 ### Deep Compare Section
@@ -87,6 +91,16 @@ N:M cross-matching table (deep mode):
 |---------|:-------:|-------------|
 | `diffinite.pythonPath` | `python` | Path to Python interpreter with diffinite installed |
 | `diffinite.defaultMode` | `deep` | Default execution mode (`simple` or `deep`) |
+| `diffinite.batesPresets` | `[]` | Saved Bates presets (prefix/suffix/start number per case). Example in `settings.json`: |
+
+```json
+{
+  "diffinite.batesPresets": [
+    { "name": "Oracle v. Google", "prefix": "GOOG-", "suffix": "-HIGHLY_CONF", "nextBatesNumber": 1 },
+    { "name": "Internal Audit Q1", "prefix": "AUDIT-", "suffix": "" }
+  ]
+}
+```
 
 ### GUI Options Panel
 
@@ -99,11 +113,16 @@ All options are configurable through the built-in GUI panel:
 | **By Word** | off | Compare by word instead of by line |
 | **Normalize** | off | Normalize identifiers/literals for Type-2 clone detection |
 | **Collapse Identical** | off | Fold unchanged blocks (3 context lines) |
+| **Detect Moved Blocks** | off | Highlight moved code in purple/blue instead of plain delete/add |
 | **No Autojunk** | off | Disable autojunk heuristic for more precise forensic analysis |
 | **Threshold** | `60` | Fuzzy file-name matching threshold (0–100) |
 | **K-gram** | `5` | Winnowing K-gram size (Schleimer 2003 §4.2) |
 | **Window** | `4` | Winnowing window size. Detection guarantee: sequences ≥ K+W−1 tokens |
 | **Threshold (Deep)** | `0.05` | Minimum Jaccard similarity to include in results |
+| **Bates Preset** | — | Select a saved preset to auto-fill prefix/suffix/start |
+| **Bates Prefix** | (empty) | Prefix for Bates numbering (e.g. `PLAINTIFF-`) |
+| **Bates Suffix** | (empty) | Suffix for Bates numbering (e.g. `-CONFIDENTIAL`) |
+| **Starting Number** | `1` | First Bates number (auto-continues across reports) |
 
 ---
 
