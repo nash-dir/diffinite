@@ -175,6 +175,21 @@ jobs:
       - name: Install vsce
         run: npm install -g @vscode/vsce@3.2.2
 
+      - name: Resolve symlinks in binary bundle
+        working-directory: vscode-extension
+        run: |
+          # macOS PyInstaller bundles contain symlinks (e.g. Python.framework/Resources)
+          # that yazl (vsce's zip lib) cannot handle. Dereference them.
+          if find bin/ -type l 2>/dev/null | grep -q .; then
+            echo "Resolving symlinks in bin/..."
+            cp -rL bin/ bin-resolved/
+            rm -rf bin/
+            mv bin-resolved/ bin/
+            echo "✓ Symlinks resolved"
+          else
+            echo "No symlinks found — skipping"
+          fi
+
       - name: Package platform-specific VSIX
         working-directory: vscode-extension
         run: >-
