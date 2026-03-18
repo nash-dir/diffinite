@@ -38,11 +38,16 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────────────────
 # 인코딩 자동 감지 파일 리더
 # ──────────────────────────────────────────────────────────────────────
-def read_file(path: str) -> Optional[str]:
+def read_file(path: str, encoding: str | None = None) -> Optional[str]:
     """파일을 읽고 인코딩을 자동 감지하여 유니코드 문자열로 반환한다.
 
     ``charset_normalizer.from_bytes()``는 BOM, 통계적 분석 등을 조합하여
     UTF-8, EUC-KR, Shift_JIS 등 다양한 인코딩을 감지한다.
+
+    Args:
+        path: 파일 경로.
+        encoding: 인코딩 지정. ``None`` 또는 ``"auto"``이면 자동 감지.
+                  ``"euc-kr"``, ``"utf-8"`` 등 지정하면 해당 인코딩으로 강제 디코딩.
 
     Returns:
         디코딩된 텍스트. 빈 파일은 ``""``, 감지 실패 시 ``None``.
@@ -60,16 +65,33 @@ def read_file(path: str) -> Optional[str]:
     if not raw:
         return ""
 
-    result = from_bytes(raw).best()
-    if result is None:
-        logger.warning("Could not detect encoding for %s — skipping", path)
-        return None
+    # ── Manual encoding specified ────────────────────────────────
+    if encoding and encoding.lower() not in ("auto", ""):
+        try:
+            return raw.decode(encoding)
+        except (UnicodeDecodeError, LookupError) as exc:
+            logger.error("Decoding failed for %s with encoding %s: %s",
+                         path, encoding, exc)
+            return None
 
-    try:
-        return str(result)
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Decoding failed for %s (%s): %s", path, result.encoding, exc)
-        return None
+    # ── Auto-detect with charset_normalizer ──────────────────────
+    result = from_bytes(raw).best()
+    if result is not None:
+        try:
+            return str(result)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("charset_normalizer decode failed for %s (%s): %s",
+                           path, result.encoding, exc)
+
+    # ── Fallback chain (Korean-optimized) ────────────────────────
+    for fallback_enc in ("utf-8", "euc-kr", "cp949"):
+        try:
+            return raw.decode(fallback_enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+
+    logger.warning("Could not detect encoding for %s — skipping", path)
+    return None
 
 
 # ──────────────────────────────────────────────────────────────────────
