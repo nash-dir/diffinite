@@ -100,7 +100,7 @@ def main(argv: list[str] | None = None) -> None:
         default="auto",
         help=(
             "Source file encoding. 'auto' (default) uses charset-normalizer "
-            "auto-detection with Korean-optimized fallback (utf-8 → euc-kr → cp949). "
+            "auto-detection with Korean-optimized fallback (utf-8 -> euc-kr -> cp949). "
             "Specify an explicit encoding (e.g. euc-kr, utf-8, cp949, shift_jis, "
             "gb2312) to force-decode all files with that encoding."
         ),
