@@ -6,7 +6,7 @@
  */
 import * as vscode from "vscode";
 import { DiffiniteOptions, defaultOptions } from "./runner";
-import { getDefaultMode } from "./config";
+import { getDefaultMode, getBatesPresets, BatesPreset } from "./config";
 
 /**
  * Show an options panel and return the user's choices.
@@ -25,8 +25,9 @@ export function collectOptions(
 
     const defaults = defaultOptions();
     defaults.mode = getDefaultMode() as "simple" | "deep";
+    const presets = getBatesPresets();
 
-    panel.webview.html = buildOptionsHtml(defaults);
+    panel.webview.html = buildOptionsHtml(defaults, presets);
 
     panel.webview.onDidReceiveMessage(
       (msg: { command: string; options?: DiffiniteOptions }) => {
@@ -46,7 +47,12 @@ export function collectOptions(
   });
 }
 
-function buildOptionsHtml(defaults: DiffiniteOptions): string {
+function buildOptionsHtml(defaults: DiffiniteOptions, presets: BatesPreset[]): string {
+  const presetOptions = presets.map((p) => {
+    const label = `${p.name} (${p.prefix}…${p.suffix || ""})`;
+    return `<option value="${p.name}" data-prefix="${p.prefix || ""}" data-suffix="${p.suffix || ""}" data-start="${p.nextBatesNumber || 1}">${label}</option>`;
+  }).join("\n");
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -82,6 +88,10 @@ function buildOptionsHtml(defaults: DiffiniteOptions): string {
       <div class="field checkbox">
         <input type="checkbox" id="collapseIdentical" ${defaults.collapseIdentical ? "checked" : ""}>
         <label for="collapseIdentical">Collapse identical blocks (3 context lines)</label>
+      </div>
+      <div class="field checkbox">
+        <input type="checkbox" id="detectMoved" ${defaults.detectMoved ? "checked" : ""}>
+        <label for="detectMoved">Detect moved code blocks (highlight in purple/blue)</label>
       </div>
       <div class="field">
         <label for="threshold">File name matching threshold (0–100)</label>
@@ -122,6 +132,27 @@ function buildOptionsHtml(defaults: DiffiniteOptions): string {
       <div class="field checkbox">
         <input type="checkbox" id="batesNumber" ${defaults.batesNumber ? "checked" : ""}>
         <label for="batesNumber">Stamp Bates numbers</label>
+      </div>
+      <div class="bates-details" id="batesDetails">
+        <div class="field">
+          <label for="batesPreset">Preset</label>
+          <select id="batesPreset">
+            <option value="">— Manual —</option>
+            ${presetOptions}
+          </select>
+        </div>
+        <div class="field">
+          <label for="batesPrefix">Prefix</label>
+          <input type="text" id="batesPrefix" value="${defaults.batesPrefix}" placeholder="e.g. PLAINTIFF-">
+        </div>
+        <div class="field">
+          <label for="batesSuffix">Suffix</label>
+          <input type="text" id="batesSuffix" value="${defaults.batesSuffix}" placeholder="e.g. -CONFIDENTIAL">
+        </div>
+        <div class="field">
+          <label for="batesStart">Starting number</label>
+          <input type="number" id="batesStart" value="${defaults.batesStart}" min="1" step="1">
+        </div>
       </div>
       <div class="field checkbox">
         <input type="checkbox" id="hash" ${defaults.hash ? "checked" : ""}>
@@ -268,6 +299,31 @@ const OPTIONS_CSS = `
   .btn-secondary:hover { background: var(--border); }
 
   .deep-section.hidden { display: none; }
+
+  .bates-details {
+    margin-left: 24px;
+    padding: 8px 0;
+    border-left: 2px solid var(--accent);
+    padding-left: 12px;
+  }
+
+  .bates-details.hidden { display: none; }
+
+  input[type="text"] {
+    background: var(--bg);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 10px;
+    font-size: 13px;
+    width: 100%;
+    max-width: 200px;
+  }
+
+  input[type="text"]:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
 `;
 
 const OPTIONS_JS = `
@@ -288,6 +344,30 @@ const OPTIONS_JS = `
   modeSelect.addEventListener('change', updateDeepVisibility);
   updateDeepVisibility();
 
+  // Toggle Bates details visibility
+  const batesCheckbox = document.getElementById('batesNumber');
+  const batesDetails = document.getElementById('batesDetails');
+  function updateBatesVisibility() {
+    if (batesCheckbox.checked) {
+      batesDetails.classList.remove('hidden');
+    } else {
+      batesDetails.classList.add('hidden');
+    }
+  }
+  batesCheckbox.addEventListener('change', updateBatesVisibility);
+  updateBatesVisibility();
+
+  // Preset selection auto-fills prefix/suffix/start
+  const presetSelect = document.getElementById('batesPreset');
+  presetSelect.addEventListener('change', () => {
+    const opt = presetSelect.options[presetSelect.selectedIndex];
+    if (opt.value) {
+      document.getElementById('batesPrefix').value = opt.getAttribute('data-prefix') || '';
+      document.getElementById('batesSuffix').value = opt.getAttribute('data-suffix') || '';
+      document.getElementById('batesStart').value = opt.getAttribute('data-start') || '1';
+    }
+  });
+
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     const options = {
@@ -296,6 +376,7 @@ const OPTIONS_JS = `
       byWord: document.getElementById('byWord').checked,
       normalize: document.getElementById('normalize').checked,
       collapseIdentical: document.getElementById('collapseIdentical').checked,
+      detectMoved: document.getElementById('detectMoved').checked,
       noAutojunk: document.getElementById('noAutojunk').checked,
       threshold: Number(document.getElementById('threshold').value),
       kGram: Number(document.getElementById('kGram').value),
@@ -305,6 +386,13 @@ const OPTIONS_JS = `
       fileNumber: document.getElementById('fileNumber').checked,
       batesNumber: document.getElementById('batesNumber').checked,
       hash: document.getElementById('hash').checked,
+      encoding: 'auto',
+      sortBy: '',
+      sortOrder: 'asc',
+      batesPrefix: document.getElementById('batesPrefix').value,
+      batesSuffix: document.getElementById('batesSuffix').value,
+      batesStart: Number(document.getElementById('batesStart').value) || 1,
+      _batesPresetName: presetSelect.value,
     };
     vscode.postMessage({ command: 'run', options });
   });

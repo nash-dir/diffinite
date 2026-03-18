@@ -19,6 +19,7 @@ export interface DiffiniteOptions {
   byWord: boolean;
   normalize: boolean;
   collapseIdentical: boolean;
+  detectMoved: boolean;
   noAutojunk: boolean;
   threshold: number;
   kGram: number;
@@ -31,6 +32,9 @@ export interface DiffiniteOptions {
   encoding: string;
   sortBy: string;
   sortOrder: string;
+  batesPrefix: string;
+  batesSuffix: string;
+  batesStart: number;
 }
 
 /** Structure of the JSON report produced by `diffinite --report-json`. */
@@ -82,6 +86,7 @@ export function defaultOptions(): DiffiniteOptions {
     byWord: false,
     normalize: false,
     collapseIdentical: false,
+    detectMoved: false,
     noAutojunk: false,
     threshold: 60,
     kGram: 5,
@@ -94,6 +99,9 @@ export function defaultOptions(): DiffiniteOptions {
     encoding: "auto",
     sortBy: "",
     sortOrder: "asc",
+    batesPrefix: "",
+    batesSuffix: "",
+    batesStart: 1,
   };
 }
 
@@ -141,6 +149,7 @@ function buildArgs(opts: DiffiniteOptions): string[] {
   if (opts.byWord) { args.push("--by-word"); }
   if (opts.normalize) { args.push("--normalize"); }
   if (opts.collapseIdentical) { args.push("--collapse-identical"); }
+  if (opts.detectMoved) { args.push("--detect-moved"); }
   if (opts.noAutojunk) { args.push("--no-autojunk"); }
   args.push("--threshold", String(opts.threshold));
   args.push("--k-gram", String(opts.kGram));
@@ -156,6 +165,15 @@ function buildArgs(opts: DiffiniteOptions): string[] {
   if (opts.sortBy) {
     args.push("--sort-by", opts.sortBy);
     args.push("--sort-order", opts.sortOrder || "asc");
+  }
+  if (opts.batesPrefix) {
+    args.push("--bates-prefix", opts.batesPrefix);
+  }
+  if (opts.batesSuffix) {
+    args.push("--bates-suffix", opts.batesSuffix);
+  }
+  if (opts.batesStart > 1) {
+    args.push("--bates-start", String(opts.batesStart));
   }
   return args;
 }

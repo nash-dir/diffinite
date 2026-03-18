@@ -37,6 +37,21 @@
           "default": "deep",
           "enum": ["simple", "deep"],
           "description": "Default execution mode"
+        },
+        "diffinite.batesPresets": {
+          "type": "array",
+          "default": [],
+          "description": "Saved Bates numbering presets (prefix/suffix/start number)",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string", "description": "Preset display name (e.g. case ID)" },
+              "prefix": { "type": "string", "description": "Bates prefix (e.g. PLAINTIFF-)" },
+              "suffix": { "type": "string", "description": "Bates suffix (e.g. -CONFIDENTIAL)" },
+              "nextBatesNumber": { "type": "integer", "default": 1, "description": "Next Bates start number (auto-updated after export)" }
+            },
+            "required": ["name", "prefix"]
+          }
         }
       }
     }

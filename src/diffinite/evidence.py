@@ -33,6 +33,7 @@ import zipfile
 from pathlib import Path
 
 from diffinite.models import FileHashEntry
+from diffinite import __version__
 
 logger = logging.getLogger(__name__)
 
@@ -120,8 +121,6 @@ def write_manifest(
     hashes_b: list[FileHashEntry],
     report_paths: list[str],
     output_path: str,
-    *,
-    version: str = "0.4.0",
 ) -> str:
     """``manifest.sha256.json``을 생성한다.
 
@@ -131,7 +130,6 @@ def write_manifest(
     Args:
         report_paths: 생성된 리포트 파일 경로 목록 (존재하는 파일만 해시).
         output_path: 매니페스트 JSON 저장 경로.
-        version: diffinite 버전 문자열.
 
     Returns:
         생성된 매니페스트 파일의 절대경로.
@@ -149,7 +147,7 @@ def write_manifest(
 
     manifest = {
         "tool": "diffinite",
-        "version": version,
+        "version": __version__,
         "created_at": datetime.datetime.now(
             tz=datetime.timezone.utc
         ).isoformat(),

@@ -152,6 +152,33 @@ def main(argv: list[str] | None = None) -> None:
         help="Stamp Bates numbers at the bottom-center of each page",
     )
     parser.add_argument(
+        "--bates-prefix",
+        type=str,
+        default="",
+        help=(
+            "Bates number prefix (e.g. 'PLAINTIFF-'). "
+            "Combined as: {prefix}{number}{suffix}"
+        ),
+    )
+    parser.add_argument(
+        "--bates-suffix",
+        type=str,
+        default="",
+        help=(
+            "Bates number suffix (e.g. '-CONFIDENTIAL'). "
+            "Combined as: {prefix}{number}{suffix}"
+        ),
+    )
+    parser.add_argument(
+        "--bates-start",
+        type=int,
+        default=1,
+        help=(
+            "Starting Bates number (default: 1). "
+            "Useful for continuing numbering across multiple reports."
+        ),
+    )
+    parser.add_argument(
         "--show-filename",
         action="store_true",
         default=False,
@@ -165,6 +192,16 @@ def main(argv: list[str] | None = None) -> None:
             "Collapse unchanged code blocks into a summary row "
             "(shows 3 context lines around each change). "
             "Without this flag, the full diff is shown."
+        ),
+    )
+    parser.add_argument(
+        "--detect-moved",
+        action="store_true",
+        default=False,
+        help=(
+            "Detect moved code blocks and highlight them with distinct colors "
+            "(purple=original position, blue=moved position) instead of "
+            "plain delete/add. Works in both simple and deep modes."
         ),
     )
 
@@ -349,6 +386,12 @@ def main(argv: list[str] | None = None) -> None:
         # Sorting
         sort_by=args.sort_by,
         sort_order=args.sort_order,
+        # Moved block detection
+        detect_moved=args.detect_moved,
+        # Bates prefix/suffix
+        bates_prefix=args.bates_prefix,
+        bates_suffix=args.bates_suffix,
+        bates_start=args.bates_start,
     )
 
 
