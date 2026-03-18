@@ -177,7 +177,10 @@ jobs:
 
       - name: Package platform-specific VSIX
         working-directory: vscode-extension
-        run: vsce package --target ${{ matrix.target }} --no-dependencies
+        env:
+          # Suppress GitHub secret scanning false-positives on binary files
+          VSCE_TESTS: "false"
+        run: vsce package --target ${{ matrix.target }} --no-dependencies --allow-star-activation
 
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4

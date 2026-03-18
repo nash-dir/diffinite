@@ -28,6 +28,9 @@ export interface DiffiniteOptions {
   fileNumber: boolean;
   batesNumber: boolean;
   hash: boolean;
+  encoding: string;
+  sortBy: string;
+  sortOrder: string;
 }
 
 /** Structure of the JSON report produced by `diffinite --report-json`. */
@@ -88,6 +91,9 @@ export function defaultOptions(): DiffiniteOptions {
     fileNumber: true,
     batesNumber: true,
     hash: true,
+    encoding: "auto",
+    sortBy: "",
+    sortOrder: "asc",
   };
 }
 
@@ -144,6 +150,13 @@ function buildArgs(opts: DiffiniteOptions): string[] {
   if (opts.fileNumber) { args.push("--file-number"); }
   if (opts.batesNumber) { args.push("--bates-number"); }
   if (opts.hash) { args.push("--hash"); }
+  if (opts.encoding && opts.encoding !== "auto") {
+    args.push("--encoding", opts.encoding);
+  }
+  if (opts.sortBy) {
+    args.push("--sort-by", opts.sortBy);
+    args.push("--sort-order", opts.sortOrder || "asc");
+  }
   return args;
 }
 

@@ -377,6 +377,11 @@ def run_pipeline(
     # Evidence integrity
     embed_hash: bool = False,
     bundle_path: str | None = None,
+    # Encoding
+    encoding: str | None = None,
+    # Sorting
+    sort_by: str | None = None,
+    sort_order: str = "asc",
 ) -> None:
     """Execute the full diff-to-report pipeline.
 
@@ -448,8 +453,8 @@ def run_pipeline(
         abs_b = str(root_b / m.rel_path_b)
         ext = Path(m.rel_path_a).suffix.lower()
 
-        text_a = read_file(abs_a)
-        text_b = read_file(abs_b)
+        text_a = read_file(abs_a, encoding=encoding)
+        text_b = read_file(abs_b, encoding=encoding)
 
         if text_a is None or text_b is None:
             results.append(DiffResult(
@@ -491,8 +496,8 @@ def run_pipeline(
         abs_b = str(root_b / m.rel_path_b)
         ext = Path(m.rel_path_a).suffix.lower()
 
-        text_a = read_file(abs_a)
-        text_b = read_file(abs_b)
+        text_a = read_file(abs_a, encoding=encoding)
+        text_b = read_file(abs_b, encoding=encoding)
         if text_a is None or text_b is None:
             continue
         if not compare_comment:
@@ -518,6 +523,22 @@ def run_pipeline(
         )
 
     total_files = len(results)
+
+    # ── Sort results ──────────────────────────────────────────────
+    if sort_by:
+        reverse = sort_order == "desc"
+        if sort_by == "filename":
+            results.sort(key=lambda r: r.match.rel_path_a.lower(), reverse=reverse)
+        elif sort_by == "ratio":
+            results.sort(key=lambda r: r.ratio, reverse=reverse)
+        elif sort_by == "size":
+            def _file_size(r: DiffResult) -> int:
+                try:
+                    return os.path.getsize(str(root_a / r.match.rel_path_a))
+                except OSError:
+                    return 0
+            results.sort(key=_file_size, reverse=reverse)
+        logger.info("  Sorted by %s (%s)", sort_by, sort_order)
 
     # Deep Compare (only in deep mode)
     deep_results = None

@@ -95,6 +95,34 @@ def main(argv: list[str] | None = None) -> None:
         default=FUZZY_THRESHOLD,
         help=f"Fuzzy matching threshold 0–100 (default: {FUZZY_THRESHOLD})",
     )
+    parser.add_argument(
+        "--encoding",
+        default="auto",
+        help=(
+            "Source file encoding. 'auto' (default) uses charset-normalizer "
+            "auto-detection with Korean-optimized fallback (utf-8 → euc-kr → cp949). "
+            "Specify an explicit encoding (e.g. euc-kr, utf-8, cp949, shift_jis, "
+            "gb2312) to force-decode all files with that encoding."
+        ),
+    )
+    parser.add_argument(
+        "--sort-by",
+        choices=["filename", "size", "ratio"],
+        default=None,
+        dest="sort_by",
+        help=(
+            "Sort matched file pairs in the report. "
+            "'filename' sorts by file path, 'size' by file size, "
+            "'ratio' by similarity ratio. Default: insertion order (no sort)."
+        ),
+    )
+    parser.add_argument(
+        "--sort-order",
+        choices=["asc", "desc"],
+        default="asc",
+        dest="sort_order",
+        help="Sort direction (default: asc). Only effective with --sort-by.",
+    )
 
     # ── Output modes ──────────────────────────────────────────────────
     parser.add_argument(
@@ -280,6 +308,9 @@ def main(argv: list[str] | None = None) -> None:
         autojunk=not args.no_autojunk,
     )
 
+    # Resolve encoding
+    encoding = args.encoding if args.encoding.lower() != "auto" else None
+
     run_pipeline(
         dir_a=args.dir_a,
         dir_b=args.dir_b,
@@ -313,6 +344,11 @@ def main(argv: list[str] | None = None) -> None:
         report_html=args.report_html,
         report_md=args.report_md,
         report_json=args.report_json,
+        # Encoding
+        encoding=encoding,
+        # Sorting
+        sort_by=args.sort_by,
+        sort_order=args.sort_order,
     )
 
 
