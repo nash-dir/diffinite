@@ -54,3 +54,54 @@ class TestGenerateHtmlDiff:
             filename_a="data.xyz", filename_b="data.xyz",
         )
         assert "<table" in html
+
+
+class TestIntraLineWordDiff:
+    """by_word=True 시 replace 블록에서 단어 단위 하이라이팅 검증."""
+
+    def test_single_word_change_produces_word_spans(self):
+        """한 단어만 바뀌면 word-del/word-add span이 생성되어야 한다."""
+        html = generate_html_diff(
+            "return calculateSum(a, b)\n",
+            "return calculateSum(a, c)\n",
+            filename_a="test.py", filename_b="test.py",
+            by_word=True,
+        )
+        assert "word-del" in html
+        assert "word-add" in html
+        assert "chg" in html
+
+    def test_by_word_false_no_word_spans(self):
+        """by_word=False이면 word-del/word-add span이 없어야 한다."""
+        html = generate_html_diff(
+            "return a\n",
+            "return b\n",
+            filename_a="test.py", filename_b="test.py",
+            by_word=False,
+        )
+        assert "word-del" not in html
+        assert "word-add" not in html
+
+    def test_identical_lines_no_word_spans(self):
+        """동일한 줄에는 word-del/word-add가 없어야 한다."""
+        html = generate_html_diff(
+            "hello world\n",
+            "hello world\n",
+            filename_a="test.txt", filename_b="test.txt",
+            by_word=True,
+        )
+        assert "word-del" not in html
+        assert "word-add" not in html
+        assert "chg" not in html
+
+    def test_unequal_line_count_partial_fallback(self):
+        """줄 수가 다르면 대응 없는 줄은 기존 del/add 방식으로 처리."""
+        html = generate_html_diff(
+            "line1\nline2\nline3\n",
+            "line1\nmodified2\n",
+            filename_a="test.txt", filename_b="test.txt",
+            by_word=True,
+        )
+        # 대응 없는 줄(line3)은 기존 del 방식
+        assert "del" in html
+

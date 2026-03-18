@@ -382,6 +382,12 @@ def run_pipeline(
     # Sorting
     sort_by: str | None = None,
     sort_order: str = "asc",
+    # Moved block detection
+    detect_moved: bool = False,
+    # Bates prefix/suffix
+    bates_prefix: str = "",
+    bates_suffix: str = "",
+    bates_start: int = 1,
 ) -> None:
     """Execute the full diff-to-report pipeline.
 
@@ -513,6 +519,8 @@ def run_pipeline(
             context_lines=3 if collapse_identical else -1,
             ln_col_width=ln_col_width,
             autojunk=autojunk,
+            by_word=by_word,
+            detect_moved=detect_moved,
         )
         results[m_idx] = DiffResult(
             match=r.match,
@@ -603,6 +611,9 @@ def run_pipeline(
             total_files=total_files,
             metadata=metadata,
             hash_table_html=hash_table_html,
+            bates_prefix=bates_prefix,
+            bates_suffix=bates_suffix,
+            bates_start=bates_start,
         )
 
     logger.info("Done (reports) ✓")
@@ -660,6 +671,9 @@ def _generate_pdf_report(
     total_files: int,
     metadata: AnalysisMetadata | None = None,
     hash_table_html: str | None = None,
+    bates_prefix: str = "",
+    bates_suffix: str = "",
+    bates_start: int = 1,
 ) -> None:
     """Generate PDF report with divide-and-conquer merging."""
     if no_merge:
@@ -711,7 +725,10 @@ def _generate_pdf_report(
         if no_merge:
             if show_bates_number:
                 _apply_bates_to_individual(
-                    [cover_dest] + [p for p, _ in diff_pdf_pairs]
+                    [cover_dest] + [p for p, _ in diff_pdf_pairs],
+                    start=bates_start,
+                    prefix=bates_prefix,
+                    suffix=bates_suffix,
                 )
             logger.info("  No-merge mode — %d PDFs saved",
                         1 + len(diff_pdf_pairs))
@@ -723,12 +740,23 @@ def _generate_pdf_report(
                 logger.info("  Stamping Bates numbers …")
                 bates_tmp = os.path.join(tmpdir, "bates_tmp.pdf")
                 os.replace(output_pdf, bates_tmp)
-                add_bates_numbers(bates_tmp, output_pdf)
+                add_bates_numbers(
+                    bates_tmp, output_pdf,
+                    start=bates_start,
+                    prefix=bates_prefix,
+                    suffix=bates_suffix,
+                )
         else:
             logger.error("No PDF parts were generated — cannot create report")
 
 
-def _apply_bates_to_individual(pdf_paths: list[str]) -> None:
+def _apply_bates_to_individual(
+    pdf_paths: list[str],
+    *,
+    start: int = 1,
+    prefix: str = "",
+    suffix: str = "",
+) -> None:
     """Stamp sequential Bates numbers across individual PDFs."""
     from pypdf import PdfReader as _PR
 
@@ -740,10 +768,10 @@ def _apply_bates_to_individual(pdf_paths: list[str]) -> None:
             page_counts.append(0)
 
     total = sum(page_counts)
-    digits = max(4, len(str(total)))
-    offset = 0
+    digits = max(4, len(str(start + total - 1)))
+    offset = start
     for p, pc in zip(pdf_paths, page_counts):
         if pc == 0:
             continue
-        stamp_bates_inplace(p, offset, digits)
+        stamp_bates_inplace(p, offset, digits, prefix=prefix, suffix=suffix)
         offset += pc

@@ -141,7 +141,12 @@ table.summary tr:nth-child(even) {
 }
 .del { background: #fee8e9; }
 .add { background: #dfd; }
+.chg { background: #fff8e1; }
+.word-del { background: rgba(241, 76, 76, 0.30); border-radius: 2px; padding: 0 2px; }
+.word-add { background: rgba(78, 201, 176, 0.30); border-radius: 2px; padding: 0 2px; }
 .empty { background: #f1f1f1; }
+.moved-del { background: #e8d5f5; }
+.moved-add { background: #d5e8f5; }
 ul.unmatched {
     font-size: 11px;
     color: #a00;
@@ -604,18 +609,30 @@ def merge_with_bookmarks(
 # ---------------------------------------------------------------------------
 # Bates numbering
 # ---------------------------------------------------------------------------
-def add_bates_numbers(input_path: str, output_path: str) -> None:
+def add_bates_numbers(
+    input_path: str,
+    output_path: str,
+    *,
+    start: int = 1,
+    prefix: str = "",
+    suffix: str = "",
+) -> None:
     """Stamp Bates numbers on each page of a merged PDF.
 
     Preserves existing bookmarks/outline by cloning the full document
     before overlaying Bates numbers.
+
+    Args:
+        start: First Bates number (default 1).
+        prefix: Bates prefix, e.g. ``"PLAINTIFF-"``.
+        suffix: Bates suffix, e.g. ``"-CONFIDENTIAL"``.
     """
     reader = PdfReader(input_path)
     writer = PdfWriter()
     writer.clone_document_from_reader(reader)
 
     total_pages = len(writer.pages)
-    digits = max(4, len(str(total_pages)))
+    digits = max(4, len(str(start + total_pages - 1)))
 
     for i, page in enumerate(writer.pages):
         box = page.mediabox
@@ -624,8 +641,9 @@ def add_bates_numbers(input_path: str, output_path: str) -> None:
 
         buf = io.BytesIO()
         c = canvas.Canvas(buf, pagesize=(pw, ph))
-        bates = str(i + 1).zfill(digits)
-        c.setFont("Helvetica", 9)
+        bates = f"{prefix}{str(start + i).zfill(digits)}{suffix}"
+        font_size = 7 if len(bates) > 30 else 9
+        c.setFont("Helvetica", font_size)
         c.setFillColorRGB(0.5, 0.5, 0.5)
         c.drawCentredString(pw / 2, 18, bates)
         c.save()
@@ -642,7 +660,14 @@ def add_bates_numbers(input_path: str, output_path: str) -> None:
     logger.info("Bates numbers added → %s", out.resolve())
 
 
-def stamp_bates_inplace(pdf_path: str, start_number: int, digits: int) -> None:
+def stamp_bates_inplace(
+    pdf_path: str,
+    start_number: int,
+    digits: int,
+    *,
+    prefix: str = "",
+    suffix: str = "",
+) -> None:
     """Stamp Bates numbers on a single PDF file in-place."""
     reader = PdfReader(pdf_path)
     writer = PdfWriter()
@@ -654,8 +679,9 @@ def stamp_bates_inplace(pdf_path: str, start_number: int, digits: int) -> None:
 
         buf = io.BytesIO()
         c = canvas.Canvas(buf, pagesize=(pw, ph))
-        bates = str(start_number + i + 1).zfill(digits)
-        c.setFont("Helvetica", 9)
+        bates = f"{prefix}{str(start_number + i).zfill(digits)}{suffix}"
+        font_size = 7 if len(bates) > 30 else 9
+        c.setFont("Helvetica", font_size)
         c.setFillColorRGB(0.5, 0.5, 0.5)
         c.drawCentredString(pw / 2, 18, bates)
         c.save()

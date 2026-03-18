@@ -13,6 +13,7 @@ report/
 
 # Legacy & dev artifacts
 legacy/
+tdd/
 
 # VSCode Extension build artifacts
 vscode-extension/node_modules/

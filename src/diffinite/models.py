@@ -198,3 +198,35 @@ class FileHashEntry:
 
     modified_at: str
     """파일 최종 수정 시각 (ISO 8601)."""
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Moved Block 탐지 결과
+# ──────────────────────────────────────────────────────────────────────
+@dataclass(frozen=True)
+class MovedBlock:
+    """이동된 코드 블록 하나를 나타내는 VO.
+
+    ``differ.detect_moved_blocks()``가 생성한다.
+    delete 영역(A-side)의 줄들이 insert 영역(B-side)으로 이동한 것을 의미한다.
+
+    ``frozen=True``로 불변 — 결과 집합의 안정성 보장.
+    """
+
+    del_start: int
+    """A-side 시작 줄 인덱스 (0-based, inclusive)."""
+
+    del_end: int
+    """A-side 끝 줄 인덱스 (0-based, exclusive)."""
+
+    ins_start: int
+    """B-side 시작 줄 인덱스 (0-based, inclusive)."""
+
+    ins_end: int
+    """B-side 끝 줄 인덱스 (0-based, exclusive)."""
+
+    move_id: int = 0
+    """고유 이동 ID. 같은 move_id를 가진 del/ins 블록은 시각적으로 페어링된다."""
+
+    confidence: float = 1.0
+    """매칭 신뢰도 (0.0–1.0). exact match는 1.0, fuzzy match는 낮아진다."""

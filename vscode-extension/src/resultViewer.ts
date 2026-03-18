@@ -341,6 +341,11 @@ const CSS = `
   .difftbl .del { background: rgba(241, 76, 76, 0.15); }
   .difftbl .add { background: rgba(78, 201, 176, 0.15); }
   .difftbl .empty { background: rgba(255,255,255,0.02); }
+  .difftbl .chg { background: rgba(255, 200, 50, 0.10); }
+  .difftbl .moved-del { background: rgba(168, 85, 247, 0.18); }
+  .difftbl .moved-add { background: rgba(59, 130, 246, 0.18); }
+  .word-del { background: rgba(241, 76, 76, 0.35); border-radius: 2px; padding: 0 2px; }
+  .word-add { background: rgba(78, 201, 176, 0.35); border-radius: 2px; padding: 0 2px; }
   .difftbl tr.fold td { text-align: center; color: var(--fg-dim); background: rgba(255,255,255,0.04); }
 
   /* difflib HtmlDiff inline change markers */
