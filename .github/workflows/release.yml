@@ -177,14 +177,11 @@ jobs:
 
       - name: Package platform-specific VSIX
         working-directory: vscode-extension
-        env:
-          VSCE_DISABLE_SECRETS_SCAN: "1"
         run: >-
           vsce package
           --target ${{ matrix.target }}
           --no-dependencies
           --allow-star-activation
-          --allow-package-all-secrets
 
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4
