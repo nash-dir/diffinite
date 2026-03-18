@@ -82,6 +82,8 @@ Each matched pair gets a side-by-side diff page with:
 
 - **Green highlight** — Lines present only in File B (additions)
 - **Red highlight** — Lines present only in File A (deletions)
+- **Purple highlight** — Lines moved from this position (`--detect-moved`)
+- **Blue highlight** — Lines moved to this position (`--detect-moved`)
 - **No highlight** — Identical lines (with configurable context folding)
 
 ### Deep Compare Section
@@ -102,7 +104,7 @@ Jaccard similarity is a well-defined set metric: `|A∩B| / |A∪B|`. Its interp
 |--------|-----------|----------|
 | `--page-number` | `Page 3 / 47` | Bottom-right |
 | `--file-number` | `File 2 / 12` | Bottom-left |
-| `--bates-number` | `DIFF-000003` | Bottom-center |
+| `--bates-number` | `TEST-000003-CONF` | Bottom-center |
 | `--show-filename` | `com/example/Foo.java` | Top-right |
 
 ---
@@ -141,6 +143,7 @@ dir_b    Path to the comparison source directory (B)
 | `--squash-blanks` | off | Collapse runs of 3+ blank lines. ⚠️ Changes line numbers — not recommended for forensic line-tracing. |
 | `--threshold N` | `60` | Fuzzy file-name matching threshold (0–100). Lower = more aggressive matching. |
 | `--collapse-identical` | off | Fold unchanged code blocks (3 context lines around each change) |
+| `--detect-moved` | off | Detect moved code blocks and highlight with distinct colors (purple=original, blue=destination) |
 
 ### Deep Compare Options
 
@@ -166,6 +169,9 @@ dir_b    Path to the comparison source directory (B)
 | `--page-number` | Show `Page n / N` at the bottom-right |
 | `--file-number` | Show `File n / N` at the bottom-left |
 | `--bates-number` | Stamp sequential Bates numbers at the bottom-center |
+| `--bates-prefix TEXT` | Bates number prefix (e.g. `PLAINTIFF-`). Combined as: `{prefix}{number}{suffix}` |
+| `--bates-suffix TEXT` | Bates number suffix (e.g. `-CONFIDENTIAL`) |
+| `--bates-start N` | Starting Bates number (default: `1`). Useful for continuing numbering across reports. |
 | `--show-filename` | Show filename at the top-right |
 
 ---
@@ -178,8 +184,9 @@ dir_b    Path to the comparison source directory (B)
 # Full forensic report with all annotations
 diffinite plaintiff_code/ defendant_code/ -o exhibit_A.pdf \
     --no-comments \
-    --bates-number --page-number --file-number --show-filename \
-    --collapse-identical
+    --bates-number --bates-prefix "CASE2026-" --bates-suffix "-CONFIDENTIAL" \
+    --bates-start 1 --page-number --file-number --show-filename \
+    --collapse-identical --detect-moved
 ```
 
 ### Code Audit (Quick HTML)
