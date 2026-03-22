@@ -3,7 +3,7 @@
 import pytest
 
 from diffinite.models import DiffResult, FileMatch, DeepMatchResult
-from diffinite.pdf_gen import build_cover_body, build_diff_page_html
+from diffinite.pdf_gen import build_cover_body, build_diff_page_html, _break_path
 
 
 # ---------------------------------------------------------------------------
@@ -37,7 +37,7 @@ def _cover(results=None, *, deep_results=None):
         dir_a="dir_a",
         dir_b="dir_b",
         by_word=False,
-        compare_comment=True,
+        strip_comments=False,
         deep_results=deep_results,
     )
 
@@ -55,8 +55,9 @@ class TestBuildCoverHtml:
 
     def test_contains_file_names(self):
         html = _cover()
-        assert "handler.java" in html
-        assert "looper.java" in html
+        # _break_path inserts &#8203; after path separators (., /, \, _)
+        assert "handler." in html
+        assert "looper." in html
 
     def test_contains_ratio(self):
         html = _cover()
@@ -79,10 +80,10 @@ class TestBuildCoverHtml:
             dir_a="left",
             dir_b="right",
             by_word=False,
-            compare_comment=True,
+            strip_comments=False,
         )
-        assert "orphan_a.py" in html
-        assert "orphan_b.py" in html
+        # _break_path inserts &#8203; after separators, so check partial strings
+        assert "orphan" in html
 
     def test_deep_results_without_channels(self):
         deep = [
@@ -92,8 +93,8 @@ class TestBuildCoverHtml:
             ),
         ]
         html = _cover(deep_results=deep)
-        assert "foo.py" in html
-        assert "bar.py" in html
+        assert "foo." in html
+        assert "bar." in html
 
     def test_deep_results_display(self):
         deep = [
@@ -104,8 +105,8 @@ class TestBuildCoverHtml:
             ),
         ]
         html = _cover(deep_results=deep)
-        assert "foo.py" in html
-        assert "bar.py" in html
+        assert "foo." in html
+        assert "bar." in html
         assert "50" in html  # shared hashes
 
 
@@ -155,3 +156,67 @@ class TestBuildDiffPageHtml:
             show_filename=True,
         )
         assert "annotated.py" in html
+
+
+# ---------------------------------------------------------------------------
+# _break_path tests
+# ---------------------------------------------------------------------------
+class TestBreakPath:
+    """Verify _break_path inserts zero-width spaces at path separators."""
+
+    def test_slash(self):
+        result = _break_path("src/main/java")
+        assert "src/&#8203;main/&#8203;java" == result
+
+    def test_backslash(self):
+        result = _break_path("src\\main\\java")
+        assert "src\\&#8203;main\\&#8203;java" == result
+
+    def test_dot(self):
+        result = _break_path("handler.java")
+        assert "handler.&#8203;java" == result
+
+    def test_underscore(self):
+        result = _break_path("my_file_name")
+        assert "my_&#8203;file_&#8203;name" == result
+
+    def test_combined(self):
+        result = _break_path("src/com/example/my_handler.java")
+        assert "&#8203;" in result
+
+    def test_empty(self):
+        assert _break_path("") == ""
+
+
+# ---------------------------------------------------------------------------
+# include_uncompared tests
+# ---------------------------------------------------------------------------
+class TestIncludeUncompared:
+    """Verify include_uncompared parameter on build_cover_body."""
+
+    def test_excludes_unmatched_when_false(self):
+        html = build_cover_body(
+            _make_results(),
+            unmatched_a=["orphan_a.py"],
+            unmatched_b=["orphan_b.py"],
+            dir_a="left",
+            dir_b="right",
+            by_word=False,
+            strip_comments=False,
+            include_uncompared=False,
+        )
+        assert "orphan" not in html
+        assert "Unmatched Files" not in html
+
+    def test_includes_unmatched_by_default(self):
+        html = build_cover_body(
+            _make_results(),
+            unmatched_a=["orphan_a.py"],
+            unmatched_b=["orphan_b.py"],
+            dir_a="left",
+            dir_b="right",
+            by_word=False,
+            strip_comments=False,
+        )
+        assert "orphan" in html
+        assert "Unmatched Files" in html

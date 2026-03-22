@@ -90,8 +90,8 @@ function buildResultHtml(report: DiffiniteReport): string {
   let summaryHtml = `
     <div class="summary-bar">
       <span class="stat"><strong>${summary.matched_pairs}</strong> matched pairs</span>
-      <span class="stat"><strong>${summary.unmatched_a}</strong> unmatched (A)</span>
-      <span class="stat"><strong>${summary.unmatched_b}</strong> unmatched (B)</span>
+      <span class="stat"><strong>${summary.unmatched_a_count}</strong> unmatched (A)</span>
+      <span class="stat"><strong>${summary.unmatched_b_count}</strong> unmatched (B)</span>
     </div>
   `;
 

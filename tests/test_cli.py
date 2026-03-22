@@ -69,7 +69,7 @@ class TestDeepCompareArgs:
             "--mode", "deep",
             "--k-gram", "5",
             "--window", "3",
-            "--threshold-deep", "0.20",
+            "--threshold-deep", "20",
         ])
 
 
@@ -84,7 +84,7 @@ class TestAnnotationsAndReportFlags:
             "-o", str(tmp_path / "out.pdf"),
             "--collapse-identical",
             "--page-number", "--file-number",
-            "--bates-number", "--show-filename",
+            "--bates-number", "--filename",
         ])
 
     def test_threshold_accepts_value(self, tmp_path):
@@ -107,3 +107,41 @@ class TestAnnotationsAndReportFlags:
         ])
         from pathlib import Path
         assert Path(json_path).exists()
+
+
+class TestIncludeUncomparedFlag:
+    """Verify --include-uncompared / --no-include-uncompared flags."""
+
+    def test_include_uncompared_default_true(self, tmp_path):
+        """Default behavior includes uncompared files."""
+        d_a = tmp_path / "a"; d_a.mkdir()
+        d_b = tmp_path / "b"; d_b.mkdir()
+        (d_a / "only_a.py").write_text("x = 1\n", encoding="utf-8")
+        json_path = str(tmp_path / "out.json")
+        main([
+            str(d_a), str(d_b),
+            "--report-json", json_path,
+        ])
+        import json
+        from pathlib import Path
+        data = json.loads(Path(json_path).read_text(encoding="utf-8"))
+        assert "only_a.py" in data["unmatched_a"]
+
+    def test_no_include_uncompared_excludes(self, tmp_path):
+        """--no-include-uncompared excludes unmatched file lists."""
+        d_a = tmp_path / "a"; d_a.mkdir()
+        d_b = tmp_path / "b"; d_b.mkdir()
+        (d_a / "only_a.py").write_text("x = 1\n", encoding="utf-8")
+        json_path = str(tmp_path / "out.json")
+        main([
+            str(d_a), str(d_b),
+            "--report-json", json_path,
+            "--no-include-uncompared",
+        ])
+        import json
+        from pathlib import Path
+        data = json.loads(Path(json_path).read_text(encoding="utf-8"))
+        assert data["unmatched_a"] == []
+        assert data["unmatched_b"] == []
+        # Summary counts should still show the real values
+        assert data["summary"]["unmatched_a_count"] == 1

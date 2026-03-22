@@ -23,9 +23,9 @@ class TestPipelineE2E:
         run_pipeline(
             dir_a=EXAMPLE_LEFT,
             dir_b=EXAMPLE_RIGHT,
-            output_pdf=output,
+            report_pdf=output,
             by_word=False,
-            compare_comment=False,
+            strip_comments=True,
         )
         assert Path(output).exists()
         assert Path(output).stat().st_size > 0
@@ -37,7 +37,7 @@ class TestPipelineE2E:
         run_pipeline(
             dir_a=EXAMPLE_LEFT,
             dir_b=EXAMPLE_RIGHT,
-            output_pdf=output,
+            report_pdf=output,
             exec_mode="deep",
             workers=2,
             kgram_size=5,
@@ -53,7 +53,7 @@ class TestPipelineE2E:
         run_pipeline(
             dir_a=EXAMPLE_LEFT,
             dir_b=EXAMPLE_RIGHT,
-            output_pdf=output,
+            report_pdf=output,
             no_merge=True,
         )
         files_dir = tmp_path / "individual_files"
