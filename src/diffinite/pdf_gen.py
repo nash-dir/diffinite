@@ -82,6 +82,7 @@ table.summary th, table.summary td {
     border: 1px solid #ccc;
     padding: 5px 8px;
     text-align: left;
+    word-break: break-all;
 }
 table.summary th {
     background: #0078d4;
@@ -178,6 +179,7 @@ table.deep th, table.deep td {
     border: 1px solid #ccc;
     padding: 4px 6px;
     text-align: left;
+    word-break: break-all;
 }
 table.deep th {
     background: #6c5ce7;
@@ -212,6 +214,27 @@ table.deep tr:nth-child(even) {
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+def _break_path(path_str: str) -> str:
+    """Insert zero-width spaces after path separator symbols for line-breaking.
+
+    xhtml2pdf는 긴 파일 경로를 자동 줄바꿈하지 못하므로,
+    경로 구분자(/, \\, ., _) 뒤에 zero-width space를 삽입하여
+    자연스러운 줄바꿈 지점을 제공한다.
+
+    Args:
+        path_str: HTML-escaped 경로 문자열.
+
+    Returns:
+        줄바꿈 힌트가 삽입된 경로 문자열.
+    """
+    # HTML entity for zero-width space
+    zwsp = "&#8203;"
+    result = path_str
+    for sep in ("/", "\\", ".", "_"):
+        result = result.replace(sep, sep + zwsp)
+    return result
+
+
 def _ratio_badge(ratio: float) -> str:
     """Return an HTML badge span for a similarity ratio."""
     pct = ratio * 100
@@ -251,7 +274,7 @@ def build_hash_table_html(
             parts.append(
                 f'<tr>'
                 f'<td>{idx}</td>'
-                f'<td>{html.escape(h.rel_path)}</td>'
+                f'<td>{_break_path(html.escape(h.rel_path))}</td>'
                 f'<td style="font-family:monospace;font-size:8px">{short_hash}</td>'
                 f'<td>{h.size_bytes:,}</td>'
                 f'</tr>\n'
@@ -368,17 +391,18 @@ def build_cover_body(
     dir_a: str,
     dir_b: str,
     by_word: bool,
-    compare_comment: bool,
+    strip_comments: bool,
     *,
     deep_results: Optional[list[DeepMatchResult]] = None,
     metadata: Optional["AnalysisMetadata"] = None,
     hash_table_html: Optional[str] = None,
+    include_uncompared: bool = True,
 ) -> str:
     """Build the cover-page body fragment (no DOCTYPE/html/head wrapper)."""
     from diffinite.models import AnalysisMetadata as _AM  # avoid circular at module level
 
     unit = "word" if by_word else "line"
-    comment_mode = "included" if compare_comment else "excluded"
+    comment_mode = "stripped" if strip_comments else "included"
 
     # Analysis metadata banner (transparency)
     meta_html = ""
@@ -396,26 +420,43 @@ def build_cover_body(
 
     summary_rows = ""
     for idx, r in enumerate(results, 1):
-        badge = _ratio_badge(r.ratio)
-        err = (
-            f' <em style="color:red">({html.escape(r.error)})</em>'
-            if r.error else ""
-        )
-        summary_rows += (
-            f"<tr>"
-            f"<td>{idx}</td>"
-            f"<td>{html.escape(r.match.rel_path_a)}</td>"
-            f"<td>{html.escape(r.match.rel_path_b)}</td>"
-            f"<td>{r.match.similarity:.1f}</td>"
-            f"<td>{badge}{err}</td>"
-            f"<td style='color:green'>+{r.additions}</td>"
-            f"<td style='color:red'>-{r.deletions}</td>"
-            f"</tr>\n"
-        )
+        if r.binary:
+            if r.hash_match:
+                status = '<span class="badge badge-high">✓ Binary Match</span>'
+            else:
+                status = '<span class="badge badge-low">✗ Binary Mismatch</span>'
+            summary_rows += (
+                f"<tr>"
+                f"<td>{idx}</td>"
+                f"<td>{_break_path(html.escape(r.match.rel_path_a))}</td>"
+                f"<td>{_break_path(html.escape(r.match.rel_path_b))}</td>"
+                f"<td>{r.match.similarity:.1f}</td>"
+                f"<td>{status}</td>"
+                f"<td>—</td>"
+                f"<td>—</td>"
+                f"</tr>\n"
+            )
+        else:
+            badge = _ratio_badge(r.ratio)
+            err = (
+                f' <em style="color:red">({html.escape(r.error)})</em>'
+                if r.error else ""
+            )
+            summary_rows += (
+                f"<tr>"
+                f"<td>{idx}</td>"
+                f"<td>{_break_path(html.escape(r.match.rel_path_a))}</td>"
+                f"<td>{_break_path(html.escape(r.match.rel_path_b))}</td>"
+                f"<td>{r.match.similarity:.1f}</td>"
+                f"<td>{badge}{err}</td>"
+                f"<td style='color:green'>+{r.additions}</td>"
+                f"<td style='color:red'>-{r.deletions}</td>"
+                f"</tr>\n"
+            )
 
-    # Unmatched lists
+    # Unmatched lists (only when include_uncompared is True)
     unmatched_html = ""
-    if unmatched_a or unmatched_b:
+    if include_uncompared and (unmatched_a or unmatched_b):
         unmatched_html += "<h2>Unmatched Files</h2>\n"
         if unmatched_a:
             unmatched_html += (
@@ -423,7 +464,7 @@ def build_cover_body(
                 "<ul class='unmatched'>\n"
             )
             for f in unmatched_a:
-                unmatched_html += f"  <li>{html.escape(f)}</li>\n"
+                unmatched_html += f"  <li>{_break_path(html.escape(f))}</li>\n"
             unmatched_html += "</ul>\n"
         if unmatched_b:
             unmatched_html += (
@@ -431,7 +472,7 @@ def build_cover_body(
                 "<ul class='unmatched'>\n"
             )
             for f in unmatched_b:
-                unmatched_html += f"  <li>{html.escape(f)}</li>\n"
+                unmatched_html += f"  <li>{_break_path(html.escape(f))}</li>\n"
             unmatched_html += "</ul>\n"
 
     deep_html = ""
@@ -447,8 +488,8 @@ def build_cover_body(
                 jbadge = _ratio_badge(jaccard)
                 deep_html += (
                     f"<tr>"
-                    f"<td>{html.escape(dr.file_a)}</td>"
-                    f"<td>{html.escape(b_file)}</td>"
+                    f"<td>{_break_path(html.escape(dr.file_a))}</td>"
+                    f"<td>{_break_path(html.escape(b_file))}</td>"
                     f"<td>{shared}</td>"
                     f"<td>{jbadge}</td>"
                     f"</tr>\n"

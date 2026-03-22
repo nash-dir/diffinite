@@ -15,7 +15,7 @@ import { getPythonPath } from "./config";
 /** Options collected from the GUI panel. */
 export interface DiffiniteOptions {
   mode: "simple" | "deep";
-  noComments: boolean;
+  stripComments: boolean;
   byWord: boolean;
   normalize: boolean;
   collapseIdentical: boolean;
@@ -35,6 +35,8 @@ export interface DiffiniteOptions {
   batesPrefix: string;
   batesSuffix: string;
   batesStart: number;
+  includeUncompared: boolean;
+  binaryHandling: "exclude" | "hash" | "error";
 }
 
 /** Structure of the JSON report produced by `diffinite --report-json`. */
@@ -52,8 +54,8 @@ export interface DiffiniteReport {
   comment_mode: string;
   summary: {
     matched_pairs: number;
-    unmatched_a: number;
-    unmatched_b: number;
+    unmatched_a_count: number;
+    unmatched_b_count: number;
   };
   results: Array<{
     file_a: string;
@@ -82,7 +84,7 @@ export interface DiffiniteReport {
 export function defaultOptions(): DiffiniteOptions {
   return {
     mode: "deep",
-    noComments: false,
+    stripComments: false,
     byWord: false,
     normalize: false,
     collapseIdentical: false,
@@ -91,7 +93,7 @@ export function defaultOptions(): DiffiniteOptions {
     threshold: 60,
     kGram: 5,
     window: 4,
-    thresholdDeep: 0.05,
+    thresholdDeep: 5,
     pageNumber: true,
     fileNumber: true,
     batesNumber: true,
@@ -102,6 +104,8 @@ export function defaultOptions(): DiffiniteOptions {
     batesPrefix: "",
     batesSuffix: "",
     batesStart: 1,
+    includeUncompared: true,
+    binaryHandling: "hash",
   };
 }
 
@@ -145,7 +149,7 @@ function resolveBinary(): { exe: string; prefixArgs: string[] } {
  */
 function buildArgs(opts: DiffiniteOptions): string[] {
   const args: string[] = ["--mode", opts.mode];
-  if (opts.noComments) { args.push("--no-comments"); }
+  if (opts.stripComments) { args.push("--strip-comments"); }
   if (opts.byWord) { args.push("--by-word"); }
   if (opts.normalize) { args.push("--normalize"); }
   if (opts.collapseIdentical) { args.push("--collapse-identical"); }
@@ -174,6 +178,12 @@ function buildArgs(opts: DiffiniteOptions): string[] {
   }
   if (opts.batesStart > 1) {
     args.push("--bates-start", String(opts.batesStart));
+  }
+  if (!opts.includeUncompared) {
+    args.push("--no-include-uncompared");
+  }
+  if (opts.binaryHandling !== "hash") {
+    args.push("--binary-handling", opts.binaryHandling);
   }
   return args;
 }

@@ -78,8 +78,8 @@ function buildOptionsHtml(defaults: DiffiniteOptions, presets: BatesPreset[]): s
     <section>
       <h2>Comparison</h2>
       <div class="field checkbox">
-        <input type="checkbox" id="noComments" ${defaults.noComments ? "checked" : ""}>
-        <label for="noComments">Strip comments before comparison</label>
+        <input type="checkbox" id="stripComments" ${defaults.stripComments ? "checked" : ""}>
+        <label for="stripComments">Strip comments before comparison</label>
       </div>
       <div class="field checkbox">
         <input type="checkbox" id="byWord" ${defaults.byWord ? "checked" : ""}>
@@ -96,6 +96,18 @@ function buildOptionsHtml(defaults: DiffiniteOptions, presets: BatesPreset[]): s
       <div class="field">
         <label for="threshold">File name matching threshold (0–100)</label>
         <input type="number" id="threshold" value="${defaults.threshold}" min="0" max="100" step="1">
+      </div>
+      <div class="field">
+        <label for="binaryHandling">Binary files</label>
+        <select id="binaryHandling">
+          <option value="exclude" ${defaults.binaryHandling === "exclude" ? "selected" : ""}>Exclude</option>
+          <option value="hash" ${defaults.binaryHandling === "hash" ? "selected" : ""}>Hash compare only</option>
+          <option value="error" ${defaults.binaryHandling === "error" ? "selected" : ""}>Show error</option>
+        </select>
+      </div>
+      <div class="field checkbox">
+        <input type="checkbox" id="noAutojunk" ${defaults.noAutojunk ? "checked" : ""}>
+        <label for="noAutojunk">Disable autojunk (precise but slower)</label>
       </div>
     </section>
 
@@ -114,8 +126,8 @@ function buildOptionsHtml(defaults: DiffiniteOptions, presets: BatesPreset[]): s
         <input type="number" id="window" value="${defaults.window}" min="1" max="20" step="1">
       </div>
       <div class="field">
-        <label for="thresholdDeep">Min Jaccard threshold</label>
-        <input type="number" id="thresholdDeep" value="${defaults.thresholdDeep}" min="0" max="1" step="0.01">
+        <label for="thresholdDeep">Min Jaccard threshold (0–100)</label>
+        <input type="number" id="thresholdDeep" value="${defaults.thresholdDeep}" min="0" max="100" step="1">
       </div>
     </section>
 
@@ -158,13 +170,26 @@ function buildOptionsHtml(defaults: DiffiniteOptions, presets: BatesPreset[]): s
         <input type="checkbox" id="hash" ${defaults.hash ? "checked" : ""}>
         <label for="hash">Embed SHA-256 file hashes in report</label>
       </div>
-    </section>
-
-    <section>
-      <h2>Forensic</h2>
       <div class="field checkbox">
-        <input type="checkbox" id="noAutojunk" ${defaults.noAutojunk ? "checked" : ""}>
-        <label for="noAutojunk">Disable autojunk (precise but slower)</label>
+        <input type="checkbox" id="includeUncompared" ${defaults.includeUncompared ? "checked" : ""}>
+        <label for="includeUncompared">Include uncompared files list in report</label>
+      </div>
+      <div class="field">
+        <label for="sortBy">Sort by</label>
+        <select id="sortBy">
+          <option value="" ${!defaults.sortBy ? "selected" : ""}>— None (insertion order) —</option>
+          <option value="filename" ${defaults.sortBy === "filename" ? "selected" : ""}>Filename (basename)</option>
+          <option value="path" ${defaults.sortBy === "path" ? "selected" : ""}>Path (full)</option>
+          <option value="similarity" ${defaults.sortBy === "similarity" ? "selected" : ""}>Name similarity</option>
+          <option value="ratio" ${defaults.sortBy === "ratio" ? "selected" : ""}>Content similarity</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="sortOrder">Sort order</label>
+        <select id="sortOrder">
+          <option value="asc" ${defaults.sortOrder === "asc" || !defaults.sortOrder ? "selected" : ""}>Ascending</option>
+          <option value="desc" ${defaults.sortOrder === "desc" ? "selected" : ""}>Descending</option>
+        </select>
       </div>
     </section>
 
@@ -298,6 +323,7 @@ const OPTIONS_CSS = `
 
   .btn-secondary:hover { background: var(--border); }
 
+  .hidden { display: none; }
   .deep-section.hidden { display: none; }
 
   .bates-details {
@@ -372,7 +398,7 @@ const OPTIONS_JS = `
     e.preventDefault();
     const options = {
       mode: modeSelect.value,
-      noComments: document.getElementById('noComments').checked,
+      stripComments: document.getElementById('stripComments').checked,
       byWord: document.getElementById('byWord').checked,
       normalize: document.getElementById('normalize').checked,
       collapseIdentical: document.getElementById('collapseIdentical').checked,
@@ -386,9 +412,11 @@ const OPTIONS_JS = `
       fileNumber: document.getElementById('fileNumber').checked,
       batesNumber: document.getElementById('batesNumber').checked,
       hash: document.getElementById('hash').checked,
+      includeUncompared: document.getElementById('includeUncompared').checked,
+      binaryHandling: document.getElementById('binaryHandling').value,
       encoding: 'auto',
-      sortBy: '',
-      sortOrder: 'asc',
+      sortBy: document.getElementById('sortBy').value,
+      sortOrder: document.getElementById('sortOrder').value,
       batesPrefix: document.getElementById('batesPrefix').value,
       batesSuffix: document.getElementById('batesSuffix').value,
       batesStart: Number(document.getElementById('batesStart').value) || 1,

@@ -98,6 +98,12 @@ class DiffResult:
     error: Optional[str] = None
     """None이 아니면 디코딩/읽기 실패 등의 에러 메시지. 이 경우 위 필드는 0/빈값."""
 
+    binary: bool = False
+    """True if file pair was detected as binary (non-decodable)."""
+
+    hash_match: Optional[bool] = None
+    """SHA-256 match status for binary files. None for text files."""
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Winnowing 핑거프린트 엔트리

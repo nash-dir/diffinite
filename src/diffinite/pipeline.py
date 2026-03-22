@@ -36,19 +36,20 @@ import json
 import logging
 import os
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from diffinite.collector import collect_files, match_files, FUZZY_THRESHOLD
 from diffinite.deep_compare import run_deep_compare
 from diffinite.differ import compute_diff, generate_html_diff, read_file
 from diffinite.evidence import (
+    _sha256_file,
     compute_file_hashes,
     create_evidence_bundle,
     write_manifest,
 )
 from diffinite.fingerprint import DEFAULT_K, DEFAULT_W
 from diffinite.models import AnalysisMetadata, DiffResult, DeepMatchResult
-from diffinite.parser import strip_comments
+from diffinite.parser import strip_comments as _strip_comments_fn
 from diffinite.pdf_gen import (
     _html_wrap,
     add_bates_numbers,
@@ -113,15 +114,16 @@ def _generate_markdown_report(
     dir_a: str,
     dir_b: str,
     by_word: bool,
-    compare_comment: bool,
+    strip_comments: bool,
     deep_results: list[DeepMatchResult] | None,
     output_path: str,
     *,
     metadata: AnalysisMetadata | None = None,
+    include_uncompared: bool = True,
 ) -> None:
     """Generate a Markdown summary report."""
     unit = "word" if by_word else "line"
-    comment_mode = "included" if compare_comment else "excluded"
+    comment_mode = "stripped" if strip_comments else "included"
 
     lines: list[str] = []
     lines.append("# Diffinite — Source Code Diff Report\n")
@@ -141,16 +143,24 @@ def _generate_markdown_report(
     lines.append("| # | File A | File B | Name Sim. | Match | +Added | −Deleted |")
     lines.append("|---|--------|--------|:---------:|:-----:|:------:|:--------:|")
     for idx, r in enumerate(results, 1):
-        pct = r.ratio * 100
-        err = f" ⚠ {r.error}" if r.error else ""
-        lines.append(
-            f"| {idx} | `{r.match.rel_path_a}` | `{r.match.rel_path_b}` "
-            f"| {r.match.similarity:.1f} | {pct:.1f}%{err} "
-            f"| +{r.additions} | −{r.deletions} |"
-        )
+        if r.binary:
+            status = "✓ Match" if r.hash_match else "✗ Mismatch"
+            lines.append(
+                f"| {idx} | `{r.match.rel_path_a}` | `{r.match.rel_path_b}` "
+                f"| {r.match.similarity:.1f} | [Binary: {status}] "
+                f"| — | — |"
+            )
+        else:
+            pct = r.ratio * 100
+            err = f" ⚠ {r.error}" if r.error else ""
+            lines.append(
+                f"| {idx} | `{r.match.rel_path_a}` | `{r.match.rel_path_b}` "
+                f"| {r.match.similarity:.1f} | {pct:.1f}%{err} "
+                f"| +{r.additions} | −{r.deletions} |"
+            )
 
     # Unmatched
-    if unmatched_a or unmatched_b:
+    if include_uncompared and (unmatched_a or unmatched_b):
         lines.append("\n## Unmatched Files\n")
         if unmatched_a:
             lines.append(f"### Only in A (`{dir_a}`)\n")
@@ -188,11 +198,12 @@ def _generate_json_report(
     dir_a: str,
     dir_b: str,
     by_word: bool,
-    compare_comment: bool,
+    strip_comments: bool,
     deep_results: list[DeepMatchResult] | None,
     output_path: str,
     *,
     metadata: AnalysisMetadata | None = None,
+    include_uncompared: bool = True,
 ) -> None:
     """Generate a JSON report for programmatic consumption.
 
@@ -201,7 +212,7 @@ def _generate_json_report(
     re-running the pipeline.
     """
     unit = "word" if by_word else "line"
-    comment_mode = "included" if compare_comment else "excluded"
+    comment_mode = "stripped" if strip_comments else "included"
 
     meta_dict = None
     if metadata is not None:
@@ -215,7 +226,7 @@ def _generate_json_report(
 
     result_list = []
     for r in results:
-        result_list.append({
+        entry = {
             "file_a": r.match.rel_path_a,
             "file_b": r.match.rel_path_b,
             "name_similarity": r.match.similarity,
@@ -224,7 +235,11 @@ def _generate_json_report(
             "deletions": r.deletions,
             "html_diff": r.html_diff,
             "error": r.error,
-        })
+            "binary": r.binary,
+        }
+        if r.binary:
+            entry["hash_match"] = r.hash_match
+        result_list.append(entry)
 
     deep_list = None
     if deep_results is not None:
@@ -251,13 +266,13 @@ def _generate_json_report(
         "comment_mode": comment_mode,
         "summary": {
             "matched_pairs": len(results),
-            "unmatched_a": len(unmatched_a),
-            "unmatched_b": len(unmatched_b),
+            "unmatched_a_count": len(unmatched_a),
+            "unmatched_b_count": len(unmatched_b),
         },
         "results": result_list,
         "deep_results": deep_list,
-        "unmatched_a": unmatched_a,
-        "unmatched_b": unmatched_b,
+        "unmatched_a": unmatched_a if include_uncompared else [],
+        "unmatched_b": unmatched_b if include_uncompared else [],
     }
 
     out = Path(output_path)
@@ -276,21 +291,23 @@ def _generate_html_report(
     dir_a: str,
     dir_b: str,
     by_word: bool,
-    compare_comment: bool,
+    strip_comments: bool,
     deep_results: list[DeepMatchResult] | None,
     output_path: str,
     ln_col_width: int = 28,
     *,
     metadata: AnalysisMetadata | None = None,
     hash_table_html: str | None = None,
+    include_uncompared: bool = True,
 ) -> None:
     """Generate a standalone HTML report with all diffs inline."""
     cover_html_body = build_cover_body(
         results, unmatched_a, unmatched_b,
-        dir_a, dir_b, by_word, compare_comment,
+        dir_a, dir_b, by_word, strip_comments,
         deep_results=deep_results,
         metadata=metadata,
         hash_table_html=hash_table_html,
+        include_uncompared=include_uncompared,
     )
 
     # Append all inline diffs
@@ -346,9 +363,8 @@ def run_pipeline(
     dir_a: str,
     dir_b: str,
     by_word: bool = False,
-    compare_comment: bool = True,
+    strip_comments: bool = False,
     squash_blanks: bool = False,
-    output_pdf: str = "report.pdf",
     threshold: float = FUZZY_THRESHOLD,
     *,
     no_merge: bool = False,
@@ -384,10 +400,14 @@ def run_pipeline(
     sort_order: str = "asc",
     # Moved block detection
     detect_moved: bool = False,
+    # Uncompared files
+    include_uncompared: bool = True,
     # Bates prefix/suffix
     bates_prefix: str = "",
     bates_suffix: str = "",
     bates_start: int = 1,
+    # Binary handling
+    binary_handling: str = "hash",
 ) -> None:
     """Execute the full diff-to-report pipeline.
 
@@ -410,7 +430,7 @@ def run_pipeline(
     """
     # Determine effective output paths
     if report_pdf is None and report_html is None and report_md is None and report_json is None:
-        report_pdf = output_pdf
+        report_pdf = "report.pdf"
 
     # Build default metadata if caller didn't provide one
     if metadata is None:
@@ -463,15 +483,30 @@ def run_pipeline(
         text_b = read_file(abs_b, encoding=encoding)
 
         if text_a is None or text_b is None:
-            results.append(DiffResult(
-                match=m, ratio=0.0, additions=0, deletions=0,
-                html_diff="", error="Could not decode one or both files",
-            ))
+            if binary_handling == "exclude":
+                continue
+            elif binary_handling == "hash":
+                hash_a = _sha256_file(str(root_a / m.rel_path_a))
+                hash_b = _sha256_file(str(root_b / m.rel_path_b))
+                hash_match = hash_a == hash_b
+                results.append(DiffResult(
+                    match=m,
+                    ratio=1.0 if hash_match else 0.0,
+                    additions=0, deletions=0,
+                    html_diff="",
+                    binary=True,
+                    hash_match=hash_match,
+                ))
+            else:  # "error"
+                results.append(DiffResult(
+                    match=m, ratio=0.0, additions=0, deletions=0,
+                    html_diff="", error="Could not decode one or both files",
+                ))
             continue
 
-        if not compare_comment:
-            text_a = strip_comments(text_a, ext, squash_blanks=squash_blanks)
-            text_b = strip_comments(text_b, ext, squash_blanks=squash_blanks)
+        if strip_comments:
+            text_a = _strip_comments_fn(text_a, ext, squash_blanks=squash_blanks)
+            text_b = _strip_comments_fn(text_b, ext, squash_blanks=squash_blanks)
 
         all_line_counts.append(text_a.count("\n") + 1)
         all_line_counts.append(text_b.count("\n") + 1)
@@ -493,11 +528,11 @@ def run_pipeline(
                 ln_col_width, max(all_line_counts) if all_line_counts else 0)
 
     # Generate HTML diffs with unified column width
-    for m_idx, m in enumerate(matches):
-        r = results[m_idx]
-        if r.error:
+    for r_idx, r in enumerate(results):
+        if r.error or r.binary:
             continue
 
+        m = r.match
         abs_a = str(root_a / m.rel_path_a)
         abs_b = str(root_b / m.rel_path_b)
         ext = Path(m.rel_path_a).suffix.lower()
@@ -506,9 +541,9 @@ def run_pipeline(
         text_b = read_file(abs_b, encoding=encoding)
         if text_a is None or text_b is None:
             continue
-        if not compare_comment:
-            text_a = strip_comments(text_a, ext, squash_blanks=squash_blanks)
-            text_b = strip_comments(text_b, ext, squash_blanks=squash_blanks)
+        if strip_comments:
+            text_a = _strip_comments_fn(text_a, ext, squash_blanks=squash_blanks)
+            text_b = _strip_comments_fn(text_b, ext, squash_blanks=squash_blanks)
 
         html_diff = generate_html_diff(
             text_a, text_b,
@@ -522,7 +557,7 @@ def run_pipeline(
             by_word=by_word,
             detect_moved=detect_moved,
         )
-        results[m_idx] = DiffResult(
+        results[r_idx] = DiffResult(
             match=r.match,
             ratio=r.ratio,
             additions=r.additions,
@@ -536,16 +571,16 @@ def run_pipeline(
     if sort_by:
         reverse = sort_order == "desc"
         if sort_by == "filename":
+            results.sort(
+                key=lambda r: PurePosixPath(r.match.rel_path_a).name.lower(),
+                reverse=reverse,
+            )
+        elif sort_by == "path":
             results.sort(key=lambda r: r.match.rel_path_a.lower(), reverse=reverse)
+        elif sort_by == "similarity":
+            results.sort(key=lambda r: r.match.similarity, reverse=reverse)
         elif sort_by == "ratio":
             results.sort(key=lambda r: r.ratio, reverse=reverse)
-        elif sort_by == "size":
-            def _file_size(r: DiffResult) -> int:
-                try:
-                    return os.path.getsize(str(root_a / r.match.rel_path_a))
-                except OSError:
-                    return 0
-            results.sort(key=_file_size, reverse=reverse)
         logger.info("  Sorted by %s (%s)", sort_by, sort_order)
 
     # Deep Compare (only in deep mode)
@@ -569,9 +604,10 @@ def run_pipeline(
         logger.info("Generating JSON report …")
         _generate_json_report(
             results, unmatched_a, unmatched_b,
-            dir_a, dir_b, by_word, compare_comment,
+            dir_a, dir_b, by_word, strip_comments,
             deep_results, report_json,
             metadata=metadata,
+            include_uncompared=include_uncompared,
         )
 
     # Markdown report
@@ -579,9 +615,10 @@ def run_pipeline(
         logger.info("Generating Markdown report …")
         _generate_markdown_report(
             results, unmatched_a, unmatched_b,
-            dir_a, dir_b, by_word, compare_comment,
+            dir_a, dir_b, by_word, strip_comments,
             deep_results, report_md,
             metadata=metadata,
+            include_uncompared=include_uncompared,
         )
 
     # HTML report
@@ -589,10 +626,11 @@ def run_pipeline(
         logger.info("Generating HTML report …")
         _generate_html_report(
             results, unmatched_a, unmatched_b,
-            dir_a, dir_b, by_word, compare_comment,
+            dir_a, dir_b, by_word, strip_comments,
             deep_results, report_html, ln_col_width,
             metadata=metadata,
             hash_table_html=hash_table_html,
+            include_uncompared=include_uncompared,
         )
 
     # PDF report
@@ -600,7 +638,7 @@ def run_pipeline(
         logger.info("Generating PDF report (divide-and-conquer) …")
         _generate_pdf_report(
             results, unmatched_a, unmatched_b,
-            dir_a, dir_b, by_word, compare_comment,
+            dir_a, dir_b, by_word, strip_comments,
             deep_results, report_pdf,
             no_merge=no_merge,
             show_page_number=show_page_number,
@@ -614,6 +652,7 @@ def run_pipeline(
             bates_prefix=bates_prefix,
             bates_suffix=bates_suffix,
             bates_start=bates_start,
+            include_uncompared=include_uncompared,
         )
 
     logger.info("Done (reports) ✓")
@@ -658,7 +697,7 @@ def _generate_pdf_report(
     dir_a: str,
     dir_b: str,
     by_word: bool,
-    compare_comment: bool,
+    strip_comments: bool,
     deep_results: list[DeepMatchResult] | None,
     output_pdf: str,
     *,
@@ -674,6 +713,7 @@ def _generate_pdf_report(
     bates_prefix: str = "",
     bates_suffix: str = "",
     bates_start: int = 1,
+    include_uncompared: bool = True,
 ) -> None:
     """Generate PDF report with divide-and-conquer merging."""
     if no_merge:
@@ -686,10 +726,11 @@ def _generate_pdf_report(
         # (1) Cover page
         cover_body = build_cover_body(
             results, unmatched_a, unmatched_b,
-            dir_a, dir_b, by_word, compare_comment,
+            dir_a, dir_b, by_word, strip_comments,
             deep_results=deep_results,
             metadata=metadata,
             hash_table_html=hash_table_html,
+            include_uncompared=include_uncompared,
         )
         cover_html = _html_wrap("Diffinite — Cover", cover_body)
         if no_merge:
@@ -700,9 +741,43 @@ def _generate_pdf_report(
         if cover_ok:
             logger.info("  Cover page → OK")
 
+        # ── Pre-flight: warn about large diffs that may slow PDF ────
+        # 500 KB of HTML ≈ 500+ source lines in side-by-side diff table.
+        # xhtml2pdf layout becomes noticeably slow above this threshold.
+        _LARGE_DIFF_BYTES = 500_000
+        large_files = [
+            (i, r) for i, r in enumerate(results, 1)
+            if not r.error and not r.binary and len(r.html_diff) > _LARGE_DIFF_BYTES
+        ]
+        if large_files:
+            logger.warning(
+                "⚠ %d file(s) have large diffs — PDF rendering may be "
+                "slow or hang:", len(large_files),
+            )
+            for i, r in large_files:
+                size_kb = len(r.html_diff) / 1024
+                logger.warning(
+                    "  %d. %s (%.0f KB HTML)",
+                    i, r.match.rel_path_a, size_kb,
+                )
+            logger.warning(
+                "  Consider: --collapse-identical (shrink diffs), "
+                "--no-merge (split PDFs), or --report-html (fast export)."
+            )
+
         # (2) Per-file diff pages
         diff_pdf_pairs: list[tuple[str, DiffResult]] = []
         for idx, r in enumerate(results, 1):
+            # Per-file warning for large diffs
+            if (not r.error and not r.binary
+                    and len(r.html_diff) > _LARGE_DIFF_BYTES):
+                size_kb = len(r.html_diff) / 1024
+                logger.warning(
+                    "⚠ Rendering PDF %d/%d (%s, %.0f KB) — "
+                    "this may take a while…",
+                    idx, len(results), r.match.rel_path_a, size_kb,
+                )
+
             diff_html = build_diff_page_html(
                 r, idx, unit,
                 show_page_number=show_page_number,

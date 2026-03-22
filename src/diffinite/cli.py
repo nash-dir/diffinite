@@ -58,14 +58,6 @@ def main(argv: list[str] | None = None) -> None:
         ),
     )
 
-    # ── Output ────────────────────────────────────────────────────────
-    parser.add_argument(
-        "--output-pdf", "-o",
-        default="report.pdf",
-        help="Output PDF file path (default: report.pdf). "
-             "Ignored when any --report-* option is specified.",
-    )
-
     # ── Comparison options ────────────────────────────────────────────
     parser.add_argument(
         "--by-word",
@@ -74,7 +66,7 @@ def main(argv: list[str] | None = None) -> None:
         help="Compare by word instead of by line",
     )
     parser.add_argument(
-        "--no-comments",
+        "--strip-comments",
         action="store_true",
         default=False,
         help="Strip comments before comparison (uses 2-pass parser)",
@@ -85,7 +77,7 @@ def main(argv: list[str] | None = None) -> None:
         default=False,
         help=(
             "Collapse runs of 3+ blank lines after comment stripping. "
-            "Only effective with --no-comments. WARNING: changes line "
+            "Only effective with --strip-comments. WARNING: changes line "
             "numbers — do not use for forensic line-tracing."
         ),
     )
@@ -107,13 +99,14 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--sort-by",
-        choices=["filename", "size", "ratio"],
+        choices=["filename", "path", "similarity", "ratio"],
         default=None,
         dest="sort_by",
         help=(
             "Sort matched file pairs in the report. "
-            "'filename' sorts by file path, 'size' by file size, "
-            "'ratio' by similarity ratio. Default: insertion order (no sort)."
+            "'filename' sorts by file basename, 'path' by full path, "
+            "'similarity' by name match score, 'ratio' by content "
+            "similarity. Default: insertion order (no sort)."
         ),
     )
     parser.add_argument(
@@ -179,7 +172,7 @@ def main(argv: list[str] | None = None) -> None:
         ),
     )
     parser.add_argument(
-        "--show-filename",
+        "--filename",
         action="store_true",
         default=False,
         help="Show the filename at the top-right of each page",
@@ -204,15 +197,35 @@ def main(argv: list[str] | None = None) -> None:
             "plain delete/add. Works in both simple and deep modes."
         ),
     )
+    parser.add_argument(
+        "--include-uncompared",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Include unmatched (uncompared) file lists in the report. "
+            "Use --no-include-uncompared to hide them (default: included)."
+        ),
+    )
+    parser.add_argument(
+        "--binary-handling",
+        choices=["exclude", "hash", "error"],
+        default="hash",
+        dest="binary_handling",
+        help=(
+            "How to handle binary (non-decodable) files: "
+            "'exclude' skips them entirely, 'hash' shows SHA-256 match "
+            "status, 'error' shows decode error (default: hash)."
+        ),
+    )
 
     # ── Report format options ─────────────────────────────────────────
     format_group = parser.add_argument_group(
         "Report Format",
         "Output format(s). Multiple can be combined. "
-        "If none specified, defaults to --output-pdf.",
+        "If none specified, defaults to PDF (report.pdf).",
     )
     format_group.add_argument(
-        "--report-pdf",
+        "--report-pdf", "-o",
         metavar="PATH",
         default=None,
         help="Generate a merged PDF report at the given path",
@@ -243,7 +256,7 @@ def main(argv: list[str] | None = None) -> None:
         "'--mode deep').",
     )
     deep_group.add_argument(
-        "--k-gram", "--kgram-size",
+        "--k-gram",
         type=int,
         default=DEFAULT_K,
         dest="k_gram",
@@ -253,7 +266,7 @@ def main(argv: list[str] | None = None) -> None:
         ),
     )
     deep_group.add_argument(
-        "--window", "--window-size",
+        "--window",
         type=int,
         default=DEFAULT_W,
         dest="window",
@@ -263,12 +276,12 @@ def main(argv: list[str] | None = None) -> None:
         ),
     )
     deep_group.add_argument(
-        "--threshold-deep", "--min-jaccard",
+        "--threshold-deep",
         type=float,
-        default=0.05,
+        default=5,
         dest="threshold_deep",
         help=(
-            "Minimum Jaccard similarity to report (default: 0.05). "
+            "Minimum Jaccard similarity 0–100 to report (default: 5). "
             "Below 5%% is considered noise."
         ),
     )
@@ -336,38 +349,45 @@ def main(argv: list[str] | None = None) -> None:
 
     args = parser.parse_args(argv)
 
+    # Convert threshold-deep from 0-100 (user-facing) to 0-1 (internal)
+    min_jaccard_internal = args.threshold_deep / 100.0
+
     # Build analysis metadata (embedded in every report for transparency)
     metadata = AnalysisMetadata(
         exec_mode=args.mode,
         k=args.k_gram,
         w=args.window,
-        threshold=args.threshold_deep,
+        threshold=args.threshold_deep,  # 0-100 scale in metadata
         autojunk=not args.no_autojunk,
     )
 
     # Resolve encoding
     encoding = args.encoding if args.encoding.lower() != "auto" else None
 
+    # Resolve default PDF output if no --report-* specified
+    report_pdf = args.report_pdf
+    if report_pdf is None and args.report_html is None and args.report_md is None and args.report_json is None:
+        report_pdf = "report.pdf"
+
     run_pipeline(
         dir_a=args.dir_a,
         dir_b=args.dir_b,
         by_word=args.by_word,
-        compare_comment=not args.no_comments,
+        strip_comments=args.strip_comments,
         squash_blanks=args.squash_blanks,
-        output_pdf=args.output_pdf,
         threshold=args.threshold,
         no_merge=args.no_merge,
         show_page_number=args.page_number,
         show_file_number=args.file_number,
         show_bates_number=args.bates_number,
-        show_filename=args.show_filename,
+        show_filename=args.filename,
         collapse_identical=args.collapse_identical,
         # Execution mode & deep compare
         exec_mode=args.mode,
         workers=args.workers,
         kgram_size=args.k_gram,
         window_size=args.window,
-        min_jaccard=args.threshold_deep,
+        min_jaccard=min_jaccard_internal,
         normalize=args.normalize,
         metadata=metadata,
         # Forensic options
@@ -377,7 +397,7 @@ def main(argv: list[str] | None = None) -> None:
         embed_hash=args.embed_hash,
         bundle_path=args.bundle_path,
         # Multi-format output
-        report_pdf=args.report_pdf,
+        report_pdf=report_pdf,
         report_html=args.report_html,
         report_md=args.report_md,
         report_json=args.report_json,
@@ -388,10 +408,14 @@ def main(argv: list[str] | None = None) -> None:
         sort_order=args.sort_order,
         # Moved block detection
         detect_moved=args.detect_moved,
+        # Uncompared files
+        include_uncompared=args.include_uncompared,
         # Bates prefix/suffix
         bates_prefix=args.bates_prefix,
         bates_suffix=args.bates_suffix,
         bates_start=args.bates_start,
+        # Binary handling
+        binary_handling=args.binary_handling,
     )
 
 
