@@ -63,6 +63,80 @@ from diffinite.pdf_gen import (
 
 logger = logging.getLogger(__name__)
 
+def _process_match_chunk(
+    worker_id: int, chunk: list,
+    dir_a: str, dir_b: str, encoding: str, binary_handling: str,
+    strip_comments: bool, squash_blanks: bool, by_word: bool, autojunk: bool,
+    metrics_only: bool, collapse_identical: bool, detect_moved: bool
+) -> tuple[list[DiffResult], list[int], list[str]]:
+    import sys
+    results = []
+    line_counts = []
+    unreadable = []
+    root_a = Path(dir_a).resolve()
+    root_b = Path(dir_b).resolve()
+    
+    total = len(chunk)
+    for i, m in enumerate(chunk):
+        if total > 0 and i % max(1, total // 10) == 0:
+            sys.stdout.write(f"[Worker-{worker_id}] {i}/{total} ({(i/total)*100:.0f}%)\n")
+            sys.stdout.flush()
+            
+        abs_a = str(root_a / m.rel_path_a)
+        abs_b = str(root_b / m.rel_path_b)
+        ext = Path(m.rel_path_a).suffix.lower()
+
+        text_a = None
+        text_b = None
+        try: text_a = read_file(abs_a, encoding=encoding)
+        except PermissionError: unreadable.append(abs_a)
+            
+        try: text_b = read_file(abs_b, encoding=encoding)
+        except PermissionError: unreadable.append(abs_b)
+
+        if text_a is None or text_b is None:
+            if binary_handling == "exclude": continue
+            elif binary_handling == "hash":
+                hash_match = _sha256_file(abs_a) == _sha256_file(abs_b)
+                results.append(DiffResult(
+                    match=m, ratio=1.0 if hash_match else 0.0, additions=0, deletions=0,
+                    html_diff="", binary=True, hash_match=hash_match,
+                ))
+            else:
+                results.append(DiffResult(
+                    match=m, ratio=0.0, additions=0, deletions=0,
+                    html_diff="", error="Could not decode one or both files",
+                ))
+            continue
+
+        if strip_comments:
+            text_a = _strip_comments_fn(text_a, ext, squash_blanks=squash_blanks)
+            text_b = _strip_comments_fn(text_b, ext, squash_blanks=squash_blanks)
+
+        line_counts.append(text_a.count("\n") + 1)
+        line_counts.append(text_b.count("\n") + 1)
+        ratio, additions, deletions = compute_diff(text_a, text_b, by_word, autojunk=autojunk)
+
+        html_diff = ""
+        if not metrics_only:
+            local_max = max(line_counts[-2:])
+            local_width = max(28, len(str(local_max)) * 7 + 10)
+            html_diff = generate_html_diff(
+                text_a, text_b, label_a=m.rel_path_a, label_b=m.rel_path_b,
+                filename_a=m.rel_path_a, filename_b=m.rel_path_b,
+                context_lines=3 if collapse_identical else -1,
+                ln_col_width=local_width, autojunk=autojunk,
+                by_word=by_word, detect_moved=detect_moved,
+            )
+
+        results.append(DiffResult(
+            match=m, ratio=ratio, additions=additions, deletions=deletions, html_diff=html_diff,
+        ))
+        
+    if total > 0:
+        sys.stdout.write(f"[Worker-{worker_id}] {total}/{total} (100%)\n")
+        sys.stdout.flush()
+    return results, line_counts, unreadable
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -410,6 +484,11 @@ def run_pipeline(
     binary_handling: str = "hash",
     # Ignore list
     ignore_file: str | None = None,
+    # Phase 1/2 Architecture
+    metrics_only: bool = False,
+    filter_json: str | None = None,
+    # Stability & Forensics
+    unreadable_log: str | None = None,
 ) -> None:
     """Execute the full diff-to-report pipeline.
     # ... docstrings truncated ...
@@ -439,8 +518,10 @@ def run_pipeline(
 
     # Step 1 — collect & match
     logger.info("Step 1: Collecting files …")
-    files_a = collect_files(dir_a, ignore_patterns)
-    files_b = collect_files(dir_b, ignore_patterns)
+    unreadable_errors: list[str] = []
+    
+    files_a = collect_files(dir_a, ignore_patterns, unreadable_list=unreadable_errors)
+    files_b = collect_files(dir_b, ignore_patterns, unreadable_list=unreadable_errors)
     logger.info("  Dir A: %d files  |  Dir B: %d files", len(files_a), len(files_b))
 
     matches, unmatched_a, unmatched_b = match_files(
@@ -462,106 +543,68 @@ def run_pipeline(
     if embed_hash:
         hash_table_html = build_hash_table_html(hashes_a, hashes_b)
 
+    # --- Phase 1/2: Filter target files if provided ---
+    if filter_json and os.path.isfile(filter_json):
+        logger.info("Step 1c: Filtering target files via %s …", filter_json)
+        with open(filter_json, "r", encoding="utf-8") as f:
+            target_files = set(json.load(f))
+        
+        # Keep only matches where file A is in the target list
+        matches = [m for m in matches if m.rel_path_a in target_files]
+        # Clear out unmatched since we are selectively rendering
+        unmatched_a = [fa for fa in unmatched_a if fa in target_files]
+        unmatched_b = []  # Omit from selective report
+        logger.info("  Filtered down to %d target pair(s)", len(matches))
+
     root_a = Path(dir_a).resolve()
     root_b = Path(dir_b).resolve()
     unit = "word" if by_word else "line"
 
-    # Steps 2-4 — read, preprocess, diff, collect line counts
+    # Steps 2-4 — read, preprocess, diff, collect line counts (PARALLEL)
     results: list[DiffResult] = []
     all_line_counts: list[int] = []
 
-    for m in matches:
-        abs_a = str(root_a / m.rel_path_a)
-        abs_b = str(root_b / m.rel_path_b)
-        ext = Path(m.rel_path_a).suffix.lower()
-
-        text_a = read_file(abs_a, encoding=encoding)
-        text_b = read_file(abs_b, encoding=encoding)
-
-        if text_a is None or text_b is None:
-            if binary_handling == "exclude":
-                continue
-            elif binary_handling == "hash":
-                hash_a = _sha256_file(str(root_a / m.rel_path_a))
-                hash_b = _sha256_file(str(root_b / m.rel_path_b))
-                hash_match = hash_a == hash_b
-                results.append(DiffResult(
-                    match=m,
-                    ratio=1.0 if hash_match else 0.0,
-                    additions=0, deletions=0,
-                    html_diff="",
-                    binary=True,
-                    hash_match=hash_match,
-                ))
-            else:  # "error"
-                results.append(DiffResult(
-                    match=m, ratio=0.0, additions=0, deletions=0,
-                    html_diff="", error="Could not decode one or both files",
-                ))
-            continue
-
-        if strip_comments:
-            text_a = _strip_comments_fn(text_a, ext, squash_blanks=squash_blanks)
-            text_b = _strip_comments_fn(text_b, ext, squash_blanks=squash_blanks)
-
-        all_line_counts.append(text_a.count("\n") + 1)
-        all_line_counts.append(text_b.count("\n") + 1)
-
-        ratio, additions, deletions = compute_diff(text_a, text_b, by_word,
-                                                    autojunk=autojunk)
-
-        results.append(DiffResult(
-            match=m,
-            ratio=ratio,
-            additions=additions,
-            deletions=deletions,
-            html_diff="",  # filled below after width computed
-        ))
-
-    # Compute global unified line-number column width
-    ln_col_width = _compute_ln_col_width(all_line_counts)
-    logger.info("  Responsive ln width: %dpx (max line: %s)",
-                ln_col_width, max(all_line_counts) if all_line_counts else 0)
-
-    # Generate HTML diffs with unified column width
-    for r_idx, r in enumerate(results):
-        if r.error or r.binary:
-            continue
-
-        m = r.match
-        abs_a = str(root_a / m.rel_path_a)
-        abs_b = str(root_b / m.rel_path_b)
-        ext = Path(m.rel_path_a).suffix.lower()
-
-        text_a = read_file(abs_a, encoding=encoding)
-        text_b = read_file(abs_b, encoding=encoding)
-        if text_a is None or text_b is None:
-            continue
-        if strip_comments:
-            text_a = _strip_comments_fn(text_a, ext, squash_blanks=squash_blanks)
-            text_b = _strip_comments_fn(text_b, ext, squash_blanks=squash_blanks)
-
-        html_diff = generate_html_diff(
-            text_a, text_b,
-            label_a=m.rel_path_a,
-            label_b=m.rel_path_b,
-            filename_a=m.rel_path_a,
-            filename_b=m.rel_path_b,
-            context_lines=3 if collapse_identical else -1,
-            ln_col_width=ln_col_width,
-            autojunk=autojunk,
-            by_word=by_word,
-            detect_moved=detect_moved,
+    num_workers = min(workers, len(matches)) if workers > 1 else 1
+    if num_workers <= 1:
+        req, lines, errs = _process_match_chunk(
+            1, matches, dir_a, dir_b, encoding, binary_handling,
+            strip_comments, squash_blanks, by_word, autojunk, metrics_only,
+            collapse_identical, detect_moved
         )
-        results[r_idx] = DiffResult(
-            match=r.match,
-            ratio=r.ratio,
-            additions=r.additions,
-            deletions=r.deletions,
-            html_diff=html_diff,
-        )
+        results.extend(req)
+        all_line_counts.extend(lines)
+        unreadable_errors.extend(errs)
+    else:
+        logger.info("Spawning ProcessPoolExecutor with %d workers for rendering.", num_workers)
+        import concurrent.futures
+        chunk_size = max(1, len(matches) // num_workers)
+        chunks = [matches[i:i + chunk_size] for i in range(0, len(matches), chunk_size)]
+        
+        with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
+            futures = []
+            for i, chunk in enumerate(chunks):
+                futures.append(executor.submit(
+                    _process_match_chunk, i+1, chunk,
+                    dir_a, dir_b, encoding, binary_handling,
+                    strip_comments, squash_blanks, by_word, autojunk,
+                    metrics_only, collapse_identical, detect_moved
+                ))
+            
+            for f in futures:
+                try:
+                    req, lines, errs = f.result()
+                    results.extend(req)
+                    all_line_counts.extend(lines)
+                    unreadable_errors.extend(errs)
+                except Exception as exc:
+                    logger.error("A rendering worker crashed: %s", exc)
 
     total_files = len(results)
+
+    # Compute global unified line-number column width for meta reports
+    ln_col_width = _compute_ln_col_width(all_line_counts)
+    if not metrics_only:
+        logger.info("  Responsive max ln width: %dpx", ln_col_width)
 
     # ── Sort results ──────────────────────────────────────────────
     if sort_by:
@@ -607,7 +650,7 @@ def run_pipeline(
         )
 
     # Markdown report
-    if report_md:
+    if report_md and not metrics_only:
         logger.info("Generating Markdown report …")
         _generate_markdown_report(
             results, unmatched_a, unmatched_b,
@@ -618,7 +661,7 @@ def run_pipeline(
         )
 
     # HTML report
-    if report_html:
+    if report_html and not metrics_only:
         logger.info("Generating HTML report …")
         _generate_html_report(
             results, unmatched_a, unmatched_b,
@@ -630,7 +673,7 @@ def run_pipeline(
         )
 
     # PDF report
-    if report_pdf:
+    if report_pdf and not metrics_only:
         logger.info("Generating PDF report (divide-and-conquer) …")
         _generate_pdf_report(
             results, unmatched_a, unmatched_b,
@@ -652,6 +695,18 @@ def run_pipeline(
         )
 
     logger.info("Done (reports) ✓")
+
+    # ── 4) Write Unreadable Log (Forensics) ─────────────────────────
+    if unreadable_log and unreadable_errors:
+        logger.warning("Found %d unreadable file(s) due to permissions.", len(unreadable_errors))
+        try:
+            with open(unreadable_log, "w", encoding="utf-8") as f:
+                f.write("# Diffinite Unreadable Files Log\n")
+                f.write("# The following files could not be read due to OS permission restrictions.\n\n")
+                for err_file in sorted(set(unreadable_errors)):
+                    f.write(err_file + "\n")
+        except Exception as exc:
+            logger.error("Failed to write unreadable log to %s: %s", unreadable_log, exc)
 
     # ── Evidence integrity (always) ───────────────────────────────────
     all_report_paths = [

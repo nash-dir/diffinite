@@ -237,6 +237,9 @@ def read_file(path: str, encoding: str | None = None) -> Optional[str]:
     """
     try:
         raw = Path(path).read_bytes()
+    except PermissionError:
+        # Re-raise to let the pipeline handle forensic logging
+        raise
     except OSError as exc:
         logger.error("Cannot read %s: %s", path, exc)
         return None

@@ -46,6 +46,23 @@
           "enum": ["simple", "deep"],
           "description": "Default execution mode"
         },
+        "diffinite.batesPrefix": {
+          "type": "string",
+          "default": "DIFF-",
+          "description": "Prefix for Bates numbering in reports."
+        },
+        "diffinite.workers": {
+          "type": "integer",
+          "default": 4,
+          "minimum": 1,
+          "maximum": 32,
+          "description": "Number of CPU cores (processes) to use for parallel diff rendering."
+        },
+        "diffinite.noMerge": {
+          "type": "boolean",
+          "default": false,
+          "description": "Save individual PDF reports for each file instead of merging into a single PDF."
+        },
         "diffinite.batesPresets": {
           "type": "array",
           "default": [],
