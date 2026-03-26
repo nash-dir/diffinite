@@ -45,6 +45,7 @@ export interface DiffiniteOptions {
   // Performance & Output
   workers: number;
   noMerge: boolean;
+  preserveTree: boolean;
 }
 
 /** Structure of the JSON report produced by `diffinite --report-json`. */
@@ -116,6 +117,7 @@ export function defaultOptions(): DiffiniteOptions {
     binaryHandling: "hash",
     workers: 4,
     noMerge: false,
+    preserveTree: true,
   };
 }
 
@@ -203,6 +205,9 @@ function buildArgs(opts: DiffiniteOptions): string[] {
   }
   if (opts.noMerge) {
     args.push("--no-merge");
+  }
+  if (opts.noMerge && !opts.preserveTree) {
+    args.push("--no-preserve-tree");
   }
 
   // Unreadable Log (Forensics)

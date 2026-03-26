@@ -244,6 +244,35 @@ def main(argv: list[str] | None = None) -> None:
         help="Path to save the list of completely unreadable files (Permission errors).",
     )
 
+    # ── Output control ────────────────────────────────────────────────
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of parallel CPU workers for rendering (default: 1).",
+    )
+    parser.add_argument(
+        "--no-merge",
+        action="store_true",
+        default=False,
+        dest="no_merge",
+        help=(
+            "Save individual report files instead of merging into a "
+            "single document. Creates a directory with per-file outputs."
+        ),
+    )
+    parser.add_argument(
+        "--preserve-tree",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        dest="preserve_tree",
+        help=(
+            "When --no-merge is active, preserve the original directory "
+            "tree structure in the output. Use --no-preserve-tree to "
+            "flatten all files into the output root with an index.html."
+        ),
+    )
+
     # ── Report format options ─────────────────────────────────────────
     format_group = parser.add_argument_group(
         "Report Format",
@@ -442,6 +471,15 @@ def main(argv: list[str] | None = None) -> None:
         bates_start=args.bates_start,
         # Binary handling
         binary_handling=args.binary_handling,
+        # Ignore list
+        ignore_file=getattr(args, "ignore_file", None),
+        # Phase 1/2 Architecture
+        metrics_only=getattr(args, "metrics_only", False),
+        filter_json=getattr(args, "filter_json", None),
+        # Stability & Forensics
+        unreadable_log=getattr(args, "unreadable_log", None),
+        # Individual output
+        preserve_tree=args.preserve_tree,
     )
 
 
