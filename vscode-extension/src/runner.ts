@@ -37,6 +37,14 @@ export interface DiffiniteOptions {
   batesStart: number;
   includeUncompared: boolean;
   binaryHandling: "exclude" | "hash" | "error";
+  
+  // Phase 1/2 Architecture
+  metricsOnly?: boolean;
+  filterJson?: string;
+
+  // Performance & Output
+  workers: number;
+  noMerge: boolean;
 }
 
 /** Structure of the JSON report produced by `diffinite --report-json`. */
@@ -106,6 +114,8 @@ export function defaultOptions(): DiffiniteOptions {
     batesStart: 1,
     includeUncompared: true,
     binaryHandling: "hash",
+    workers: 4,
+    noMerge: false,
   };
 }
 
@@ -173,15 +183,34 @@ function buildArgs(opts: DiffiniteOptions): string[] {
   if (!opts.includeUncompared) {
     args.push("--no-include-uncompared");
   }
-  if (opts.binaryHandling !== "hash") {
-    args.push("--binary-handling", opts.binaryHandling);
-  }
-
   // Auto-inject built-in ignore file if it exists
   const defaultIgnoreFile = path.join(os.homedir(), ".diffignore");
   if (fs.existsSync(defaultIgnoreFile)) {
     args.push("--ignore-file", defaultIgnoreFile);
   }
+
+  // Phase 1/2 Flags
+  if (opts.metricsOnly) {
+    args.push("--metrics-only");
+  }
+  if (opts.filterJson) {
+    args.push("--filter-json", opts.filterJson);
+  }
+
+  // Multi-processing & Export Modes
+  if (opts.workers && opts.workers > 1) {
+    args.push("--workers", opts.workers.toString());
+  }
+  if (opts.noMerge) {
+    args.push("--no-merge");
+  }
+
+  // Unreadable Log (Forensics)
+  const wsPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (wsPath) {
+    args.push("--unreadable-log", path.join(wsPath, "diffinite_unreadable_files.log"));
+  }
+
   return args;
 }
 
@@ -204,7 +233,8 @@ export async function runAnalysis(
   dirA: string,
   dirB: string,
   opts: DiffiniteOptions,
-  progress: vscode.Progress<{ message?: string; increment?: number }>
+  progress: vscode.Progress<{ message?: string; increment?: number }>,
+  token?: vscode.CancellationToken
 ): Promise<DiffiniteReport> {
   const tmpJson = path.join(os.tmpdir(), `diffinite_${Date.now()}.json`);
 
@@ -219,16 +249,47 @@ export async function runAnalysis(
   return new Promise<DiffiniteReport>((resolve, reject) => {
     const proc = spawnDiffinite(cliArgs);
 
-    let stderr = "";
+    // Handle User Cancellation
+    if (token) {
+      token.onCancellationRequested(() => {
+        console.log('[Diffinite] User requested cancellation. Killing child process…');
+        proc.kill('SIGTERM'); // Use 'SIGTERM' for graceful shutdown
+        reject(new Error("Analysis cancelled by user."));
+      });
+    }
+
+    let stdoutData = "";
+    let stderrData = "";
+    const workerProgress: Record<string, string> = {};
+
     proc.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
+      stderrData += chunk.toString();
+    });
+
+    proc.stdout?.on("data", (chunk: Buffer) => {
+      const text = chunk.toString();
+      stdoutData += text;
+      
+      // Parse worker progress lines, e.g. "[Worker 1] 5/20 ... " or "[Worker-1] 25%"
+      const lines = text.split(/\r?\n/);
+      for (const line of lines) {
+        const match = line.match(/\[Worker-?(\d+)\]\s+(.*)/i);
+        if (match) {
+          workerProgress[match[1]] = match[2].trim();
+          
+          // Render progress string "W1: 5/20 | W2: 8/20"
+          const wkeys = Object.keys(workerProgress).sort((a,b) => Number(a) - Number(b));
+          const msg = wkeys.map(k => `W${k} [${workerProgress[k]}]`).join(" | ");
+          progress.report({ message: `Rendering... ${msg}` });
+        }
+      }
     });
 
     proc.on("close", (code) => {
       console.log('[Diffinite] Process exited with code:', code);
       if (code !== 0) {
-        console.error('[Diffinite] stderr:', stderr);
-        reject(new Error(`diffinite exited with code ${code}:\n${stderr}`));
+        console.error('[Diffinite] stderr:', stderrData);
+        reject(new Error(`diffinite exited with code ${code}:\n${stderrData}`));
         return;
       }
       try {

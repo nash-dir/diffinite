@@ -1,19 +1,15 @@
-/**
- * Compare Command — orchestrates the full workflow:
- *   1. Select directories A and B
- *   2. Collect options via the options panel
- *   3. Run diffinite analysis
- *   4. Show results in the scrollable viewer
- */
 import * as vscode from "vscode";
+import * as path from "path";
+import * as os from "os";
+import * as fs from "fs";
 import { collectOptions } from "./optionsPanel";
 import { runAnalysis } from "./runner";
 import { showResults } from "./resultViewer";
+import { TreeViewerPanel } from "./treeViewer";
 
 export async function compareDirectories(
   context: vscode.ExtensionContext
 ): Promise<void> {
-  // Step 1: Select Dir A
   const uriA = await vscode.window.showOpenDialog({
     canSelectFolders: true,
     canSelectFiles: false,
@@ -23,7 +19,6 @@ export async function compareDirectories(
   });
   if (!uriA || uriA.length === 0) { return; }
 
-  // Step 2: Select Dir B
   const uriB = await vscode.window.showOpenDialog({
     canSelectFolders: true,
     canSelectFiles: false,
@@ -36,37 +31,58 @@ export async function compareDirectories(
   const dirA = uriA[0].fsPath;
   const dirB = uriB[0].fsPath;
 
-  // Step 3: Collect options
-  console.log('[Diffinite] Step 3: Collecting options…');
   const options = await collectOptions(context);
-  console.log('[Diffinite] Options received:', options);
-  if (!options) {
-    console.log('[Diffinite] Options was undefined — user cancelled or panel closed early');
-    return;
-  }
+  if (!options) { return; }
 
-  // Step 4: Run analysis with progress
-  console.log('[Diffinite] Step 4: Starting analysis…', { dirA, dirB, options });
   try {
-    const report = await vscode.window.withProgress(
+    // Phase 1: Metrics Only (Fast Scan)
+    const phase1Opts = { ...options, metricsOnly: true };
+    const report1 = await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: "Diffinite",
-        cancellable: false,
+        title: "Diffinite (Phase 1): Scanning and matching files…",
+        cancellable: true,
       },
-      (progress) => runAnalysis(dirA, dirB, options, progress)
+      (progress, token) => runAnalysis(dirA, dirB, phase1Opts, progress, token)
     );
 
-    // Step 5: Show results
-    console.log('[Diffinite] Step 5: Analysis complete, showing results…', {
-      matched: report.summary?.matched_pairs,
-      resultsCount: report.results?.length,
+    // Show Tree Viewer instead of Result Viewer
+    TreeViewerPanel.createOrShow(report1, async (selectedFiles) => {
+      // Phase 2 callback: when user clicks "Generate Final Report"
+      if (selectedFiles.length === 0) {
+        vscode.window.showInformationMessage("Diffinite: No files selected. Aborting.");
+        return;
+      }
+
+      const filterJsonPath = path.join(os.tmpdir(), `diffinite_filter_${Date.now()}.json`);
+      fs.writeFileSync(filterJsonPath, JSON.stringify(selectedFiles), "utf-8");
+
+      const phase2Opts = { ...options, filterJson: filterJsonPath };
+
+      try {
+        const report2 = await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: `Diffinite (Phase 2): Rendering targeted report (${selectedFiles.length} files)…`,
+            cancellable: true,
+          },
+          (progress, token) => runAnalysis(dirA, dirB, phase2Opts, progress, token)
+        );
+
+        try { fs.unlinkSync(filterJsonPath); } catch { /* ignore */ }
+
+        // Final phase: show full interactive diff viewing results
+        showResults(context, report2, options);
+
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        vscode.window.showErrorMessage("Diffinite Phase 2 failed: " + msg);
+        try { fs.unlinkSync(filterJsonPath); } catch { /* ignore */ }
+      }
     });
-    showResults(context, report, options);
 
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error('[Diffinite] Analysis FAILED:', msg);
-    vscode.window.showErrorMessage(`Diffinite analysis failed: ${msg}`);
+    vscode.window.showErrorMessage("Diffinite Phase 1 failed: " + msg);
   }
 }

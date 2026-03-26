@@ -226,6 +226,23 @@ def main(argv: list[str] | None = None) -> None:
             "(e.g. node_modules, *.pyc) to completely exclude from analysis."
         ),
     )
+    parser.add_argument(
+        "--metrics-only",
+        action="store_true",
+        help="Phase 1: Compute similarities and output JSON but skip HTML rendering and PDF generation.",
+    )
+    parser.add_argument(
+        "--filter-json",
+        metavar="PATH",
+        default=None,
+        help="Phase 2: Path to a JSON array of specific file A paths to restrict the output to.",
+    )
+    parser.add_argument(
+        "--unreadable-log",
+        metavar="PATH",
+        default=None,
+        help="Path to save the list of completely unreadable files (Permission errors).",
+    )
 
     # ── Report format options ─────────────────────────────────────────
     format_group = parser.add_argument_group(

@@ -23,8 +23,11 @@ export function collectOptions(
       { enableScripts: true }
     );
 
+    const config = vscode.workspace.getConfiguration("diffinite");
     const defaults = defaultOptions();
     defaults.mode = getDefaultMode() as "simple" | "deep";
+    defaults.workers = config.get<number>("workers", 4);
+    defaults.noMerge = config.get<boolean>("noMerge", false);
     const presets = getBatesPresets();
 
     panel.webview.html = buildOptionsHtml(defaults, presets);
@@ -72,6 +75,10 @@ function buildOptionsHtml(defaults: DiffiniteOptions, presets: BatesPreset[]): s
           <option value="deep" ${defaults.mode === "deep" ? "selected" : ""}>Deep (1:1 + N:M Winnowing)</option>
           <option value="simple" ${defaults.mode === "simple" ? "selected" : ""}>Simple (1:1 only)</option>
         </select>
+      </div>
+      <div class="field">
+        <label for="workers">Parallel CPU Cores (Workers)</label>
+        <input type="number" id="workers" value="${defaults.workers}" min="1" max="32" step="1">
       </div>
     </section>
 
@@ -133,6 +140,10 @@ function buildOptionsHtml(defaults: DiffiniteOptions, presets: BatesPreset[]): s
 
     <section>
       <h2>Report Options</h2>
+      <div class="field checkbox">
+        <input type="checkbox" id="noMerge" ${defaults.noMerge ? "checked" : ""}>
+        <label for="noMerge">Save individual PDF reports for each file (No Merge)</label>
+      </div>
       <div class="field checkbox">
         <input type="checkbox" id="pageNumber" ${defaults.pageNumber ? "checked" : ""}>
         <label for="pageNumber">Show page numbers (Page n / N)</label>
@@ -421,6 +432,8 @@ const OPTIONS_JS = `
       batesSuffix: document.getElementById('batesSuffix').value,
       batesStart: Number(document.getElementById('batesStart').value) || 1,
       _batesPresetName: presetSelect.value,
+      workers: Number(document.getElementById('workers').value),
+      noMerge: document.getElementById('noMerge').checked,
     };
     vscode.postMessage({ command: 'run', options });
   });

@@ -47,7 +47,7 @@ def should_ignore(name: str, patterns: list[str]) -> bool:
             return True
     return False
 
-def collect_files(directory: str, ignore_patterns: list[str] | None = None) -> list[str]:
+def collect_files(directory: str, ignore_patterns: list[str] | None = None, unreadable_list: list[str] | None = None) -> list[str]:
     """지정 디렉토리 하위의 모든 파일을 재귀 수집한다.
 
     방문 중 `ignore_patterns`에 매칭되는 디렉토리는 하위 탐색을
@@ -62,7 +62,11 @@ def collect_files(directory: str, ignore_patterns: list[str] | None = None) -> l
     root = Path(directory).resolve()
     paths: list[str] = []
     
-    for dirpath, dirnames, filenames in os.walk(root):
+    def on_err(err: OSError):
+        if unreadable_list is not None and hasattr(err, 'filename') and err.filename:
+            unreadable_list.append(str(err.filename))
+            
+    for dirpath, dirnames, filenames in os.walk(root, onerror=on_err):
         # 1. Prune ignored directories (modify in-place for os.walk)
         dirnames[:] = [d for d in dirnames if not should_ignore(d, ignore_patterns)]
         
