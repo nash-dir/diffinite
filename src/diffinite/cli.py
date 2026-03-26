@@ -217,6 +217,15 @@ def main(argv: list[str] | None = None) -> None:
             "status, 'error' shows decode error (default: hash)."
         ),
     )
+    parser.add_argument(
+        "--ignore-file",
+        metavar="PATH",
+        default=None,
+        help=(
+            "Path to a .diffignore text file containing glob patterns "
+            "(e.g. node_modules, *.pyc) to completely exclude from analysis."
+        ),
+    )
 
     # ── Report format options ─────────────────────────────────────────
     format_group = parser.add_argument_group(

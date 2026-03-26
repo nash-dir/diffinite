@@ -9,118 +9,33 @@ permissions:
   contents: write
   id-token: write
 
+env:
+  PY_VERSION: "3.12.9"
+  PY_EMBED_URL: "https://www.python.org/ftp/python/3.12.9/python-3.12.9-embed-amd64.zip"
+
 jobs:
   # ─────────────────────────────────────────────
-  # Stage 1: Build standalone binaries (3 platforms)
-  # PyInstaller onedir mode → archive the folder
-  # Gate: if this fails, nothing else runs.
-  # ─────────────────────────────────────────────
-  build-binaries:
-    name: Build Binary (${{ matrix.os }})
-    strategy:
-      fail-fast: true
-      matrix:
-        include:
-          - os: windows-latest
-            platform: win-x64
-            exe: diffinite.exe
-            archive: zip
-          - os: ubuntu-latest
-            platform: linux-x64
-            exe: diffinite
-            archive: tar.gz
-          - os: macos-latest
-            platform: darwin-arm64
-            exe: diffinite
-            archive: tar.gz
-    runs-on: ${{ matrix.os }}
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install system dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libcairo2-dev pkg-config
-
-      - name: Install system dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: brew install cairo pkg-config
-
-      - name: Install dependencies
-        run: |
-          pip install -e ".[dev]"
-          pip install pyinstaller
-
-      - name: Build binary (onedir)
-        run: pyinstaller diffinite.spec
-
-      - name: Verify binary runs
-        shell: bash
-        run: ./dist/diffinite/${{ matrix.exe }} --help
-        env:
-          PYTHONIOENCODING: utf-8
-
-      - name: Package (zip)
-        if: matrix.archive == 'zip'
-        shell: bash
-        run: |
-          cd dist
-          7z a ../diffinite-${{ matrix.platform }}.zip diffinite/
-
-      - name: Package (tar.gz)
-        if: matrix.archive == 'tar.gz'
-        run: |
-          cd dist
-          tar -czf ../diffinite-${{ matrix.platform }}.tar.gz diffinite/
-
-      - name: Compute archive SHA-256
-        shell: bash
-        run: |
-          sha256sum diffinite-${{ matrix.platform }}.* > diffinite-${{ matrix.platform }}.sha256
-          cat diffinite-${{ matrix.platform }}.sha256
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: binary-${{ matrix.platform }}
-          path: |
-            diffinite-${{ matrix.platform }}.*
-
-      - name: Upload to Release
-        if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            diffinite-${{ matrix.platform }}.*
-
-  # ─────────────────────────────────────────────
-  # Stage 2: Build & publish platform-specific VSCode extensions
-  # Each OS gets its own VSIX with only its native binary.
+  # Stage 1: Build & publish platform-specific VSCode extensions
+  #
+  # Windows: bundles Windows Embeddable Python + diffinite source
+  #   → no PyInstaller, no antivirus false-positives
+  # Mac/Linux: TS-only VSIX, relies on system python3 at runtime
   # ─────────────────────────────────────────────
   publish-vsce:
     name: Publish VSIX (${{ matrix.target }})
-    needs: build-binaries
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: win32-x64
-            platform: win-x64
-            archive: zip
-            runner: ubuntu-latest
+            runner: windows-latest
+            bundle_python: true
           - target: linux-x64
-            platform: linux-x64
-            archive: tar.gz
             runner: ubuntu-latest
+            bundle_python: false
           - target: darwin-arm64
-            platform: darwin-arm64
-            archive: tar.gz
             runner: ubuntu-latest
+            bundle_python: false
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -139,56 +54,30 @@ jobs:
         working-directory: vscode-extension
         run: npx tsc -p ./
 
-      - name: Download platform binary
-        uses: actions/download-artifact@v4
-        with:
-          name: binary-${{ matrix.platform }}
-          path: vscode-extension/tmp
-
-      - name: Extract and place binary
-        working-directory: vscode-extension
+      # ── Windows: Bundle Embeddable Python ──────────────────────
+      - name: Build Standalone Bundle (CD Tester)
+        if: matrix.bundle_python
+        shell: pwsh
         run: |
-          mkdir -p bin/${{ matrix.platform }}
+          ./vscode-extension/scripts/build_bundle.ps1 -pythonVersion ${{ env.PY_VERSION }}
 
-          if [ "${{ matrix.archive }}" = "zip" ]; then
-            unzip tmp/diffinite-${{ matrix.platform }}.zip -d bin/${{ matrix.platform }}/
-            echo "✓ ${{ matrix.platform }} binary placed (zip)"
-          else
-            tar -xzf tmp/diffinite-${{ matrix.platform }}.tar.gz -C bin/${{ matrix.platform }}/
-            chmod -R +x bin/${{ matrix.platform }}/diffinite/
-            echo "✓ ${{ matrix.platform }} binary placed (tar.gz)"
-          fi
-
-          rm -rf tmp
-
+      # ── Common: Record metadata & package VSIX ─────────────────
       - name: Record build metadata
         working-directory: vscode-extension
+        shell: bash
         run: |
+          mkdir -p bin
           echo '{
             "commit": "${{ github.sha }}",
             "tag": "${{ github.event.release.tag_name || github.ref_name }}",
             "target": "${{ matrix.target }}",
+            "python_version": "${{ matrix.bundle_python && env.PY_VERSION || 'system' }}",
             "built_at": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"
           }' > bin/build-info.json
           cat bin/build-info.json
 
       - name: Install vsce
         run: npm install -g @vscode/vsce@3.2.2
-
-      - name: Resolve symlinks in binary bundle
-        working-directory: vscode-extension
-        run: |
-          # macOS PyInstaller bundles contain symlinks (e.g. Python.framework/Resources)
-          # that yazl (vsce's zip lib) cannot handle. Dereference them.
-          if find bin/ -type l 2>/dev/null | grep -q .; then
-            echo "Resolving symlinks in bin/..."
-            cp -rL bin/ bin-resolved/
-            rm -rf bin/
-            mv bin-resolved/ bin/
-            echo "✓ Symlinks resolved"
-          else
-            echo "No symlinks found — skipping"
-          fi
 
       - name: Package platform-specific VSIX
         working-directory: vscode-extension
@@ -226,12 +115,11 @@ jobs:
           done
 
   # ─────────────────────────────────────────────
-  # Stage 3: Publish to PyPI
-  # Runs after binary builds succeed (parallel with VSCE).
+  # Stage 2: Publish to PyPI
+  # Independent of VSIX builds.
   # ─────────────────────────────────────────────
   publish-pypi:
     name: Publish to PyPI
-    needs: build-binaries
     runs-on: ubuntu-latest
     environment:
       name: pypi
