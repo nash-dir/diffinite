@@ -1,9 +1,9 @@
 /**
  * Runner — executes the diffinite CLI via subprocess and parses JSON output.
  *
- * Binary resolution order:
- *   1. Bundled standalone binary (bin/{platform}/diffinite[.exe])
- *   2. Fallback: Python interpreter (`python -m diffinite`)
+ * Resolution order:
+ *   1. (Windows) Bundled Embeddable Python (bin/python/python.exe -m diffinite)
+ *   2. Fallback: System Python interpreter (`python -m diffinite`)
  */
 import * as vscode from "vscode";
 import { spawn } from "child_process";
@@ -89,7 +89,7 @@ export function defaultOptions(): DiffiniteOptions {
     normalize: false,
     collapseIdentical: false,
     detectMoved: false,
-    noAutojunk: false,
+    noAutojunk: true,  // Forensic precision enabled by default
     threshold: 60,
     kGram: 5,
     window: 4,
@@ -113,33 +113,24 @@ export function defaultOptions(): DiffiniteOptions {
 // Binary resolution
 // ---------------------------------------------------------------------------
 
-/** Platform directory names matching CI build matrix. */
-const PLATFORM_MAP: Record<string, string> = {
-  win32: "win-x64",
-  linux: "linux-x64",
-  darwin: "darwin-arm64",
-};
-
 /**
  * Resolve the diffinite executable path.
  *
- * Returns { exe, args } where:
- *   - Bundled binary: exe = "/path/to/bin/win-x64/diffinite.exe", args = []
- *   - Python fallback: exe = "python", args = ["-m", "diffinite"]
+ * Resolution order:
+ *   1. (Windows) Bundled Embeddable Python: bin/python/python.exe -m diffinite
+ *      → No PyInstaller, no antivirus false-positives.
+ *   2. System Python fallback: python -m diffinite (all platforms)
  */
 function resolveBinary(): { exe: string; prefixArgs: string[] } {
-  const ext = process.platform === "win32" ? ".exe" : "";
-  const platformDir = PLATFORM_MAP[process.platform];
-
-  if (platformDir) {
-    // __dirname is "out/", binary is in "bin/{platform}/diffinite/" (onedir bundle)
-    const bundled = path.join(__dirname, "..", "bin", platformDir, "diffinite", `diffinite${ext}`);
-    if (fs.existsSync(bundled)) {
-      return { exe: bundled, prefixArgs: [] };
+  // Windows: check for bundled Embeddable Python
+  if (process.platform === "win32") {
+    const bundledPython = path.join(__dirname, "..", "bin", "python", "python.exe");
+    if (fs.existsSync(bundledPython)) {
+      return { exe: bundledPython, prefixArgs: ["-m", "diffinite"] };
     }
   }
 
-  // Fallback to Python interpreter
+  // Fallback to system Python interpreter (all platforms)
   const pythonPath = getPythonPath();
   return { exe: pythonPath, prefixArgs: ["-m", "diffinite"] };
 }
@@ -184,6 +175,12 @@ function buildArgs(opts: DiffiniteOptions): string[] {
   }
   if (opts.binaryHandling !== "hash") {
     args.push("--binary-handling", opts.binaryHandling);
+  }
+
+  // Auto-inject built-in ignore file if it exists
+  const defaultIgnoreFile = path.join(os.homedir(), ".diffignore");
+  if (fs.existsSync(defaultIgnoreFile)) {
+    args.push("--ignore-file", defaultIgnoreFile);
   }
   return args;
 }

@@ -34,26 +34,46 @@ FUZZY_THRESHOLD: float = 60
 60 미만은 파일명 유사도가 너무 낮아 오매칭 위험이 높다."""
 
 
+import fnmatch
+import os
+
 # ──────────────────────────────────────────────────────────────────────
-# 파일 수집
+# 파일 수집 & 무시 패턴 처리
 # ──────────────────────────────────────────────────────────────────────
-def collect_files(directory: str) -> list[str]:
+def should_ignore(name: str, patterns: list[str]) -> bool:
+    """Check if a file or directory name matches any ignore pattern."""
+    for pat in patterns:
+        if fnmatch.fnmatch(name, pat):
+            return True
+    return False
+
+def collect_files(directory: str, ignore_patterns: list[str] | None = None) -> list[str]:
     """지정 디렉토리 하위의 모든 파일을 재귀 수집한다.
+
+    방문 중 `ignore_patterns`에 매칭되는 디렉토리는 하위 탐색을
+    완전 생략(Pruning)하여 압도적인 성능 향상을 이룬다.
 
     Returns:
         정렬된 POSIX 스타일 상대경로 목록.
-        정렬은 결과의 결정론적 순서를 보장하며,
-        동일 입력에 대해 동일한 매칭 결과를 재현한다.
-
-    Note:
-        심볼릭 링크는 ``rglob()``이 따라가므로 순환 참조에 주의.
-        현재 별도 방어로직 없음 — 필요 시 ``follow_symlinks=False`` 추가.
     """
+    if ignore_patterns is None:
+        ignore_patterns = []
+        
     root = Path(directory).resolve()
     paths: list[str] = []
-    for item in root.rglob("*"):
-        if item.is_file():
-            paths.append(item.relative_to(root).as_posix())
+    
+    for dirpath, dirnames, filenames in os.walk(root):
+        # 1. Prune ignored directories (modify in-place for os.walk)
+        dirnames[:] = [d for d in dirnames if not should_ignore(d, ignore_patterns)]
+        
+        # 2. Collect non-ignored files
+        current_dir = Path(dirpath)
+        for f in filenames:
+            if not should_ignore(f, ignore_patterns):
+                abs_file = current_dir / f
+                if abs_file.is_file():
+                    paths.append(abs_file.relative_to(root).as_posix())
+                    
     paths.sort()
     return paths
 

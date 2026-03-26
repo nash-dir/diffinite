@@ -5,3 +5,8 @@ src/
 *.map
 *.ts
 tsconfig.json
+bin/python/Scripts/
+bin/python/Lib/site-packages/pip/
+bin/python/Lib/site-packages/pip-*/
+bin/python/Lib/site-packages/pip_licenses*/
+bin/python/Lib/site-packages/setuptools*/

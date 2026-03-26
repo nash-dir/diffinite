@@ -22,6 +22,14 @@
       {
         "command": "diffinite.compare",
         "title": "Diffinite: Compare Directories"
+      },
+      {
+        "command": "diffinite.help",
+        "title": "Diffinite: Help / Manual"
+      },
+      {
+        "command": "diffinite.editIgnoreList",
+        "title": "Diffinite: Edit Exclusion List (.diffignore)"
       }
     ],
     "configuration": {

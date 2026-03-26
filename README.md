@@ -36,7 +36,7 @@ diffinite original/ suspect/ -o report.pdf
 
 # With comment stripping and Bates numbering (forensic use)
 diffinite original/ suspect/ -o report.pdf \
-    --no-comments --bates-number --page-number --show-filename
+    --strip-comments --bates-number --page-number --filename
 
 # HTML report (single self-contained file, opens in browser)
 diffinite original/ suspect/ --report-html report.html
@@ -105,7 +105,7 @@ Jaccard similarity is a well-defined set metric: `|A∩B| / |A∪B|`. Its interp
 | `--page-number` | `Page 3 / 47` | Bottom-right |
 | `--file-number` | `File 2 / 12` | Bottom-left |
 | `--bates-number` | `TEST-000003-CONF` | Bottom-center |
-| `--show-filename` | `com/example/Foo.java` | Top-right |
+| `--filename` | `com/example/Foo.java` | Top-right |
 
 ---
 
@@ -138,7 +138,7 @@ dir_b    Path to the comparison source directory (B)
 
 | Option | Default | Description |
 |--------|:-------:|-------------|
-| `--no-comments` | off | Strip comments before comparison (5-state FSM parser, 30+ extensions) |
+| `--strip-comments` | off | Strip comments before comparison (5-state FSM parser, 30+ extensions) |
 | `--by-word` | off | Compare by word instead of by line |
 | `--squash-blanks` | off | Collapse runs of 3+ blank lines. ⚠️ Changes line numbers — not recommended for forensic line-tracing. |
 | `--threshold N` | `60` | Fuzzy file-name matching threshold (0–100). Lower = more aggressive matching. |
@@ -172,7 +172,7 @@ dir_b    Path to the comparison source directory (B)
 | `--bates-prefix TEXT` | Bates number prefix (e.g. `PLAINTIFF-`). Combined as: `{prefix}{number}{suffix}` |
 | `--bates-suffix TEXT` | Bates number suffix (e.g. `-CONFIDENTIAL`) |
 | `--bates-start N` | Starting Bates number (default: `1`). Useful for continuing numbering across reports. |
-| `--show-filename` | Show filename at the top-right |
+| `--filename` | Show filename at the top-right |
 
 ---
 
@@ -183,9 +183,9 @@ dir_b    Path to the comparison source directory (B)
 ```bash
 # Full forensic report with all annotations
 diffinite plaintiff_code/ defendant_code/ -o exhibit_A.pdf \
-    --no-comments \
+    --strip-comments \
     --bates-number --bates-prefix "CASE2026-" --bates-suffix "-CONFIDENTIAL" \
-    --bates-start 1 --page-number --file-number --show-filename \
+    --bates-start 1 --page-number --file-number --filename \
     --collapse-identical --detect-moved
 ```
 
@@ -193,7 +193,7 @@ diffinite plaintiff_code/ defendant_code/ -o exhibit_A.pdf \
 
 ```bash
 # HTML report for browser viewing (no PDF dependency issues)
-diffinite vendor_v1/ vendor_v2/ --report-html audit.html --no-comments
+diffinite vendor_v1/ vendor_v2/ --report-html audit.html --strip-comments
 ```
 
 ### Maximum Sensitivity (Type-2 Clones)
@@ -201,7 +201,7 @@ diffinite vendor_v1/ vendor_v2/ --report-html audit.html --no-comments
 ```bash
 # Detect renamed-variable copies
 diffinite original/ suspect/ -o report.pdf \
-    --normalize --no-autojunk --no-comments
+    --normalize --no-autojunk --strip-comments
 ```
 
 ### Simple Mode (Fast, No Cross-Matching)
@@ -238,7 +238,7 @@ diffinite dir_a/ dir_b/ --threshold 80
 
 ## Comment Stripping Support
 
-The `--no-comments` flag removes comments using a 5-state finite state machine parser:
+The `--strip-comments` flag removes comments using a 5-state finite state machine parser:
 
 | Extensions | Comment Styles |
 |------------|---------------|
@@ -298,7 +298,7 @@ Pre-generated benchmark reports (Markdown) are in `example/benchmark/`.
 
 ```bash
 diffinite example/Case-Oracle/AOSP_Google example/Case-Oracle/OpenJDK_Oracle \
-    --no-comments --report-md example/benchmark/case_oracle.md
+    --strip-comments --report-md example/benchmark/case_oracle.md
 ```
 
 | File | Match (difflib) | Jaccard (Winnowing) |
@@ -315,7 +315,7 @@ diffinite example/Case-Oracle/AOSP_Google example/Case-Oracle/OpenJDK_Oracle \
 
 ```bash
 diffinite example/Case-NegativeControl/Eclipse_Collections example/Case-NegativeControl/OpenJDK \
-    --no-comments --report-md example/benchmark/case_negative.md
+    --strip-comments --report-md example/benchmark/case_negative.md
 ```
 
 | File A | File B | Match | Jaccard |
@@ -331,7 +331,7 @@ diffinite example/Case-NegativeControl/Eclipse_Collections example/Case-Negative
 
 ```bash
 diffinite example/plagiarism/case-01/original example/plagiarism/case-01/plagiarized \
-    --normalize --no-comments --report-md example/benchmark/plagiarism_case01.md
+    --normalize --strip-comments --report-md example/benchmark/plagiarism_case01.md
 ```
 
 | Original | Plagiarized | Jaccard |
@@ -351,7 +351,7 @@ diffinite example/plagiarism/case-01/original example/plagiarism/case-01/plagiar
 
 ```bash
 diffinite example/aosp/left example/aosp/right \
-    --no-comments --report-md example/benchmark/aosp.md
+    --strip-comments --report-md example/benchmark/aosp.md
 ```
 
 | File | Match (difflib) | Jaccard |

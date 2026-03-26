@@ -21,10 +21,6 @@ vscode-extension/out/
 vscode-extension/bin/
 vscode-extension/*.vsix
 
-# PyInstaller build artifacts
-dist/
-build/
-
 # Example — track only *.py and benchmark/*.md
 # Downloaded data is gitignored (re-download via: python example/download_examples.py)
 example/*/

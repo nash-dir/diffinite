@@ -408,25 +408,11 @@ def run_pipeline(
     bates_start: int = 1,
     # Binary handling
     binary_handling: str = "hash",
+    # Ignore list
+    ignore_file: str | None = None,
 ) -> None:
     """Execute the full diff-to-report pipeline.
-
-    Execution Modes
-    ===============
-    ``simple``
-        1. Collect files → fuzzy 1:1 match
-        2. Read + optional comment strip
-        3. Compute diff + Pygments-highlighted HTML
-        4. Generate report in requested format(s)
-
-    ``deep`` (default)
-        Adds Winnowing-based N:M cross-matching and appends the
-        cross-match table to the cover page / separate PDF section.
-
-    Output formats (can be combined):
-        --report-pdf  (default) — merged PDF with bookmarks.
-        --report-html           — standalone self-contained HTML.
-        --report-md             — Markdown summary table.
+    # ... docstrings truncated ...
     """
     # Determine effective output paths
     if report_pdf is None and report_html is None and report_md is None and report_json is None:
@@ -441,10 +427,20 @@ def run_pipeline(
             threshold=min_jaccard,
         )
 
+    # Parse ignore file if provided
+    ignore_patterns: list[str] = []
+    if ignore_file and os.path.isfile(ignore_file):
+        with open(ignore_file, "r", encoding="utf-8") as f:
+            for line in f:
+                pat = line.strip()
+                if pat and not pat.startswith("#"):
+                    ignore_patterns.append(pat)
+        logger.info("Loaded %d ignore patterns from %s", len(ignore_patterns), ignore_file)
+
     # Step 1 — collect & match
     logger.info("Step 1: Collecting files …")
-    files_a = collect_files(dir_a)
-    files_b = collect_files(dir_b)
+    files_a = collect_files(dir_a, ignore_patterns)
+    files_b = collect_files(dir_b, ignore_patterns)
     logger.info("  Dir A: %d files  |  Dir B: %d files", len(files_a), len(files_b))
 
     matches, unmatched_a, unmatched_b = match_files(
