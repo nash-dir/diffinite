@@ -63,6 +63,11 @@
           "default": false,
           "description": "Save individual PDF reports for each file instead of merging into a single PDF."
         },
+        "diffinite.preserveTree": {
+          "type": "boolean",
+          "default": true,
+          "description": "When No Merge is active, preserve the original directory tree in output. Uncheck for flat output with index.html."
+        },
         "diffinite.batesPresets": {
           "type": "array",
           "default": [],

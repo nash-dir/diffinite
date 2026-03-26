@@ -28,6 +28,7 @@ export function collectOptions(
     defaults.mode = getDefaultMode() as "simple" | "deep";
     defaults.workers = config.get<number>("workers", 4);
     defaults.noMerge = config.get<boolean>("noMerge", false);
+    defaults.preserveTree = config.get<boolean>("preserveTree", true);
     const presets = getBatesPresets();
 
     panel.webview.html = buildOptionsHtml(defaults, presets);
@@ -143,6 +144,10 @@ function buildOptionsHtml(defaults: DiffiniteOptions, presets: BatesPreset[]): s
       <div class="field checkbox">
         <input type="checkbox" id="noMerge" ${defaults.noMerge ? "checked" : ""}>
         <label for="noMerge">Save individual PDF reports for each file (No Merge)</label>
+      </div>
+      <div class="field checkbox" style="margin-left:24px">
+        <input type="checkbox" id="preserveTree" ${defaults.preserveTree ? "checked" : ""} ${!defaults.noMerge ? "disabled" : ""}>
+        <label for="preserveTree">Preserve original folder tree structure (uncheck for flat + index.html)</label>
       </div>
       <div class="field checkbox">
         <input type="checkbox" id="pageNumber" ${defaults.pageNumber ? "checked" : ""}>
@@ -434,6 +439,7 @@ const OPTIONS_JS = `
       _batesPresetName: presetSelect.value,
       workers: Number(document.getElementById('workers').value),
       noMerge: document.getElementById('noMerge').checked,
+      preserveTree: document.getElementById('preserveTree').checked,
     };
     vscode.postMessage({ command: 'run', options });
   });

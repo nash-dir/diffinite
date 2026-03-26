@@ -431,6 +431,192 @@ def _generate_html_report(
 
 
 # ---------------------------------------------------------------------------
+# Individual HTML reports (--no-merge) + index.html
+# ---------------------------------------------------------------------------
+def _generate_individual_html(
+    results: list[DiffResult],
+    unmatched_a: list[str],
+    unmatched_b: list[str],
+    dir_a: str,
+    dir_b: str,
+    by_word: bool,
+    strip_comments: bool,
+    deep_results: list[DeepMatchResult] | None,
+    output_path: str,
+    ln_col_width: int = 28,
+    *,
+    preserve_tree: bool = True,
+    metadata: AnalysisMetadata | None = None,
+    hash_table_html: str | None = None,
+    include_uncompared: bool = True,
+) -> None:
+    """Generate individual HTML files per diff pair + an index.html."""
+    from diffinite.pdf_gen import _CSS_BODY, _ratio_badge
+
+    out_stem = Path(output_path).stem
+    out_dir = Path(output_path).parent / f"{out_stem}_files"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    unit = "word" if by_word else "line"
+    index_entries: list[dict] = []
+
+    for idx, r in enumerate(results, 1):
+        # Determine output filename
+        if preserve_tree:
+            rel = PurePosixPath(r.match.rel_path_a)
+            dest = out_dir / str(rel).replace("/", os.sep)
+            dest = dest.with_suffix(".html")
+        else:
+            safe_name = Path(r.match.rel_path_a).name.replace(" ", "_")
+            dest = out_dir / f"{idx:03d}_{safe_name}.html"
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+
+        # Build single-file HTML content
+        if r.error:
+            body = (
+                f'<h2>{html_mod.escape(r.match.rel_path_a)} &harr; '
+                f'{html_mod.escape(r.match.rel_path_b)}</h2>\n'
+                f'<p style="color:red">Error: {html_mod.escape(r.error)}</p>\n'
+            )
+        else:
+            body = (
+                f'<h2>{html_mod.escape(r.match.rel_path_a)} &harr; '
+                f'{html_mod.escape(r.match.rel_path_b)}</h2>\n'
+                f'<p>Match ratio: {_ratio_badge(r.ratio)} &nbsp; '
+                f'<span style="color:green">+{r.additions} {unit}(s)</span> &nbsp; '
+                f'<span style="color:red">-{r.deletions} {unit}(s)</span></p>\n'
+                f'{r.html_diff}\n'
+            )
+
+        full_html = f"""\
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>Diffinite — {html_mod.escape(r.match.rel_path_a)}</title>
+<style>
+{_CSS_BODY}
+</style>
+</head>
+<body>
+{body}
+</body>
+</html>
+"""
+        dest.write_text(full_html, encoding="utf-8")
+
+        # Track for index.html
+        rel_link = dest.relative_to(out_dir).as_posix()
+        index_entries.append({
+            "idx": idx,
+            "file_a": r.match.rel_path_a,
+            "file_b": r.match.rel_path_b,
+            "ratio": r.ratio,
+            "additions": r.additions,
+            "deletions": r.deletions,
+            "link": rel_link,
+            "error": r.error,
+        })
+
+    # Build index.html
+    _build_index_html(
+        out_dir, index_entries,
+        dir_a, dir_b,
+        unmatched_a, unmatched_b,
+        include_uncompared=include_uncompared,
+    )
+    logger.info("  Individual HTML reports (%d files) + index.html → %s",
+                len(index_entries), out_dir.resolve())
+
+
+def _build_index_html(
+    out_dir: Path,
+    entries: list[dict],
+    dir_a: str,
+    dir_b: str,
+    unmatched_a: list[str],
+    unmatched_b: list[str],
+    *,
+    include_uncompared: bool = True,
+) -> None:
+    """Generate an index.html with hyperlinks to all individual reports."""
+    rows = []
+    for e in entries:
+        ratio_pct = f"{e['ratio'] * 100:.1f}%"
+        if e["error"]:
+            ratio_pct = f'<span style="color:red">Error</span>'
+        rows.append(
+            f'<tr>'
+            f'<td style="text-align:center">{e["idx"]}</td>'
+            f'<td><a href="{html_mod.escape(e["link"])}">'
+            f'{html_mod.escape(e["file_a"])}</a></td>'
+            f'<td>{html_mod.escape(e["file_b"])}</td>'
+            f'<td style="text-align:center">{ratio_pct}</td>'
+            f'<td style="text-align:center;color:green">+{e["additions"]}</td>'
+            f'<td style="text-align:center;color:red">-{e["deletions"]}</td>'
+            f'</tr>\n'
+        )
+
+    unmatched_section = ""
+    if include_uncompared and (unmatched_a or unmatched_b):
+        ua_items = "".join(f"<li>{html_mod.escape(f)}</li>" for f in unmatched_a)
+        ub_items = "".join(f"<li>{html_mod.escape(f)}</li>" for f in unmatched_b)
+        unmatched_section = f"""
+<h2>Unmatched Files</h2>
+<div style="display:flex;gap:40px">
+<div><h3>Only in A ({len(unmatched_a)})</h3><ul>{ua_items}</ul></div>
+<div><h3>Only in B ({len(unmatched_b)})</h3><ul>{ub_items}</ul></div>
+</div>
+"""
+
+    index_html = f"""\
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>Diffinite — Evidence Index</title>
+<style>
+body {{ font-family: 'Segoe UI', 'Malgun Gothic', sans-serif; margin: 30px; background: #fafafa; }}
+h1 {{ color: #0078d4; border-bottom: 3px solid #0078d4; padding-bottom: 8px; }}
+table {{ border-collapse: collapse; width: 100%; margin-top: 16px; background: white; }}
+th, td {{ border: 1px solid #ddd; padding: 8px 12px; font-size: 13px; }}
+th {{ background: #0078d4; color: white; }}
+tr:hover {{ background: #f0f7ff; }}
+a {{ color: #0078d4; text-decoration: none; }}
+a:hover {{ text-decoration: underline; }}
+.meta {{ font-size: 12px; color: #666; margin-bottom: 20px; }}
+</style>
+</head>
+<body>
+<h1>📋 Diffinite — Evidence Index</h1>
+<p class="meta">
+  <strong>Directory A:</strong> {html_mod.escape(dir_a)}<br>
+  <strong>Directory B:</strong> {html_mod.escape(dir_b)}<br>
+  <strong>Total Pairs:</strong> {len(entries)}
+</p>
+<table>
+<thead>
+<tr>
+<th>#</th><th>File A (→ Click to View)</th><th>File B</th>
+<th>Similarity</th><th>Added</th><th>Deleted</th>
+</tr>
+</thead>
+<tbody>
+{"".join(rows)}
+</tbody>
+</table>
+{unmatched_section}
+<footer style="margin-top:30px;font-size:11px;color:#999">
+Generated by Diffinite — Forensic Source Code Comparison Tool
+</footer>
+</body>
+</html>
+"""
+    (out_dir / "index.html").write_text(index_html, encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
 # Main pipeline
 # ---------------------------------------------------------------------------
 def run_pipeline(
@@ -489,6 +675,8 @@ def run_pipeline(
     filter_json: str | None = None,
     # Stability & Forensics
     unreadable_log: str | None = None,
+    # Individual output tree structure
+    preserve_tree: bool = True,
 ) -> None:
     """Execute the full diff-to-report pipeline.
     # ... docstrings truncated ...
@@ -662,15 +850,27 @@ def run_pipeline(
 
     # HTML report
     if report_html and not metrics_only:
-        logger.info("Generating HTML report …")
-        _generate_html_report(
-            results, unmatched_a, unmatched_b,
-            dir_a, dir_b, by_word, strip_comments,
-            deep_results, report_html, ln_col_width,
-            metadata=metadata,
-            hash_table_html=hash_table_html,
-            include_uncompared=include_uncompared,
-        )
+        if no_merge:
+            logger.info("Generating individual HTML reports …")
+            _generate_individual_html(
+                results, unmatched_a, unmatched_b,
+                dir_a, dir_b, by_word, strip_comments,
+                deep_results, report_html, ln_col_width,
+                preserve_tree=preserve_tree,
+                metadata=metadata,
+                hash_table_html=hash_table_html,
+                include_uncompared=include_uncompared,
+            )
+        else:
+            logger.info("Generating HTML report …")
+            _generate_html_report(
+                results, unmatched_a, unmatched_b,
+                dir_a, dir_b, by_word, strip_comments,
+                deep_results, report_html, ln_col_width,
+                metadata=metadata,
+                hash_table_html=hash_table_html,
+                include_uncompared=include_uncompared,
+            )
 
     # PDF report
     if report_pdf and not metrics_only:
@@ -680,6 +880,7 @@ def run_pipeline(
             dir_a, dir_b, by_word, strip_comments,
             deep_results, report_pdf,
             no_merge=no_merge,
+            preserve_tree=preserve_tree,
             show_page_number=show_page_number,
             show_file_number=show_file_number,
             show_bates_number=show_bates_number,
@@ -753,6 +954,7 @@ def _generate_pdf_report(
     output_pdf: str,
     *,
     no_merge: bool,
+    preserve_tree: bool = True,
     show_page_number: bool,
     show_file_number: bool,
     show_bates_number: bool,
@@ -838,7 +1040,13 @@ def _generate_pdf_report(
             )
             safe_name = Path(r.match.rel_path_a).name.replace(" ", "_")
             if no_merge:
-                diff_dest = str(out_dir / f"{idx:03d}_{safe_name}.pdf")  # type: ignore[possibly-undefined]
+                if preserve_tree:
+                    rel = PurePosixPath(r.match.rel_path_a)
+                    diff_dest = str(out_dir / str(rel).replace("/", os.sep))  # type: ignore[possibly-undefined]
+                    diff_dest = str(Path(diff_dest).with_suffix(".pdf"))
+                    Path(diff_dest).parent.mkdir(parents=True, exist_ok=True)
+                else:
+                    diff_dest = str(out_dir / f"{idx:03d}_{safe_name}.pdf")  # type: ignore[possibly-undefined]
             else:
                 diff_dest = os.path.join(tmpdir, f"{idx:03d}_diff.pdf")
             if html_to_pdf(diff_html, diff_dest):
