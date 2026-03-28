@@ -1,14 +1,38 @@
 # Diffinite
 
-**Source-code comparison tool for code audit and similarity analysis.**
+**Forensic source-code comparison tool for IP litigation and code audit.**
 
-Diffinite compares two directories of source code and produces professional PDF/HTML reports with syntax-highlighted side-by-side diffs. It uses [Winnowing fingerprints](https://theory.stanford.edu/~aiken/publications/papers/sigmod03.pdf) (Schleimer et al., 2003 — the algorithm that also forms the basis of [Stanford MOSS](https://theory.stanford.edu/~aiken/moss/)) for N:M cross-matching to detect code reuse even across renamed, split, or merged files.
+Diffinite compares two directories of source code and produces professional PDF/HTML reports with syntax-highlighted side-by-side diffs. It uses [Winnowing fingerprints](https://theory.stanford.edu/~aiken/publications/papers/sigmod03.pdf) (Schleimer et al., 2003 — the algorithm behind [Stanford MOSS](https://theory.stanford.edu/~aiken/moss/)) for N:M cross-matching to detect code reuse even across renamed, split, or merged files.
 
 > **Design Principle**: Diffinite reports **how similar** and **where similar**. It does not classify the type of copying — that is the expert witness's job.
 
 ---
 
-## Installation
+## VS Code Extension
+
+The recommended way to use Diffinite is through the **VS Code extension**, which bundles an embedded Python runtime — no separate Python installation required.
+
+### Features
+- **Visual directory picker** — Select two directories and configure options via a GUI panel
+- **Real-time progress bar** — Live percentage tracking during analysis
+- **Pre-analysis time estimation** — Scans file sizes upfront and estimates Simple/Deep mode duration
+- **Dynamic CPU calibration** — Benchmarks Phase 1 performance to refine Phase 2 time predictions
+- **OOM defense** — Warns before analyzing file pairs exceeding 5MB
+- **Interactive tree viewer** — Review matched pairs and selectively export
+- **One-click PDF/HTML export** — With Bates numbering, page numbers, and filename annotations
+
+### Install from Source
+
+```bash
+cd vscode-extension
+npm install
+npm run compile
+# Press F5 in VS Code to launch Extension Development Host
+```
+
+---
+
+## CLI Installation
 
 ```bash
 pip install diffinite
@@ -52,7 +76,7 @@ Diffinite runs a two-stage pipeline:
 
 1. **Fuzzy name matching** — Pairs files across `dir_a` and `dir_b` using [RapidFuzz](https://github.com/rapidfuzz/RapidFuzz) string similarity (configurable threshold).
 2. **Comment stripping** — Optionally removes comments using a 5-state finite state machine parser supporting 30+ file extensions.
-3. **Side-by-side diff** — Computes line-by-line (or word-by-word) diffs using Python's `difflib.SequenceMatcher`.
+3. **Side-by-side diff** — Computes line-by-line (or word-by-word) diffs using Python's `difflib.SequenceMatcher` with `autojunk=True` for O(n) performance on large files.
 4. **Report generation** — Renders syntax-highlighted HTML diffs via Pygments, then converts to PDF with xhtml2pdf.
 
 ### Stage 2: N:M Cross-Matching (`deep` mode, default)
@@ -73,8 +97,9 @@ The cover page contains a summary table for each matched file pair:
 | Column | Description |
 |--------|-------------|
 | **File A / File B** | Matched file paths |
-| **Match** | `difflib.SequenceMatcher.ratio()` — the proportion of matching characters between the two files. `1.0` = identical, `0.0` = completely different. |
-| **Added / Deleted** | Number of lines added to or deleted from File A to produce File B. |
+| **Name Sim.** | Fuzzy filename similarity score (0–100) |
+| **Content Match** | `difflib.SequenceMatcher.ratio()` — proportion of matching content. `1.0` = identical. |
+| **Added / Deleted** | Number of lines (or words) added to or deleted from File A to produce File B. |
 
 ### Diff Pages
 
@@ -82,6 +107,7 @@ Each matched pair gets a side-by-side diff page with:
 
 - **Green highlight** — Lines present only in File B (additions)
 - **Red highlight** — Lines present only in File A (deletions)
+- **Yellow highlight** — Lines changed between A and B (word-level diff in `--by-word` mode)
 - **Purple highlight** — Lines moved from this position (`--detect-moved`)
 - **Blue highlight** — Lines moved to this position (`--detect-moved`)
 - **No highlight** — Identical lines (with configurable context folding)
@@ -94,9 +120,9 @@ When running in `deep` mode (default), the report includes an N:M cross-matching
 |--------|-------------|
 | **File A** | Source file from directory A |
 | **Matched Files (B)** | All files from directory B that share fingerprints above the Jaccard threshold |
-| **Jaccard** | `|A∩B| / |A∪B|` — the fraction of shared Winnowing fingerprints. A Jaccard of `0.73` means 73% of the code fingerprints are shared between the two files. |
+| **Jaccard** | `|A∩B| / |A∪B|` — the fraction of shared Winnowing fingerprints. |
 
-Jaccard similarity is a well-defined set metric: `|A∩B| / |A∪B|`. Its interpretation depends on the domain, code size, and language. Diffinite reports the raw value without attaching qualitative labels.
+Jaccard similarity is a well-defined set metric. Its interpretation depends on the domain, code size, and language. Diffinite reports the raw value without attaching qualitative labels.
 
 ### Page Annotations
 
@@ -132,7 +158,9 @@ dir_b    Path to the comparison source directory (B)
 | `--report-pdf PATH` | Generate merged PDF report |
 | `--report-html PATH` | Generate standalone HTML report (single file, no external deps) |
 | `--report-md PATH` | Generate Markdown summary report |
+| `--report-json PATH` | Generate machine-readable JSON report (used by VS Code extension) |
 | `--no-merge` | Generate individual PDFs per file instead of one merged PDF |
+| `--preserve-tree` / `--no-preserve-tree` | Preserve directory tree structure in individual output (default: on) |
 
 ### Diff Options
 
@@ -143,7 +171,8 @@ dir_b    Path to the comparison source directory (B)
 | `--squash-blanks` | off | Collapse runs of 3+ blank lines. ⚠️ Changes line numbers — not recommended for forensic line-tracing. |
 | `--threshold N` | `60` | Fuzzy file-name matching threshold (0–100). Lower = more aggressive matching. |
 | `--collapse-identical` | off | Fold unchanged code blocks (3 context lines around each change) |
-| `--detect-moved` | off | Detect moved code blocks and highlight with distinct colors (purple=original, blue=destination) |
+| `--detect-moved` | off | Detect moved code blocks and highlight with distinct colors |
+| `--encoding ENC` | `auto` | Force file encoding (e.g. `euc-kr`, `utf-8`). Default: auto-detect via charset-normalizer. |
 
 ### Deep Compare Options
 
@@ -153,7 +182,7 @@ dir_b    Path to the comparison source directory (B)
 | `--window N` | `4` | Winnowing window size. Guarantees detection of any shared sequence ≥ `K+W−1` = 8 tokens. |
 | `--threshold-deep F` | `0.05` | Minimum Jaccard similarity to include in results. Below 5% is considered noise. |
 | `--normalize` | off | Normalize identifiers → `ID`, literals → `LIT` before fingerprinting. Improves Type-2 clone detection (renamed variables). |
-| `--workers N` | `4` | Number of parallel worker processes for fingerprint extraction. |
+| `--workers N` | `4` | Number of parallel worker processes for diff rendering and fingerprint extraction. |
 
 ### Forensic Options
 
@@ -161,6 +190,9 @@ dir_b    Path to the comparison source directory (B)
 |--------|:-------:|-------------|
 | `--no-autojunk` | off | Disable `SequenceMatcher`'s autojunk heuristic. Treats all tokens equally — slower but more precise for forensic analysis. |
 | `--max-index-entries N` | `10,000,000` | Memory cap for inverted index. Prevents OOM on large corpora. ~800MB at 10M entries. |
+| `--max-file-size-mb N` | `10.0` | Skip files exceeding this size (MB). Prevents OOM on large binary/generated files. |
+| `--hash` | off | Embed SHA-256 evidence integrity hashes for all analyzed files in the report. |
+| `--uncompared-mode {inline,separate,none}` | `inline` | Control how unmatched files are displayed: inline in main report, as separate appendix, or omitted. |
 
 ### Page Annotation Options
 
@@ -186,7 +218,7 @@ diffinite plaintiff_code/ defendant_code/ -o exhibit_A.pdf \
     --strip-comments \
     --bates-number --bates-prefix "CASE2026-" --bates-suffix "-CONFIDENTIAL" \
     --bates-start 1 --page-number --file-number --filename \
-    --collapse-identical --detect-moved
+    --collapse-identical --detect-moved --hash
 ```
 
 ### Code Audit (Quick HTML)
@@ -214,11 +246,12 @@ diffinite dir_a/ dir_b/ --mode simple -o quick_report.pdf
 ### Multiple Output Formats
 
 ```bash
-# Generate all three formats at once
+# Generate all formats at once
 diffinite dir_a/ dir_b/ \
     --report-pdf report.pdf \
     --report-html report.html \
-    --report-md report.md
+    --report-md report.md \
+    --report-json report.json
 ```
 
 ### Tuning Sensitivity
@@ -261,19 +294,28 @@ The `--strip-comments` flag removes comments using a 5-state finite state machin
 diffinite/
 ├── src/diffinite/
 │   ├── cli.py              # CLI entry point & argument parsing
-│   ├── pipeline.py         # Orchestration (simple/deep modes)
+│   ├── pipeline.py         # Orchestration (simple/deep modes, parallel rendering)
 │   ├── collector.py        # File collection & fuzzy name matching
 │   ├── parser.py           # 5-state comment stripping FSM
-│   ├── differ.py           # Diff computation & HTML rendering
+│   ├── differ.py           # Diff computation, moved-block detection & HTML rendering
 │   ├── fingerprint.py      # Winnowing fingerprint extraction
-│   ├── deep_compare.py     # N:M cross-matching (inverted index)
-│   ├── evidence.py         # Jaccard similarity metric
-│   ├── models.py           # Data classes
-│   ├── pdf_gen.py          # PDF/HTML report generation
-│   └── languages/          # Per-language specs (30+ extensions)
-├── tests/
+│   ├── deep_compare.py     # N:M cross-matching (inverted index + Jaccard)
+│   ├── evidence.py         # SHA-256 integrity hashing & manifest generation
+│   ├── models.py           # Data classes (DiffResult, DeepMatchResult, etc.)
+│   ├── pdf_gen.py          # PDF/HTML report generation (xhtml2pdf)
+│   └── languages/          # Per-language comment specs (30+ extensions)
+├── vscode-extension/
+│   ├── src/                # TypeScript extension source
+│   │   ├── extension.ts    # Extension activation & command registration
+│   │   ├── compareCommand.ts  # Directory selection, time estimation, pipeline orchestration
+│   │   ├── dirScanner.ts   # Pre-analysis file scanning & OOM heuristic
+│   │   ├── runner.ts       # Python backend spawner with progress bar integration
+│   │   ├── optionsPanel.ts # GUI options webview (mode, comments, Bates, etc.)
+│   │   ├── treeViewer.ts   # Interactive matched-pair tree for selective export
+│   │   └── resultViewer.ts # HTML report preview inside VS Code
+│   ├── bin/python/          # Embedded Python 3.12 runtime (gitignored)
+│   └── package.json
 ├── example/                # Benchmark datasets (see below)
-├── AGENTS.md               # AI agent development guidelines
 ├── pyproject.toml
 ├── LICENSE                 # Apache 2.0
 └── NOTICE
@@ -301,13 +343,15 @@ diffinite example/Case-Oracle/AOSP_Google example/Case-Oracle/OpenJDK_Oracle \
     --strip-comments --report-md example/benchmark/case_oracle.md
 ```
 
-| File | Match (difflib) | Jaccard (Winnowing) |
+| File | Match (difflib) | Deep Cross-Match |
 |------|:-:|:-:|
-| `ArrayList.java` | 9.0% | 7.3% |
+| `ArrayList.java` | 9.0% | — |
 | `Collections.java` | 4.5% | — |
-| `String.java` | 3.3% | 7.3% |
+| `List.java` | 6.3% | — |
+| `Math.java` | 5.2% | — |
+| `String.java` | 3.3% | — |
 
-**Observation**: Low Match and Jaccard scores confirm these are **independent implementations** of the same API specification. The shared fingerprints come from identical method signatures, not copied logic.
+**Observation**: Low Match scores and no Jaccard cross-matches above 5% confirm these are **independent implementations** of the same API specification. The structural similarity comes from identical method signatures, not copied logic.
 
 ### 2. Eclipse Collections v. OpenJDK — Negative Control
 
@@ -318,7 +362,7 @@ diffinite example/Case-NegativeControl/Eclipse_Collections example/Case-Negative
     --strip-comments --report-md example/benchmark/case_negative.md
 ```
 
-| File A | File B | Match | Jaccard |
+| File A | File B | Match | Deep Cross-Match |
 |--------|--------|:-:|:-:|
 | `StringIterate.java` | `String.java` | 2.4% | — |
 | `FastList.java` | `ArrayList.java` | 1.5% | — |
@@ -336,14 +380,16 @@ diffinite example/plagiarism/case-01/original example/plagiarism/case-01/plagiar
 
 | Original | Plagiarized | Jaccard |
 |----------|-------------|:-:|
+| `T1.java` | `L2/04/hellow.java` | 100.0% |
 | `T1.java` | `L1/04/T1.java` | 100.0% |
-| `T1.java` | `L1/06/HelloWorld.java` | 100.0% |
-| `T1.java` | `L1/05/HelloWorld.java` | 92.3% |
-| `T1.java` | `L4/01/L4.java` | 57.9% |
-| `T1.java` | `L5/03/WelcomeToJava.java` | 39.1% |
-| `T1.java` | `L6/02/Main.java` | 31.0% |
+| `T1.java` | `L1/05/HelloWorld.java` | 90.0% |
+| `T1.java` | `L4/05/hellow.java` | 56.2% |
+| `T1.java` | `L5/02/Main.java` | 38.1% |
+| `T1.java` | `L6/07/PrintJava.java` | 34.8% |
+| `T1.java` | `L6/01/L6.java` | 26.1% |
+| `T1.java` | `L6/05/HelloWorld.java` | 17.9% |
 
-**Observation**: Jaccard decreases monotonically as the plagiarism level increases (L1→L6). Verbatim copies score 100%. Heavily restructured copies (L5, L6) still show 30–40% shared fingerprints.
+**Observation**: Jaccard decreases monotonically as the plagiarism level increases (L1→L6). Verbatim copies score 100%. Heavily restructured copies (L5, L6) still show 18–38% shared fingerprints — well above the negative control baseline.
 
 ### 4. AOSP Framework — Same Codebase, Minor Edits
 
@@ -354,13 +400,13 @@ diffinite example/aosp/left example/aosp/right \
     --strip-comments --report-md example/benchmark/aosp.md
 ```
 
-| File | Match (difflib) | Jaccard |
-|------|:-:|:-:|
-| `Handler.java` | 88.6% | — |
-| `Looper.java` | 90.0% | 77.1% |
-| `Message.java` | 96.3% | — |
+| File | Match (difflib) |
+|------|:-:|
+| `Handler.java` | 88.6% |
+| `Looper.java` | 90.0% |
+| `Message.java` | 96.3% |
 
-**Observation**: High Match and Jaccard scores correctly reflect that these are minor revisions of the same codebase.
+**Observation**: High Match scores correctly reflect that these are minor revisions of the same codebase.
 
 ---
 

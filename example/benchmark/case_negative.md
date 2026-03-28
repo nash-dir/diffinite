@@ -7,12 +7,12 @@
 | **Execution Mode** | `deep` |
 | **K-gram (K)** | `5` |
 | **Window (W)** | `4` |
-| **Threshold (T)** | `0.05` |
+| **Threshold (T)** | `5.00` |
 
-- **Dir A:** `example/Case-NegativeControl/Eclipse_Collections`
-- **Dir B:** `example/Case-NegativeControl/OpenJDK`
+- **Dir A:** `Eclipse_Collections`
+- **Dir B:** `OpenJDK`
 - **Comparison unit:** line
-- **Comments:** excluded
+- **Comments:** stripped
 - **Matched pairs:** 2
 - **Unmatched:** 3 (A) / 3 (B)
 
@@ -25,13 +25,13 @@
 
 ## Unmatched Files
 
-### Only in A (`example/Case-NegativeControl/Eclipse_Collections`)
+### Only in A (`Eclipse_Collections`)
 
 - `Iterate.java`
 - `UnifiedMap.java`
 - `UnifiedSet.java`
 
-### Only in B (`example/Case-NegativeControl/OpenJDK`)
+### Only in B (`OpenJDK`)
 
 - `Collections.java`
 - `HashMap.java`
