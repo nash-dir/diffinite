@@ -15,7 +15,8 @@ authors = [
 keywords = [
     "diff", "pdf", "source-code", "comparison", "bates-number",
     "forensics", "code-audit", "plagiarism-detection", "winnowing",
-    "clone-detection",
+    "clone-detection", "side-by-side", "similarity", "jaccard",
+    "copyright", "litigation", "vscode",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
