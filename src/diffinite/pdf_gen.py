@@ -53,6 +53,8 @@ body {
     font-size: 10px;
     color: #1e1e1e;
     background: #fff;
+    pdf-word-wrap: CJK;
+    word-wrap: break-word;
 }
 h1 {
     font-size: 22px;
@@ -76,13 +78,16 @@ table.summary {
     border-collapse: collapse;
     width: 100%;
     margin: 12px 0 20px 0;
-    font-size: 10px;
+    font-size: 9px;
+    table-layout: fixed;
 }
 table.summary th, table.summary td {
     border: 1px solid #ccc;
-    padding: 5px 8px;
+    padding: 6px 8px;
     text-align: left;
-    word-break: break-all;
+    pdf-word-wrap: CJK;
+    word-wrap: break-word;
+    overflow: hidden;
 }
 table.summary th {
     background: #0078d4;
@@ -167,6 +172,12 @@ ul.unmatched {
     font-size: 11px;
     color: #777;
     margin-bottom: 20px;
+    pdf-word-wrap: CJK;
+    word-wrap: break-word;
+}
+.unmatched li {
+    pdf-word-wrap: CJK;
+    word-wrap: break-word;
 }
 /* Deep Compare table */
 table.deep {
@@ -174,12 +185,15 @@ table.deep {
     width: 100%;
     margin: 12px 0 20px 0;
     font-size: 9px;
+    table-layout: fixed;
 }
 table.deep th, table.deep td {
     border: 1px solid #ccc;
     padding: 4px 6px;
     text-align: left;
-    word-break: break-all;
+    pdf-word-wrap: CJK;
+    word-wrap: break-word;
+    overflow: hidden;
 }
 table.deep th {
     background: #6c5ce7;
@@ -215,24 +229,8 @@ table.deep tr:nth-child(even) {
 # Helpers
 # ---------------------------------------------------------------------------
 def _break_path(path_str: str) -> str:
-    """Insert zero-width spaces after path separator symbols for line-breaking.
-
-    xhtml2pdf는 긴 파일 경로를 자동 줄바꿈하지 못하므로,
-    경로 구분자(/, \\, ., _) 뒤에 zero-width space를 삽입하여
-    자연스러운 줄바꿈 지점을 제공한다.
-
-    Args:
-        path_str: HTML-escaped 경로 문자열.
-
-    Returns:
-        줄바꿈 힌트가 삽입된 경로 문자열.
-    """
-    # HTML entity for zero-width space
-    zwsp = "&#8203;"
-    result = path_str
-    for sep in ("/", "\\", ".", "_"):
-        result = result.replace(sep, sep + zwsp)
-    return result
+    """Return the path string escaped. (Word wrapping is handled by pdf-word-wrap: CJK in CSS)."""
+    return path_str
 
 
 def _ratio_badge(ratio: float) -> str:
@@ -265,8 +263,8 @@ def build_hash_table_html(
         parts.append(f'<h3>{html.escape(label)}</h3>\n')
         parts.append(
             '<table class="summary">\n'
-            '<tr><th>#</th><th>File</th><th>SHA-256</th>'
-            '<th>Size (bytes)</th></tr>\n'
+            '<tr><th style="width: 5%;">#</th><th style="width: 60%;">File</th><th style="width: 20%;">SHA-256</th>'
+            '<th style="width: 15%;">Size (bytes)</th></tr>\n'
         )
         for idx, h in enumerate(hashes, 1):
             # Show first 16 + last 8 chars of hash for readability
@@ -397,6 +395,7 @@ def build_cover_body(
     metadata: Optional["AnalysisMetadata"] = None,
     hash_table_html: Optional[str] = None,
     include_uncompared: bool = True,
+    uncompared_mode: str = "",
 ) -> str:
     """Build the cover-page body fragment (no DOCTYPE/html/head wrapper)."""
     from diffinite.models import AnalysisMetadata as _AM  # avoid circular at module level
@@ -454,9 +453,11 @@ def build_cover_body(
                 f"</tr>\n"
             )
 
-    # Unmatched lists (only when include_uncompared is True)
+    # Unmatched lists
+    # Resolve mode: new uncompared_mode takes precedence over legacy bool
+    _show_uncompared = (uncompared_mode or ("inline" if include_uncompared else "none")) == "inline"
     unmatched_html = ""
-    if include_uncompared and (unmatched_a or unmatched_b):
+    if _show_uncompared and (unmatched_a or unmatched_b):
         unmatched_html += "<h2>Unmatched Files</h2>\n"
         if unmatched_a:
             unmatched_html += (
@@ -480,8 +481,8 @@ def build_cover_body(
         deep_html += "<h2>Deep Compare &mdash; N:M Cross-Match Results</h2>\n"
         deep_html += (
             '<table class="deep">'
-            "<tr><th>A File</th><th>B File(s)</th>"
-            "<th>Shared Hashes</th><th>Jaccard</th></tr>\n"
+            '<tr><th style="width: 40%;">A File</th><th style="width: 40%;">B File(s)</th>'
+            '<th style="width: 10%;">Shared Hashes</th><th style="width: 10%;">Jaccard</th></tr>\n'
         )
         for dr in deep_results:
             for b_file, shared, jaccard in dr.matched_files_b:
@@ -511,8 +512,8 @@ def build_cover_body(
 <h2>Summary</h2>
 <table class="summary">
 <tr>
-  <th>#</th><th>File A</th><th>File B</th><th>Name Sim.</th>
-  <th>Content Match</th><th>Added</th><th>Deleted</th>
+  <th style="width: 4%;">#</th><th style="width: 34%;">File A</th><th style="width: 34%;">File B</th><th style="width: 8%;">Name Sim.</th>
+  <th style="width: 10%;">Content Match</th><th style="width: 5%;">Added</th><th style="width: 5%;">Deleted</th>
 </tr>
 {summary_rows}
 </table>

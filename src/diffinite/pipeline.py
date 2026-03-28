@@ -67,7 +67,7 @@ def _process_match_chunk(
     worker_id: int, chunk: list,
     dir_a: str, dir_b: str, encoding: str, binary_handling: str,
     strip_comments: bool, squash_blanks: bool, by_word: bool, autojunk: bool,
-    metrics_only: bool, collapse_identical: bool, detect_moved: bool
+    metrics_only: bool, collapse_identical: bool, detect_moved: bool, max_file_size_mb: float = 10.0
 ) -> tuple[list[DiffResult], list[int], list[str]]:
     import sys
     results = []
@@ -86,6 +86,30 @@ def _process_match_chunk(
         abs_b = str(root_b / m.rel_path_b)
         ext = Path(m.rel_path_a).suffix.lower()
 
+        max_bytes = int(max_file_size_mb * 1024 * 1024)
+        size_a = os.path.getsize(abs_a) if os.path.exists(abs_a) else 0
+        size_b = os.path.getsize(abs_b) if os.path.exists(abs_b) else 0
+
+        if size_a > max_bytes or size_b > max_bytes:
+            try:
+                hash_match = _sha256_file(abs_a) == _sha256_file(abs_b)
+                results.append(DiffResult(
+                    match=m, ratio=1.0 if hash_match else 0.0, additions=0, deletions=0,
+                    html_diff="", binary=True, hash_match=hash_match,
+                ))
+            except PermissionError:
+                try: open(abs_a, "rb").close()
+                except OSError: unreadable.append(abs_a)
+                
+                try: open(abs_b, "rb").close()
+                except OSError: unreadable.append(abs_b)
+                
+                results.append(DiffResult(
+                    match=m, ratio=0.0, additions=0, deletions=0,
+                    html_diff="", error="Access Denied (PermissionError)",
+                ))
+            continue
+
         text_a = None
         text_b = None
         try: text_a = read_file(abs_a, encoding=encoding)
@@ -97,11 +121,23 @@ def _process_match_chunk(
         if text_a is None or text_b is None:
             if binary_handling == "exclude": continue
             elif binary_handling == "hash":
-                hash_match = _sha256_file(abs_a) == _sha256_file(abs_b)
-                results.append(DiffResult(
-                    match=m, ratio=1.0 if hash_match else 0.0, additions=0, deletions=0,
-                    html_diff="", binary=True, hash_match=hash_match,
-                ))
+                if abs_a in unreadable or abs_b in unreadable:
+                    results.append(DiffResult(
+                        match=m, ratio=0.0, additions=0, deletions=0,
+                        html_diff="", error="Access Denied (PermissionError)",
+                    ))
+                else:
+                    try:
+                        hash_match = _sha256_file(abs_a) == _sha256_file(abs_b)
+                        results.append(DiffResult(
+                            match=m, ratio=1.0 if hash_match else 0.0, additions=0, deletions=0,
+                            html_diff="", binary=True, hash_match=hash_match,
+                        ))
+                    except PermissionError:
+                        results.append(DiffResult(
+                            match=m, ratio=0.0, additions=0, deletions=0,
+                            html_diff="", error="Access Denied (PermissionError)",
+                        ))
             else:
                 results.append(DiffResult(
                     match=m, ratio=0.0, additions=0, deletions=0,
@@ -193,7 +229,7 @@ def _generate_markdown_report(
     output_path: str,
     *,
     metadata: AnalysisMetadata | None = None,
-    include_uncompared: bool = True,
+    uncompared_mode: str = "inline",
 ) -> None:
     """Generate a Markdown summary report."""
     unit = "word" if by_word else "line"
@@ -234,7 +270,7 @@ def _generate_markdown_report(
             )
 
     # Unmatched
-    if include_uncompared and (unmatched_a or unmatched_b):
+    if uncompared_mode == "inline" and (unmatched_a or unmatched_b):
         lines.append("\n## Unmatched Files\n")
         if unmatched_a:
             lines.append(f"### Only in A (`{dir_a}`)\n")
@@ -277,7 +313,7 @@ def _generate_json_report(
     output_path: str,
     *,
     metadata: AnalysisMetadata | None = None,
-    include_uncompared: bool = True,
+    uncompared_mode: str = "inline",
 ) -> None:
     """Generate a JSON report for programmatic consumption.
 
@@ -345,8 +381,8 @@ def _generate_json_report(
         },
         "results": result_list,
         "deep_results": deep_list,
-        "unmatched_a": unmatched_a if include_uncompared else [],
-        "unmatched_b": unmatched_b if include_uncompared else [],
+        "unmatched_a": unmatched_a if uncompared_mode == "inline" else [],
+        "unmatched_b": unmatched_b if uncompared_mode == "inline" else [],
     }
 
     out = Path(output_path)
@@ -372,7 +408,7 @@ def _generate_html_report(
     *,
     metadata: AnalysisMetadata | None = None,
     hash_table_html: str | None = None,
-    include_uncompared: bool = True,
+    uncompared_mode: str = "inline",
 ) -> None:
     """Generate a standalone HTML report with all diffs inline."""
     cover_html_body = build_cover_body(
@@ -381,7 +417,7 @@ def _generate_html_report(
         deep_results=deep_results,
         metadata=metadata,
         hash_table_html=hash_table_html,
-        include_uncompared=include_uncompared,
+        uncompared_mode=uncompared_mode,
     )
 
     # Append all inline diffs
@@ -448,7 +484,7 @@ def _generate_individual_html(
     preserve_tree: bool = True,
     metadata: AnalysisMetadata | None = None,
     hash_table_html: str | None = None,
-    include_uncompared: bool = True,
+    uncompared_mode: str = "inline",
 ) -> None:
     """Generate individual HTML files per diff pair + an index.html."""
     from diffinite.pdf_gen import _CSS_BODY, _ratio_badge
@@ -524,7 +560,7 @@ def _generate_individual_html(
         out_dir, index_entries,
         dir_a, dir_b,
         unmatched_a, unmatched_b,
-        include_uncompared=include_uncompared,
+        uncompared_mode=uncompared_mode,
     )
     logger.info("  Individual HTML reports (%d files) + index.html → %s",
                 len(index_entries), out_dir.resolve())
@@ -538,7 +574,7 @@ def _build_index_html(
     unmatched_a: list[str],
     unmatched_b: list[str],
     *,
-    include_uncompared: bool = True,
+    uncompared_mode: str = "inline",
 ) -> None:
     """Generate an index.html with hyperlinks to all individual reports."""
     rows = []
@@ -559,7 +595,7 @@ def _build_index_html(
         )
 
     unmatched_section = ""
-    if include_uncompared and (unmatched_a or unmatched_b):
+    if uncompared_mode == "inline" and (unmatched_a or unmatched_b):
         ua_items = "".join(f"<li>{html_mod.escape(f)}</li>" for f in unmatched_a)
         ub_items = "".join(f"<li>{html_mod.escape(f)}</li>" for f in unmatched_b)
         unmatched_section = f"""
@@ -661,7 +697,7 @@ def run_pipeline(
     # Moved block detection
     detect_moved: bool = False,
     # Uncompared files
-    include_uncompared: bool = True,
+    uncompared_mode: str = "inline",
     # Bates prefix/suffix
     bates_prefix: str = "",
     bates_suffix: str = "",
@@ -675,6 +711,9 @@ def run_pipeline(
     filter_json: str | None = None,
     # Stability & Forensics
     unreadable_log: str | None = None,
+    max_file_size_mb: float = 10.0,
+    dir_alias_a: str | None = None,
+    dir_alias_b: str | None = None,
     # Individual output tree structure
     preserve_tree: bool = True,
 ) -> None:
@@ -684,6 +723,10 @@ def run_pipeline(
     # Determine effective output paths
     if report_pdf is None and report_html is None and report_md is None and report_json is None:
         report_pdf = "report.pdf"
+
+    # Determine effective aliases
+    dir_a_disp = dir_alias_a if dir_alias_a else Path(dir_a).resolve().name
+    dir_b_disp = dir_alias_b if dir_alias_b else Path(dir_b).resolve().name
 
     # Build default metadata if caller didn't provide one
     if metadata is None:
@@ -757,7 +800,7 @@ def run_pipeline(
         req, lines, errs = _process_match_chunk(
             1, matches, dir_a, dir_b, encoding, binary_handling,
             strip_comments, squash_blanks, by_word, autojunk, metrics_only,
-            collapse_identical, detect_moved
+            collapse_identical, detect_moved, max_file_size_mb
         )
         results.extend(req)
         all_line_counts.extend(lines)
@@ -775,7 +818,7 @@ def run_pipeline(
                     _process_match_chunk, i+1, chunk,
                     dir_a, dir_b, encoding, binary_handling,
                     strip_comments, squash_blanks, by_word, autojunk,
-                    metrics_only, collapse_identical, detect_moved
+                    metrics_only, collapse_identical, detect_moved, max_file_size_mb
                 ))
             
             for f in futures:
@@ -834,7 +877,7 @@ def run_pipeline(
             dir_a, dir_b, by_word, strip_comments,
             deep_results, report_json,
             metadata=metadata,
-            include_uncompared=include_uncompared,
+            uncompared_mode=uncompared_mode,
         )
 
     # Markdown report
@@ -842,10 +885,10 @@ def run_pipeline(
         logger.info("Generating Markdown report …")
         _generate_markdown_report(
             results, unmatched_a, unmatched_b,
-            dir_a, dir_b, by_word, strip_comments,
+            dir_a_disp, dir_b_disp, by_word, strip_comments,
             deep_results, report_md,
             metadata=metadata,
-            include_uncompared=include_uncompared,
+            uncompared_mode=uncompared_mode,
         )
 
     # HTML report
@@ -854,22 +897,22 @@ def run_pipeline(
             logger.info("Generating individual HTML reports …")
             _generate_individual_html(
                 results, unmatched_a, unmatched_b,
-                dir_a, dir_b, by_word, strip_comments,
+                dir_a_disp, dir_b_disp, by_word, strip_comments,
                 deep_results, report_html, ln_col_width,
                 preserve_tree=preserve_tree,
                 metadata=metadata,
                 hash_table_html=hash_table_html,
-                include_uncompared=include_uncompared,
+                uncompared_mode=uncompared_mode,
             )
         else:
             logger.info("Generating HTML report …")
             _generate_html_report(
                 results, unmatched_a, unmatched_b,
-                dir_a, dir_b, by_word, strip_comments,
+                dir_a_disp, dir_b_disp, by_word, strip_comments,
                 deep_results, report_html, ln_col_width,
                 metadata=metadata,
                 hash_table_html=hash_table_html,
-                include_uncompared=include_uncompared,
+                uncompared_mode=uncompared_mode,
             )
 
     # PDF report
@@ -877,7 +920,7 @@ def run_pipeline(
         logger.info("Generating PDF report (divide-and-conquer) …")
         _generate_pdf_report(
             results, unmatched_a, unmatched_b,
-            dir_a, dir_b, by_word, strip_comments,
+            dir_a_disp, dir_b_disp, by_word, strip_comments,
             deep_results, report_pdf,
             no_merge=no_merge,
             preserve_tree=preserve_tree,
@@ -892,10 +935,37 @@ def run_pipeline(
             bates_prefix=bates_prefix,
             bates_suffix=bates_suffix,
             bates_start=bates_start,
-            include_uncompared=include_uncompared,
+            include_uncompared=uncompared_mode == "inline",
+            uncompared_mode=uncompared_mode,
         )
 
     logger.info("Done (reports) ✓")
+
+    # ── Write uncompared files to separate file ───────────────────
+    if uncompared_mode == "separate" and (unmatched_a or unmatched_b):
+        # Derive filename from first available report path
+        first_report = next(
+            (p for p in [report_pdf, report_html, report_md, report_json] if p),
+            "report",
+        )
+        sep_path = str(Path(first_report).with_name(
+            Path(first_report).stem + "_uncompared.txt"
+        ))
+        Path(sep_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(sep_path, "w", encoding="utf-8") as f:
+            f.write("# Diffinite — Uncompared Files\n")
+            f.write(f"# Dir A: {dir_a}\n")
+            f.write(f"# Dir B: {dir_b}\n\n")
+            if unmatched_a:
+                f.write(f"## Only in A ({len(unmatched_a)} files)\n")
+                for ua in unmatched_a:
+                    f.write(f"  {ua}\n")
+                f.write("\n")
+            if unmatched_b:
+                f.write(f"## Only in B ({len(unmatched_b)} files)\n")
+                for ub in unmatched_b:
+                    f.write(f"  {ub}\n")
+        logger.info("Uncompared files list → %s", sep_path)
 
     # ── 4) Write Unreadable Log (Forensics) ─────────────────────────
     if unreadable_log and unreadable_errors:
@@ -967,6 +1037,7 @@ def _generate_pdf_report(
     bates_suffix: str = "",
     bates_start: int = 1,
     include_uncompared: bool = True,
+    uncompared_mode: str = "inline",
 ) -> None:
     """Generate PDF report with divide-and-conquer merging."""
     if no_merge:
@@ -983,7 +1054,8 @@ def _generate_pdf_report(
             deep_results=deep_results,
             metadata=metadata,
             hash_table_html=hash_table_html,
-            include_uncompared=include_uncompared,
+            include_uncompared=uncompared_mode == "inline",
+            uncompared_mode=uncompared_mode,
         )
         cover_html = _html_wrap("Diffinite — Cover", cover_body)
         if no_merge:

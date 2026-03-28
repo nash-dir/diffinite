@@ -38,8 +38,14 @@ export function showResults(
           md: { "Markdown": ["md"] },
         }[format] as unknown as Record<string, string[]>;
 
+        const basenameA = report.dir_a.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "A";
+        const basenameB = report.dir_b.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "B";
+        const now = new Date();
+        const timestamp = `${now.getFullYear()}${(now.getMonth() + 1).toString().padStart(2, '0')}${now.getDate().toString().padStart(2, '0')}_${now.getHours().toString().padStart(2, '0')}${now.getMinutes().toString().padStart(2, '0')}`;
+        const defaultFilename = `${basenameA}_${basenameB}_${timestamp}.${format}`;
+
         const uri = await vscode.window.showSaveDialog({
-          defaultUri: vscode.Uri.file(`report.${format}`),
+          defaultUri: vscode.Uri.file(defaultFilename),
           filters,
         });
 

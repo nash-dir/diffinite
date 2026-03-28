@@ -64,7 +64,13 @@ def _extract_one(args: tuple) -> tuple[str, set[int], int]:
         읽기 실패 시 빈 set / count=0 반환.
     """
     abs_path, rel_path, extension, k, w, normalize = args
-    text = read_file(abs_path)
+    
+    try:
+        text = read_file(abs_path)
+    except PermissionError:
+        logger.warning("Permission denied during deep compare: %s", rel_path)
+        return rel_path, set(), 0
+
     if text is None:
         return rel_path, set(), 0
 
