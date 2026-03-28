@@ -11,9 +11,6 @@ __pycache__/
 .pytest_cache/
 report/
 
-# Tests (kept locally, purged from repo history)
-tests/
-
 # Legacy & dev artifacts
 legacy/
 tdd/
