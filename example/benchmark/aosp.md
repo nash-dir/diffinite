@@ -7,12 +7,12 @@
 | **Execution Mode** | `deep` |
 | **K-gram (K)** | `5` |
 | **Window (W)** | `4` |
-| **Threshold (T)** | `0.05` |
+| **Threshold (T)** | `5.00` |
 
-- **Dir A:** `example/aosp/left`
-- **Dir B:** `example/aosp/right`
+- **Dir A:** `left`
+- **Dir B:** `right`
 - **Comparison unit:** line
-- **Comments:** excluded
+- **Comments:** stripped
 - **Matched pairs:** 3
 - **Unmatched:** 0 (A) / 0 (B)
 
@@ -23,9 +23,3 @@
 | 1 | `Handler.java` | `Handler.java` | 100.0 | 88.6% | +144 | −76 |
 | 2 | `Looper.java` | `Looper.java` | 100.0 | 90.0% | +82 | −5 |
 | 3 | `Message.java` | `Message.java` | 100.0 | 96.3% | +42 | −6 |
-
-## Deep Compare — N:M Cross-Match Results
-
-| A File | B File(s) | Shared Hashes | Jaccard |
-|--------|-----------|:-------------:|:-------:|
-| `Looper.java` | `Looper.java` | 444 | 77.1% |

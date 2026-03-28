@@ -7,12 +7,12 @@
 | **Execution Mode** | `deep` |
 | **K-gram (K)** | `5` |
 | **Window (W)** | `4` |
-| **Threshold (T)** | `0.05` |
+| **Threshold (T)** | `5.00` |
 
-- **Dir A:** `example/plagiarism/case-01/original`
-- **Dir B:** `example/plagiarism/case-01/plagiarized`
+- **Dir A:** `original`
+- **Dir B:** `plagiarized`
 - **Comparison unit:** line
-- **Comments:** excluded
+- **Comments:** stripped
 - **Matched pairs:** 1
 - **Unmatched:** 0 (A) / 39 (B)
 
@@ -25,7 +25,7 @@
 ## Unmatched Files
 
 
-### Only in B (`example/plagiarism/case-01/plagiarized`)
+### Only in B (`plagiarized`)
 
 - `L1/01/L1.java`
 - `L1/02/Main.java`
@@ -71,15 +71,17 @@
 
 | A File | B File(s) | Shared Hashes | Jaccard |
 |--------|-----------|:-------------:|:-------:|
-| `T1.java` | `L1/04/T1.java` | 13 | 100.0% |
-| `T1.java` | `L2/01/L2.java` | 13 | 100.0% |
-| `T1.java` | `L2/04/hellow.java` | 13 | 100.0% |
-| `T1.java` | `L1/06/HelloWorld.java` | 13 | 100.0% |
-| `T1.java` | `L1/08/Kasus1L1.java` | 13 | 100.0% |
-| `T1.java` | `L3/02/Main.java` | 13 | 100.0% |
-| `T1.java` | `L1/05/HelloWorld.java` | 12 | 92.3% |
-| `T1.java` | `L4/05/hellow.java` | 13 | 72.2% |
-| `T1.java` | `L4/01/L4.java` | 11 | 57.9% |
-| `T1.java` | `L6/06/hellow.java` | 11 | 57.9% |
-| `T1.java` | `L5/03/WelcomeToJava.java` | 9 | 39.1% |
-| `T1.java` | `L6/02/Main.java` | 9 | 31.0% |
+| `T1.java` | `L2/04/hellow.java` | 10 | 100.0% |
+| `T1.java` | `L1/07/Main.java` | 10 | 100.0% |
+| `T1.java` | `L2/01/L2.java` | 10 | 100.0% |
+| `T1.java` | `L1/08/Kasus1L1.java` | 10 | 100.0% |
+| `T1.java` | `L3/02/Main.java` | 10 | 100.0% |
+| `T1.java` | `L1/04/T1.java` | 10 | 100.0% |
+| `T1.java` | `L3/06/Level3.java` | 10 | 100.0% |
+| `T1.java` | `L1/06/HelloWorld.java` | 10 | 100.0% |
+| `T1.java` | `L1/05/HelloWorld.java` | 9 | 90.0% |
+| `T1.java` | `L4/05/hellow.java` | 9 | 56.2% |
+| `T1.java` | `L5/02/Main.java` | 8 | 38.1% |
+| `T1.java` | `L6/07/PrintJava.java` | 8 | 34.8% |
+| `T1.java` | `L6/01/L6.java` | 6 | 26.1% |
+| `T1.java` | `L6/05/HelloWorld.java` | 5 | 17.9% |
