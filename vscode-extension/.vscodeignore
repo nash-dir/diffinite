@@ -10,3 +10,5 @@ bin/python/Lib/site-packages/pip/
 bin/python/Lib/site-packages/pip-*/
 bin/python/Lib/site-packages/pip_licenses*/
 bin/python/Lib/site-packages/setuptools*/
+# Legacy PyInstaller binary (replaced by Embeddable Python)
+bin/win-x64/

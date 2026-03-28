@@ -6,7 +6,7 @@
  *   2. Fallback: System Python interpreter (`python -m diffinite`)
  */
 import * as vscode from "vscode";
-import { spawn } from "child_process";
+import { spawn, exec } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
@@ -35,7 +35,7 @@ export interface DiffiniteOptions {
   batesPrefix: string;
   batesSuffix: string;
   batesStart: number;
-  includeUncompared: boolean;
+  uncomparedFiles: "inline" | "separate" | "none";
   binaryHandling: "exclude" | "hash" | "error";
   
   // Phase 1/2 Architecture
@@ -113,7 +113,7 @@ export function defaultOptions(): DiffiniteOptions {
     batesPrefix: "",
     batesSuffix: "",
     batesStart: 1,
-    includeUncompared: true,
+    uncomparedFiles: "inline",
     binaryHandling: "hash",
     workers: 4,
     noMerge: false,
@@ -182,8 +182,8 @@ function buildArgs(opts: DiffiniteOptions): string[] {
   if (opts.batesStart > 1) {
     args.push("--bates-start", String(opts.batesStart));
   }
-  if (!opts.includeUncompared) {
-    args.push("--no-include-uncompared");
+  if (opts.uncomparedFiles && opts.uncomparedFiles !== "inline") {
+    args.push("--uncompared-files", opts.uncomparedFiles);
   }
   // Auto-inject built-in ignore file if it exists
   const defaultIgnoreFile = path.join(os.homedir(), ".diffignore");
@@ -265,7 +265,8 @@ export async function runAnalysis(
 
     let stdoutData = "";
     let stderrData = "";
-    const workerProgress: Record<string, string> = {};
+    const workerProgress: Record<string, { current: number, total: number }> = {};
+    let lastReportedPct = 0;
 
     proc.stderr?.on("data", (chunk: Buffer) => {
       stderrData += chunk.toString();
@@ -275,17 +276,46 @@ export async function runAnalysis(
       const text = chunk.toString();
       stdoutData += text;
       
-      // Parse worker progress lines, e.g. "[Worker 1] 5/20 ... " or "[Worker-1] 25%"
       const lines = text.split(/\r?\n/);
+      let progressUpdated = false;
       for (const line of lines) {
-        const match = line.match(/\[Worker-?(\d+)\]\s+(.*)/i);
+        // [Worker-1] 5/20 (25%)
+        const match = line.match(/\[Worker-?(\d+)\]\s+(\d+)\/(\d+)/i);
         if (match) {
-          workerProgress[match[1]] = match[2].trim();
-          
-          // Render progress string "W1: 5/20 | W2: 8/20"
-          const wkeys = Object.keys(workerProgress).sort((a,b) => Number(a) - Number(b));
-          const msg = wkeys.map(k => `W${k} [${workerProgress[k]}]`).join(" | ");
-          progress.report({ message: `Rendering... ${msg}` });
+          const wId = match[1];
+          const current = parseInt(match[2], 10);
+          const total = parseInt(match[3], 10);
+          workerProgress[wId] = { current, total };
+          progressUpdated = true;
+        } else if (line.includes("[INFO] Step")) {
+          // Pass significant pipeline steps directly to status
+          const stepMsg = line.split("[INFO]")[1].trim();
+          progress.report({ message: stepMsg });
+        }
+      }
+
+      if (progressUpdated) {
+        let sumCurrent = 0;
+        let sumTotal = 0;
+        for (const w of Object.values(workerProgress)) {
+          sumCurrent += w.current;
+          sumTotal += w.total;
+        }
+        
+        let overallPct = 0;
+        if (sumTotal > 0) {
+          overallPct = Math.floor((sumCurrent / sumTotal) * 100);
+        }
+        
+        const increment = overallPct - lastReportedPct;
+        const wkeys = Object.keys(workerProgress).sort((a,b) => Number(a) - Number(b));
+        const msg = wkeys.map(k => `W${k} [${workerProgress[k].current}/${workerProgress[k].total}]`).join(" | ");
+        
+        if (increment > 0) {
+          progress.report({ increment, message: `Rendering... ${msg} (${overallPct}%)` });
+          lastReportedPct = overallPct;
+        } else {
+          progress.report({ message: `Rendering... ${msg} (${overallPct}%)` });
         }
       }
     });
@@ -325,7 +355,8 @@ export async function runExport(
   opts: DiffiniteOptions,
   format: "pdf" | "html" | "md",
   outputPath: string,
-  progress: vscode.Progress<{ message?: string; increment?: number }>
+  progress: vscode.Progress<{ message?: string; increment?: number }>,
+  token?: vscode.CancellationToken
 ): Promise<void> {
   const formatFlag = `--report-${format}`;
 
@@ -340,9 +371,40 @@ export async function runExport(
   return new Promise<void>((resolve, reject) => {
     const proc = spawnDiffinite(cliArgs);
 
+    // Handle User Cancellation
+    if (token) {
+      token.onCancellationRequested(() => {
+        console.log('[Diffinite] User requested cancellation. Killing process tree…');
+        if (os.platform() === 'win32' && proc.pid) {
+          exec(`taskkill /pid ${proc.pid} /t /f`);
+        } else {
+          proc.kill('SIGTERM');
+        }
+        reject(new Error("Export cancelled by user."));
+      });
+    }
+
     let stderr = "";
+    const workerProgress: Record<string, string> = {};
+
     proc.stderr?.on("data", (chunk: Buffer) => {
       stderr += chunk.toString();
+    });
+
+    proc.stdout?.on("data", (chunk: Buffer) => {
+      const text = chunk.toString();
+      
+      const lines = text.split(/\r?\n/);
+      for (const line of lines) {
+        const match = line.match(/\[Worker-?(\d+)\]\s+(.*)/i);
+        if (match) {
+          workerProgress[match[1]] = match[2].trim();
+          
+          const wkeys = Object.keys(workerProgress).sort((a,b) => Number(a) - Number(b));
+          const msg = wkeys.map(k => `W${k} [${workerProgress[k]}]`).join(" | ");
+          progress.report({ message: `Rendering... ${msg}` });
+        }
+      }
     });
 
     proc.on("close", (code) => {

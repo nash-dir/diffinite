@@ -186,9 +186,13 @@ function buildOptionsHtml(defaults: DiffiniteOptions, presets: BatesPreset[]): s
         <input type="checkbox" id="hash" ${defaults.hash ? "checked" : ""}>
         <label for="hash">Embed SHA-256 file hashes in report</label>
       </div>
-      <div class="field checkbox">
-        <input type="checkbox" id="includeUncompared" ${defaults.includeUncompared ? "checked" : ""}>
-        <label for="includeUncompared">Include uncompared files list in report</label>
+      <div class="field">
+        <label for="uncomparedFiles">Uncompared files list</label>
+        <select id="uncomparedFiles">
+          <option value="inline" ${defaults.uncomparedFiles === "inline" || !defaults.uncomparedFiles ? "selected" : ""}>Include in report (inline)</option>
+          <option value="separate" ${defaults.uncomparedFiles === "separate" ? "selected" : ""}>Save as separate file</option>
+          <option value="none" ${defaults.uncomparedFiles === "none" ? "selected" : ""}>Omit entirely</option>
+        </select>
       </div>
       <div class="field">
         <label for="sortBy">Sort by</label>
@@ -428,7 +432,7 @@ const OPTIONS_JS = `
       fileNumber: document.getElementById('fileNumber').checked,
       batesNumber: document.getElementById('batesNumber').checked,
       hash: document.getElementById('hash').checked,
-      includeUncompared: document.getElementById('includeUncompared').checked,
+      uncomparedFiles: document.getElementById('uncomparedFiles').value,
       binaryHandling: document.getElementById('binaryHandling').value,
       encoding: 'auto',
       sortBy: document.getElementById('sortBy').value,

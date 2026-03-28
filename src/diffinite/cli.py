@@ -117,13 +117,6 @@ def main(argv: list[str] | None = None) -> None:
         help="Sort direction (default: asc). Only effective with --sort-by.",
     )
 
-    # ── Output modes ──────────────────────────────────────────────────
-    parser.add_argument(
-        "--no-merge",
-        action="store_true",
-        default=False,
-        help="Generate individual PDFs per file instead of one merged PDF",
-    )
 
     # ── Annotations ───────────────────────────────────────────────────
     parser.add_argument(
@@ -198,12 +191,15 @@ def main(argv: list[str] | None = None) -> None:
         ),
     )
     parser.add_argument(
-        "--include-uncompared",
-        action=argparse.BooleanOptionalAction,
-        default=True,
+        "--uncompared-files",
+        choices=["inline", "separate", "none"],
+        default="inline",
+        dest="uncompared_files",
         help=(
-            "Include unmatched (uncompared) file lists in the report. "
-            "Use --no-include-uncompared to hide them (default: included)."
+            "How to handle the uncompared file list: "
+            "'inline' (default) embeds it in the report body, "
+            "'separate' saves it as a standalone text file, "
+            "'none' omits it entirely."
         ),
     )
     parser.add_argument(
@@ -243,13 +239,33 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help="Path to save the list of completely unreadable files (Permission errors).",
     )
+    # 10.0MB is roughly 10M chars; difflib's O(N^2) complexity on >10MB causes OOM/CPU lock.
+    parser.add_argument(
+        "--max-file-size",
+        type=float,
+        default=10.0,
+        help="Maximum file size in MB. Files larger than this will bypass memory decode and fall back to hash comparison (default: 10.0 MB).",
+    )
+    parser.add_argument(
+        "--dir-alias-a",
+        metavar="ALIAS",
+        default=None,
+        help="Alias for Directory A to display in reports (prevents absolute path exposure).",
+    )
+    parser.add_argument(
+        "--dir-alias-b",
+        metavar="ALIAS",
+        default=None,
+        help="Alias for Directory B to display in reports.",
+    )
 
     # ── Output control ────────────────────────────────────────────────
+    # 4 is the standard optimal default for CPU-bound tasks on modern 4+ core consumer hardware to avoid heavy context switching.
     parser.add_argument(
         "--workers",
         type=int,
-        default=1,
-        help="Number of parallel CPU workers for rendering (default: 1).",
+        default=4,
+        help="Number of parallel CPU workers for rendering (default: 4).",
     )
     parser.add_argument(
         "--no-merge",
@@ -339,12 +355,6 @@ def main(argv: list[str] | None = None) -> None:
             "Minimum Jaccard similarity 0–100 to report (default: 5). "
             "Below 5%% is considered noise."
         ),
-    )
-    deep_group.add_argument(
-        "--workers",
-        type=int,
-        default=4,
-        help="Number of parallel worker processes for fingerprint extraction (default: 4)",
     )
     deep_group.add_argument(
         "--normalize",
@@ -464,7 +474,7 @@ def main(argv: list[str] | None = None) -> None:
         # Moved block detection
         detect_moved=args.detect_moved,
         # Uncompared files
-        include_uncompared=args.include_uncompared,
+        uncompared_mode=args.uncompared_files,
         # Bates prefix/suffix
         bates_prefix=args.bates_prefix,
         bates_suffix=args.bates_suffix,
@@ -478,6 +488,9 @@ def main(argv: list[str] | None = None) -> None:
         filter_json=getattr(args, "filter_json", None),
         # Stability & Forensics
         unreadable_log=getattr(args, "unreadable_log", None),
+        max_file_size_mb=getattr(args, "max_file_size", 10.0),
+        dir_alias_a=getattr(args, "dir_alias_a", None),
+        dir_alias_b=getattr(args, "dir_alias_b", None),
         # Individual output
         preserve_tree=args.preserve_tree,
     )
