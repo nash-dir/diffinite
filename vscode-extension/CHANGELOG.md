@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.11.1] — 2026-03-28
+
+### Fixed
+
+- **CI/CD Pipeline**: Restore pytest across Python 3.10–3.13, add `libcairo2-dev` for Ubuntu runner, fix `vsce --dry-run` removal (unsupported in v3.x), unify release.yml to `pwsh`.
+- **Tests**: Update `TestBreakPath` assertions to match CSS-based word wrapping (no more `<wbr>` tags).
+- **Tests restored to repo**: 18 test files re-added with `skipif` guards for external-data tests.
+
+### Changed
+
+- **VSCE README**: Document progress bar, OOM defense, time estimation, SHA-256, encoding, uncompared modes, embedded Python runtime.
+- **PyPI metadata**: Expand keywords for better discoverability (side-by-side, similarity, jaccard, copyright, litigation, vscode).
+- **CI dependency chain**: VSCode Bundle job now requires all pytest jobs to pass first (`needs: test`).
+
 ## [0.11.0] — 2026-03-28
 
 ### Added
