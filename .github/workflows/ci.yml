@@ -32,10 +32,10 @@ jobs:
       run: |
         ./vscode-extension/scripts/build_bundle.ps1 -pythonVersion "3.12.9"
 
-    - name: Test VSIX Packaging (Dry-Run)
+    - name: Test VSIX Packaging
       working-directory: vscode-extension
       run: |
         npm install -g @vscode/vsce@3.2.2
-        # --dry-run purely tests that the bundle is packable without errors
-        # Note: --no-dependencies because we rely on embedded python
-        vsce package --dry-run --target win32-x64 --no-dependencies --allow-star-activation
+        vsce package --target win32-x64 --no-dependencies --allow-star-activation --out test-bundle.vsix
+        Remove-Item test-bundle.vsix -ErrorAction SilentlyContinue
+      shell: pwsh
