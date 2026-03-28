@@ -11,9 +11,24 @@ __pycache__/
 .pytest_cache/
 report/
 
+# Tests (kept locally, purged from repo history)
+tests/
+
 # Legacy & dev artifacts
 legacy/
 tdd/
+manifest.sha256.json
+
+# Transient dev files
+.coverage
+cov.txt
+debug_test.py
+pytest_error.log
+temp_report.json
+test_lock.txt
+tmp_debug/
+report.pdf
+requirements.txt
 
 # VSCode Extension build artifacts
 vscode-extension/node_modules/
