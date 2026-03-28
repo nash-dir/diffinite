@@ -104,15 +104,17 @@ jobs:
         working-directory: vscode-extension
         timeout-minutes: 10
         continue-on-error: true
+        shell: pwsh
         run: |
-          VSIX_FILE=$(ls *.vsix | head -1)
-          echo "Publishing $VSIX_FILE..."
-          for i in 1 2 3; do
-            echo "Attempt $i/3..."
-            vsce publish --packagePath "$VSIX_FILE" -p ${{ secrets.VSCE_PAT }} && break
-            echo "Attempt $i failed, waiting 30s..."
-            sleep 30
-          done
+          $vsix = (Get-ChildItem *.vsix | Select-Object -First 1).Name
+          Write-Output "Publishing $vsix..."
+          for ($i = 1; $i -le 3; $i++) {
+            Write-Output "Attempt $i/3..."
+            vsce publish --packagePath $vsix -p ${{ secrets.VSCE_PAT }}
+            if ($LASTEXITCODE -eq 0) { break }
+            Write-Output "Attempt $i failed, waiting 30s..."
+            Start-Sleep -Seconds 30
+          }
 
   # ─────────────────────────────────────────────
   # Stage 2: Publish to PyPI
