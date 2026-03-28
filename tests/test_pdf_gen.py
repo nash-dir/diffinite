@@ -162,27 +162,27 @@ class TestBuildDiffPageHtml:
 # _break_path tests
 # ---------------------------------------------------------------------------
 class TestBreakPath:
-    """Verify _break_path inserts <wbr> tags at path separators."""
+    """Verify _break_path is a no-op passthrough (word wrapping handled by CSS pdf-word-wrap: CJK)."""
 
     def test_slash(self):
         result = _break_path("src/main/java")
-        assert "src/<wbr>main/<wbr>java" == result
+        assert result == "src/main/java"
 
     def test_backslash(self):
         result = _break_path("src\\main\\java")
-        assert "src\\<wbr>main\\<wbr>java" == result
+        assert result == "src\\main\\java"
 
     def test_dot(self):
         result = _break_path("handler.java")
-        assert "handler.<wbr>java" == result
+        assert result == "handler.java"
 
     def test_underscore(self):
         result = _break_path("my_file_name")
-        assert "my_<wbr>file_<wbr>name" == result
+        assert result == "my_file_name"
 
     def test_combined(self):
         result = _break_path("src/com/example/my_handler.java")
-        assert "<wbr>" in result
+        assert result == "src/com/example/my_handler.java"
 
     def test_empty(self):
         assert _break_path("") == ""
