@@ -17,6 +17,7 @@ export interface DiffiniteOptions {
   mode: "simple" | "deep";
   stripComments: boolean;
   byWord: boolean;
+  normalizeWhitespace: boolean;
   normalize: boolean;
   collapseIdentical: boolean;
   detectMoved: boolean;
@@ -46,6 +47,8 @@ export interface DiffiniteOptions {
   workers: number;
   noMerge: boolean;
   preserveTree: boolean;
+  pdfFont: string;
+  pdfLang: string;
 }
 
 /** Structure of the JSON report produced by `diffinite --report-json`. */
@@ -95,6 +98,7 @@ export function defaultOptions(): DiffiniteOptions {
     mode: "deep",
     stripComments: false,
     byWord: false,
+    normalizeWhitespace: false,
     normalize: false,
     collapseIdentical: false,
     detectMoved: false,
@@ -118,6 +122,8 @@ export function defaultOptions(): DiffiniteOptions {
     workers: 4,
     noMerge: false,
     preserveTree: true,
+    pdfFont: "",
+    pdfLang: "ko",
   };
 }
 
@@ -154,6 +160,7 @@ function buildArgs(opts: DiffiniteOptions): string[] {
   const args: string[] = ["--mode", opts.mode];
   if (opts.stripComments) { args.push("--strip-comments"); }
   if (opts.byWord) { args.push("--by-word"); }
+  if (opts.normalizeWhitespace) { args.push("--normalize-whitespace"); }
   if (opts.normalize) { args.push("--normalize"); }
   if (opts.collapseIdentical) { args.push("--collapse-identical"); }
   if (opts.detectMoved) { args.push("--detect-moved"); }
@@ -216,6 +223,13 @@ function buildArgs(opts: DiffiniteOptions): string[] {
     args.push("--unreadable-log", path.join(wsPath, "diffinite_unreadable_files.log"));
   }
 
+  // PDF Font & Lang
+  if (opts.pdfFont) {
+    args.push("--pdf-font", opts.pdfFont);
+  } else if (opts.pdfLang) {
+    args.push("--pdf-lang", opts.pdfLang);
+  }
+
   return args;
 }
 
@@ -228,7 +242,18 @@ function spawnDiffinite(
   const { exe, prefixArgs } = resolveBinary();
   const allArgs = [...prefixArgs, ...extraArgs];
   console.log('[Diffinite] Spawning:', exe, allArgs.join(' '));
-  return spawn(exe, allArgs);
+  
+  // Dev mode injection: if we exist inside the local diffinite workspace,
+  // we can inject PYTHONPATH so the bundled isolated Python environment
+  // imports the live source files instead of the stale built ones!
+  const srcPath = path.resolve(__dirname, '..', '..', 'src');
+  let env = process.env;
+  if (fs.existsSync(path.join(srcPath, 'diffinite'))) {
+      env = { ...process.env, PYTHONPATH: srcPath };
+      console.log('[Diffinite] Dev mode detected! Injecting PYTHONPATH:', srcPath);
+  }
+
+  return spawn(exe, allArgs, { env });
 }
 
 /**

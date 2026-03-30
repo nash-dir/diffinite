@@ -67,7 +67,8 @@ def _process_match_chunk(
     worker_id: int, chunk: list,
     dir_a: str, dir_b: str, encoding: str, binary_handling: str,
     strip_comments: bool, squash_blanks: bool, by_word: bool, autojunk: bool,
-    metrics_only: bool, collapse_identical: bool, detect_moved: bool, max_file_size_mb: float = 10.0
+    metrics_only: bool, collapse_identical: bool, detect_moved: bool, max_file_size_mb: float = 10.0,
+    normalize_ws: bool = False,
 ) -> tuple[list[DiffResult], list[int], list[str]]:
     import sys
     results = []
@@ -151,7 +152,7 @@ def _process_match_chunk(
 
         line_counts.append(text_a.count("\n") + 1)
         line_counts.append(text_b.count("\n") + 1)
-        ratio, additions, deletions = compute_diff(text_a, text_b, by_word, autojunk=autojunk)
+        ratio, additions, deletions = compute_diff(text_a, text_b, by_word, autojunk=autojunk, normalize_ws=normalize_ws)
 
         html_diff = ""
         if not metrics_only:
@@ -163,6 +164,7 @@ def _process_match_chunk(
                 context_lines=3 if collapse_identical else -1,
                 ln_col_width=local_width, autojunk=autojunk,
                 by_word=by_word, detect_moved=detect_moved,
+                normalize_ws=normalize_ws,
             )
 
         results.append(DiffResult(
@@ -716,6 +718,11 @@ def run_pipeline(
     dir_alias_b: str | None = None,
     # Individual output tree structure
     preserve_tree: bool = True,
+    # Whitespace normalization
+    normalize_ws: bool = False,
+    # PDF font
+    pdf_font: str | None = None,
+    pdf_lang: str | None = None,
 ) -> None:
     """Execute the full diff-to-report pipeline.
     # ... docstrings truncated ...
@@ -800,7 +807,8 @@ def run_pipeline(
         req, lines, errs = _process_match_chunk(
             1, matches, dir_a, dir_b, encoding, binary_handling,
             strip_comments, squash_blanks, by_word, autojunk, metrics_only,
-            collapse_identical, detect_moved, max_file_size_mb
+            collapse_identical, detect_moved, max_file_size_mb,
+            normalize_ws=normalize_ws,
         )
         results.extend(req)
         all_line_counts.extend(lines)
@@ -818,7 +826,8 @@ def run_pipeline(
                     _process_match_chunk, i+1, chunk,
                     dir_a, dir_b, encoding, binary_handling,
                     strip_comments, squash_blanks, by_word, autojunk,
-                    metrics_only, collapse_identical, detect_moved, max_file_size_mb
+                    metrics_only, collapse_identical, detect_moved, max_file_size_mb,
+                    normalize_ws,
                 ))
             
             for f in futures:
@@ -937,6 +946,8 @@ def run_pipeline(
             bates_start=bates_start,
             include_uncompared=uncompared_mode == "inline",
             uncompared_mode=uncompared_mode,
+            pdf_font=pdf_font,
+            pdf_lang=pdf_lang,
         )
 
     logger.info("Done (reports) ✓")
@@ -1038,6 +1049,8 @@ def _generate_pdf_report(
     bates_start: int = 1,
     include_uncompared: bool = True,
     uncompared_mode: str = "inline",
+    pdf_font: str | None = None,
+    pdf_lang: str | None = None,
 ) -> None:
     """Generate PDF report with divide-and-conquer merging."""
     if no_merge:
@@ -1057,7 +1070,7 @@ def _generate_pdf_report(
             include_uncompared=uncompared_mode == "inline",
             uncompared_mode=uncompared_mode,
         )
-        cover_html = _html_wrap("Diffinite — Cover", cover_body)
+        cover_html = _html_wrap("Diffinite — Cover", cover_body, pdf_font=pdf_font, pdf_lang=pdf_lang)
         if no_merge:
             cover_dest = str(out_dir / "000_cover.pdf")  # type: ignore[possibly-undefined]
         else:
@@ -1109,6 +1122,8 @@ def _generate_pdf_report(
                 show_file_number=show_file_number,
                 total_files=total_files,
                 show_filename=show_filename,
+                pdf_font=pdf_font,
+                pdf_lang=pdf_lang,
             )
             safe_name = Path(r.match.rel_path_a).name.replace(" ", "_")
             if no_merge:

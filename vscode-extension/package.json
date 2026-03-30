@@ -2,7 +2,7 @@
   "name": "diffinite",
   "displayName": "Diffinite — Source Code Comparison",
   "description": "Forensic source-code comparison with Winnowing fingerprints and professional reports for IP litigation & code audit",
-  "version": "0.11.1",
+  "version": "0.12.0",
   "publisher": "nash-dir",
   "license": "Apache-2.0",
   "repository": {
@@ -67,6 +67,17 @@
           "type": "boolean",
           "default": true,
           "description": "When No Merge is active, preserve the original directory tree in output. Uncheck for flat output with index.html."
+        },
+        "diffinite.pdfFont": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to a .ttf/.otf font file for PDF text rendering. Leave empty to use built-in CJK fonts (e.g. C:/Windows/Fonts/malgun.ttf)."
+        },
+        "diffinite.pdfLang": {
+          "type": "string",
+          "default": "ko",
+          "enum": ["ko", "ja", "zh-cn", "en"],
+          "description": "Major language code to automatically resolve OS-specific fonts from expansion packs. Ignored if pdfFont is specified."
         },
         "diffinite.batesPresets": {
           "type": "array",

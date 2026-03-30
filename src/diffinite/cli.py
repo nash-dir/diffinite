@@ -66,6 +66,17 @@ def main(argv: list[str] | None = None) -> None:
         help="Compare by word instead of by line",
     )
     parser.add_argument(
+        "--normalize-whitespace",
+        action="store_true",
+        default=False,
+        help=(
+            "Normalize whitespace before comparison: replace tabs with spaces "
+            "and collapse multiple consecutive spaces into one. "
+            "Useful when tab-vs-space indentation differences cause "
+            "block misalignment in word comparison."
+        ),
+    )
+    parser.add_argument(
         "--strip-comments",
         action="store_true",
         default=False,
@@ -319,6 +330,29 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help="Generate a JSON report at the given path (for programmatic use)",
     )
+    format_group.add_argument(
+        "--pdf-font",
+        metavar="PATH",
+        default=None,
+        dest="pdf_font",
+        help=(
+            "Absolute path to a .ttf/.otf font file for PDF text rendering. "
+            "When specified, the font is embedded via @font-face and used as "
+            "the primary typeface. When omitted, the built-in xhtml2pdf CJK "
+            "font (HYGothic-Medium) is used as fallback."
+        ),
+    )
+    format_group.add_argument(
+        "--pdf-lang",
+        metavar="LANG_CODE",
+        default=None,
+        dest="pdf_lang",
+        help=(
+            "Major language code (e.g. 'ko', 'ja', 'zh-cn') to automatically "
+            "resolve the best OS-specific font from pdf_fonts.json. "
+            "Ignored if --pdf-font is explicitly provided."
+        ),
+    )
 
     # ── Deep compare options ──────────────────────────────────────────
     deep_group = parser.add_argument_group(
@@ -493,6 +527,11 @@ def main(argv: list[str] | None = None) -> None:
         dir_alias_b=getattr(args, "dir_alias_b", None),
         # Individual output
         preserve_tree=args.preserve_tree,
+        # Whitespace normalization
+        normalize_ws=args.normalize_whitespace,
+        # PDF font
+        pdf_font=getattr(args, "pdf_font", None),
+        pdf_lang=getattr(args, "pdf_lang", None),
     )
 
 

@@ -29,8 +29,12 @@ from __future__ import annotations
 
 import html
 import io
+import json
 import logging
 import os
+import pkgutil
+import sys
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -45,11 +49,127 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Font helpers
+# ---------------------------------------------------------------------------
+def _resolve_font_from_lang(pdf_lang: str) -> str | None:
+    """Find the first available font path for a given language from JSON maps."""
+    # 1. Load built-in map via pkgutil (safe for PyInstaller/zipapps)
+    builtin_map = {}
+    try:
+        data = pkgutil.get_data("diffinite", "pdf_fonts.json")
+        if data:
+            builtin_map = json.loads(data.decode("utf-8"))
+    except Exception as e:
+        logger.warning("Failed to load built-in pdf_fonts.json: %s", e)
+
+    # 2. Load user override map (expansion packs)
+    user_map = {}
+    user_path = Path.home() / ".diffinite_fonts.json"
+    if user_path.exists():
+        try:
+            with open(user_path, "r", encoding="utf-8") as f:
+                user_map = json.load(f)
+                logger.info("Loaded custom font expansion pack: %s", user_path)
+        except Exception as e:
+            logger.warning("Failed to load custom ~/.diffinite_fonts.json: %s", e)
+
+    # 3. Merge maps safely (user overrides built-in per language)
+    merged_map = builtin_map.copy()
+    for lang, os_dict in user_map.items():
+        if not isinstance(os_dict, dict):
+            logger.warning("Invalid format in ~/.diffinite_fonts.json for lang '%s'."
+                           " Expected a dictionary of platforms, got %s.", lang, type(os_dict).__name__)
+            continue
+        
+        if lang not in merged_map:
+            merged_map[lang] = os_dict
+        else:
+            merged_map[lang].update(os_dict)
+
+    if pdf_lang not in merged_map:
+        logger.warning(
+            "Language '%s' not found in font maps. "
+            "Add it to ~/.diffinite_fonts.json to extend support.", pdf_lang
+        )
+        return None
+
+    # 4. Filter for current OS (sys.platform)
+    plat = sys.platform
+    if plat.startswith("linux"):
+        plat = "linux"
+
+    os_dict = merged_map[pdf_lang]
+    if plat not in os_dict or not isinstance(os_dict[plat], list):
+        logger.warning(
+            "No valid font path list defined for language '%s' on platform '%s'.",
+            pdf_lang, plat
+        )
+        return None
+
+    # 5. Find the first path that actually exists (allowing ~ for home dir)
+    paths = os_dict[plat]
+    for p in paths:
+        if not isinstance(p, str):
+            continue
+        # expanduser() resolves tildes like ~/.fonts/... cleanly
+        candidate = Path(p).expanduser().resolve()
+        if candidate.exists():
+            return str(candidate)
+
+    logger.warning(
+        "None of the configured fonts for '%s' on %s exist on this system: %s",
+        pdf_lang, plat, paths
+    )
+    return None
+
+
+def _build_font_face_css(pdf_font: Optional[str], pdf_lang: Optional[str] = None) -> str:
+    """Return a @font-face CSS block.
+
+    If *pdf_font* is given, use it.
+    If not, but *pdf_lang* is given, resolve the path from JSON mapping.
+    If neither works, the built-in CJK fallback (HYGothic-Medium) triggers implicitly.
+    """
+    font_path = pdf_font
+    if not font_path and pdf_lang:
+        font_path = _resolve_font_from_lang(pdf_lang.lower())
+
+    css = ""
+    if font_path:
+        font_path_obj = Path(font_path).expanduser().resolve()
+        if font_path_obj.exists():
+            css += (
+                "@font-face {\n"
+                '    font-family: "UserCJK";\n'
+                f'    src: url("{font_path_obj.as_uri()}");\n'
+                "}\n"
+            )
+
+    plat = sys.platform
+    consolas_path = None
+    if plat == "win32":
+        consolas_path = "C:/Windows/Fonts/consola.ttf"
+    elif plat == "darwin":
+        consolas_path = "/System/Library/Fonts/Menlo.ttc"
+    
+    if consolas_path:
+        consolas_path_obj = Path(consolas_path).expanduser().resolve()
+        if consolas_path_obj.exists():
+            css += (
+                "@font-face {\n"
+                '    font-family: "UserMono";\n'
+                f'    src: url("{consolas_path_obj.as_uri()}");\n'
+                "}\n"
+            )
+    return css
+
+
+# ---------------------------------------------------------------------------
 # CSS (shared across all generated pages)
 # ---------------------------------------------------------------------------
 _CSS_BODY = """\
 body {
-    font-family: "Segoe UI", "Noto Sans KR", "Malgun Gothic", Arial, sans-serif;
+    font-family: "Arial", "Helvetica", sans-serif;
     font-size: 10px;
     color: #1e1e1e;
     background: #fff;
@@ -102,7 +222,7 @@ table.summary tr:nth-child(even) {
     border-collapse: collapse;
     table-layout: fixed;
     width: 100%;
-    font-family: "Consolas", "Courier New", monospace;
+    font-family: "UserMono", "Consolas", "Courier New", monospace;
     font-size: 7.5px;
     margin-bottom: 20px;
 }
@@ -148,9 +268,10 @@ table.summary tr:nth-child(even) {
 .del { background: #fee8e9; }
 .add { background: #dfd; }
 .chg { background: #fff8e1; }
-.word-del { background: rgba(241, 76, 76, 0.30); border-radius: 2px; padding: 0 2px; }
-.word-add { background: rgba(78, 201, 176, 0.30); border-radius: 2px; padding: 0 2px; }
+.word-del { background-color: #f8dede; text-decoration: line-through; }
+.word-add { background-color: #e2fce6; font-weight: bold; }
 .empty { background: #f1f1f1; }
+.cjk { font-family: "UserCJK", "HYGothic-Medium", "Malgun Gothic", "Meiryo", "Microsoft YaHei"; }
 .moved-del { background: #e8d5f5; }
 .moved-add { background: #d5e8f5; }
 ul.unmatched {
@@ -289,8 +410,16 @@ def _html_wrap(
     *,
     has_footer: bool = False,
     has_header: bool = False,
+    pdf_font: Optional[str] = None,
+    pdf_lang: Optional[str] = None,
 ) -> str:
     """Wrap body content in a full HTML document with CSS."""
+    import re
+    cjk_pattern = re.compile(r'([^\x00-\x7F]+)')
+    body = cjk_pattern.sub(r'<span class="cjk">\1</span>', body)
+    if annotation_html:
+        annotation_html = cjk_pattern.sub(r'<span class="cjk">\1</span>', annotation_html)
+        
     margin_bottom = "2cm" if has_footer else "1.2cm"
     margin_top = "2cm" if has_header else "1.2cm"
 
@@ -314,6 +443,8 @@ def _html_wrap(
         height: 1cm;
     }"""
 
+    font_face_css = _build_font_face_css(pdf_font, pdf_lang)
+
     page_css = f"""@page {{
     size: A4 landscape;
     margin: {margin_top} 1.2cm {margin_bottom} 1.2cm;{frames}
@@ -326,7 +457,7 @@ def _html_wrap(
 <meta charset="utf-8">
 <title>{html.escape(title)}</title>
 <style>
-{page_css}
+{font_face_css}{page_css}
 {_CSS_BODY}
 </style>
 </head>
@@ -538,6 +669,8 @@ def build_diff_page_html(
     show_file_number: bool = False,
     total_files: int = 0,
     show_filename: bool = False,
+    pdf_font: Optional[str] = None,
+    pdf_lang: Optional[str] = None,
 ) -> str:
     """Build a single-file diff page HTML."""
     r = result
@@ -570,6 +703,8 @@ def build_diff_page_html(
         annotation_html=annotation_html,
         has_footer=has_footer,
         has_header=has_header,
+        pdf_font=pdf_font,
+        pdf_lang=pdf_lang,
     )
 
 

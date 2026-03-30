@@ -1,0 +1,17 @@
+{
+  "ko": {
+    "win32": ["C:/Windows/Fonts/malgun.ttf", "C:/Windows/Fonts/Gulim.ttc"],
+    "darwin": ["/System/Library/Fonts/AppleSDGothicNeo.ttc", "/Library/Fonts/AppleGothic.ttf"],
+    "linux": ["/usr/share/fonts/truetype/nanum/NanumGothic.ttf", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"]
+  },
+  "ja": {
+    "win32": ["C:/Windows/Fonts/meiryo.ttc", "C:/Windows/Fonts/msgothic.ttc"],
+    "darwin": ["/System/Library/Fonts/Hiragino Sans GB.ttc"],
+    "linux": ["/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"]
+  },
+  "zh-cn": {
+    "win32": ["C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/simsun.ttc"],
+    "darwin": ["/System/Library/Fonts/PingFang.ttc"],
+    "linux": ["/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"]
+  }
+}

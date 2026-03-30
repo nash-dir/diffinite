@@ -2,8 +2,8 @@ import * as vscode from "vscode";
 import * as path from "path";
 import * as os from "os";
 import * as fs from "fs";
-import { collectOptions } from "./optionsPanel";
-import { runAnalysis } from "./runner";
+import { showOptionsPanel } from "./optionsPanel";
+import { runAnalysis, DiffiniteOptions } from "./runner";
 import { showResults } from "./resultViewer";
 import { TreeViewerPanel } from "./treeViewer";
 import { scanAndEstimate, estimatePhase2Time } from "./dirScanner";
@@ -11,26 +11,36 @@ import { scanAndEstimate, estimatePhase2Time } from "./dirScanner";
 export async function compareDirectories(
   context: vscode.ExtensionContext
 ): Promise<void> {
-  const uriA = await vscode.window.showOpenDialog({
-    canSelectFolders: true,
-    canSelectFiles: false,
-    canSelectMany: false,
-    openLabel: "Select Directory A (Original)",
-    title: "Diffinite — Select Original Directory",
+  // Step 1: Launch options panel immediately. It acts as the home base.
+  showOptionsPanel(context, async (dirA: string, dirB: string, options: DiffiniteOptions) => {
+    executePipeline(context, dirA, dirB, options);
   });
-  if (!uriA || uriA.length === 0) { return; }
+}
 
-  const uriB = await vscode.window.showOpenDialog({
-    canSelectFolders: true,
-    canSelectFiles: false,
-    canSelectMany: false,
-    openLabel: "Select Directory B (Suspect)",
-    title: "Diffinite — Select Comparison Directory",
-  });
-  if (!uriB || uriB.length === 0) { return; }
+export async function executePipeline(
+  context: vscode.ExtensionContext,
+  dirA: string,
+  dirB: string,
+  options: DiffiniteOptions
+): Promise<void> {
+  // Prevent parallel Phase 1 execution if a TreeViewer is already pending user action
+  if (TreeViewerPanel.currentPanel) {
+    vscode.window.showWarningMessage("Diffinite: An evidence selection panel (Tree Viewer) is already open. Please complete or close it before running a new analysis.");
+    return;
+  }
 
-  const dirA = uriA[0].fsPath;
-  const dirB = uriB[0].fsPath;
+  if (!dirA || !dirB) {
+    vscode.window.showErrorMessage("Diffinite: Both Directory A and Directory B must be specified.");
+    return;
+  }
+  if (!fs.existsSync(dirA) || !fs.statSync(dirA).isDirectory()) {
+    vscode.window.showErrorMessage(`Directory A is invalid or not a directory: ${dirA}`);
+    return;
+  }
+  if (!fs.existsSync(dirB) || !fs.statSync(dirB).isDirectory()) {
+    vscode.window.showErrorMessage(`Directory B is invalid or not a directory: ${dirB}`);
+    return;
+  }
 
   // Predict time complexity
   const scanMsg = vscode.window.setStatusBarMessage("Diffinite: Scanning files for time estimation...");
@@ -49,9 +59,6 @@ export async function compareDirectories(
       `[Simple Mode: ~${scan.simpleTimeSeconds}s] [Deep Mode: ~${scan.deepTimeSeconds}s]`
     );
   }
-
-  const options = await collectOptions(context);
-  if (!options) { return; }
 
   const expectedPhase1Secs = options.mode === "deep" ? scan.deepPhase1Secs : scan.simplePhase1Secs;
 

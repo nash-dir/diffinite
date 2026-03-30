@@ -38,6 +38,36 @@ from diffinite.models import MovedBlock
 logger = logging.getLogger(__name__)
 
 
+def normalize_whitespace(text: str) -> str:
+    """탭을 스페이스로 변환하고 연속 공백을 단일 스페이스로 축소한다.
+
+    줄 구조(개행)는 유지하면서 각 줄 내의 공백만 정규화.
+    탭→스페이스 변환 후 연속 공백을 1칸으로 줄임으로써,
+    들여쓰기 스타일 차이(tab vs space)가 diff 결과를 왜곡하는 것을 방지한다.
+    """
+    lines = text.splitlines(keepends=True)
+    normalized = []
+    for line in lines:
+        # 탭 → 스페이스
+        line = line.replace("\t", " ")
+        # 개행 분리 후 공백 축소, 개행 복원
+        if line.endswith("\r\n"):
+            content = line[:-2]
+            content = " ".join(content.split())
+            normalized.append(content + "\r\n")
+        elif line.endswith("\n"):
+            content = line[:-1]
+            content = " ".join(content.split())
+            normalized.append(content + "\n")
+        elif line.endswith("\r"):
+            content = line[:-1]
+            content = " ".join(content.split())
+            normalized.append(content + "\r")
+        else:
+            normalized.append(" ".join(line.split()))
+    return "".join(normalized)
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Moved Block Detection
 # ──────────────────────────────────────────────────────────────────────
@@ -284,6 +314,7 @@ def compute_diff(
     text_b: str,
     by_word: bool = False,
     autojunk: bool = True,
+    normalize_ws: bool = False,
 ) -> Tuple[float, int, int]:
     """두 텍스트의 유사도, 추가/삭제 수를 계산한다.
 
@@ -293,14 +324,19 @@ def compute_diff(
     포렌식 정밀 분석에 적합하지만 대형 파일에서 성능이 저하된다.
 
     Args:
-        by_word:   True이면 공백 기준 단어 분할, False이면 라인 분할.
-        autojunk:  ``difflib.SequenceMatcher``의 autojunk 옵션.
+        by_word:       True이면 공백 기준 단어 분할, False이면 라인 분할.
+        autojunk:      ``difflib.SequenceMatcher``의 autojunk 옵션.
+        normalize_ws:  True이면 비교 전 공백 정규화 (탭→스페이스, 연속 공백→1칸).
 
     Returns:
         ``(ratio, additions, deletions)``
         - ratio: 0.0–1.0 유사도 (1.0 = 동일)
         - additions/deletions: B에 추가/A에서 삭제된 단위 수
     """
+    if normalize_ws:
+        text_a = normalize_whitespace(text_a)
+        text_b = normalize_whitespace(text_b)
+
     if by_word:
         seq_a = text_a.split()
         seq_b = text_b.split()
@@ -432,6 +468,7 @@ def generate_html_diff(
     autojunk: bool = True,
     by_word: bool = False,
     detect_moved: bool = False,
+    normalize_ws: bool = False,
 ) -> str:
     """구문 강조 + context folding이 적용된 side-by-side diff HTML을 생성한다.
 
@@ -454,6 +491,17 @@ def generate_html_diff(
         ``del``(삭제), ``empty``(빈 셀), ``fold``(접힌 구간),
         ``moved-del``(이동 원위치), ``moved-add``(이동 목적지).
     """
+    # by_word 모드에서는 탭→스페이스를 항상 자동 수행.
+    # word split()은 이미 탭과 스페이스를 동일 취급하지만,
+    # 라인 레벨 SequenceMatcher는 차이를 인식하여 블록이 밀릴 수 있다.
+    if by_word:
+        text_a = text_a.replace("\t", " ")
+        text_b = text_b.replace("\t", " ")
+
+    if normalize_ws:
+        text_a = normalize_whitespace(text_a)
+        text_b = normalize_whitespace(text_b)
+
     lines_a = text_a.splitlines()
     lines_b = text_b.splitlines()
 
