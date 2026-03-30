@@ -64,7 +64,8 @@ export function showHelp(context: vscode.ExtensionContext): void {
   </div>
   <ul>
     <li><span class="param">Strip comments:</span> Removes comments before comparison. Crucial if the plagiarist translated or deleted original comments.</li>
-    <li><span class="param">Compare by word:</span> Highlights exact word changes within a line. Useful for tracking variable name changes.</li>
+    <li><span class="param">Compare by word:</span> Highlights exact word changes within a line. Useful for tracking variable name changes. <strong>Note:</strong> When enabled, tabs are automatically replaced with spaces before line matching to prevent tab-vs-space indentation from causing block misalignment.</li>
+    <li><span class="param">Normalize whitespace:</span> Replaces all tabs with spaces and collapses multiple consecutive spaces into one before comparison. Enable this when the original and copied code use different indentation styles (e.g., tabs vs 4 spaces) and this difference is polluting the diff output. Works in both line and word comparison modes.</li>
     <li><span class="param">Detect moved code blocks:</span> Identifies sections of code that were cut and pasted elsewhere within the same file. Highlighted in purple/blue to distinguish them from simple deletions/additions.</li>
     <li><span class="param">Binary files:</span> "Hash compare only" will ensure images and compiled binaries are tracked in the cryptographic chain of custody without crashing the text differ.</li>
   </ul>

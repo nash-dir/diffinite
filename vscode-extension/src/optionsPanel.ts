@@ -1,54 +1,70 @@
 /**
- * Options Panel — collects analysis options via a Webview form.
+ * Options Panel — collects target directories & analysis options via a Webview form.
  *
  * Renders CLI options as checkboxes, dropdowns, and number inputs.
- * Returns the collected options via a Promise.
+ * Acts as the "Home Base" UI that triggers the pipeline logic.
  */
 import * as vscode from "vscode";
 import { DiffiniteOptions, defaultOptions } from "./runner";
 import { getDefaultMode, getBatesPresets, BatesPreset } from "./config";
 
 /**
- * Show an options panel and return the user's choices.
- * Resolves with the options, or undefined if cancelled.
+ * Open the main options panel.
+ * @param context VSCode extension context
+ * @param onRun Callback triggered when user clicks "Run Analysis"
  */
-export function collectOptions(
-  context: vscode.ExtensionContext
-): Promise<DiffiniteOptions | undefined> {
-  return new Promise((resolve) => {
-    const panel = vscode.window.createWebviewPanel(
-      "diffiniteOptions",
-      "Diffinite — Options",
-      vscode.ViewColumn.One,
-      { enableScripts: true }
-    );
+export function showOptionsPanel(
+  context: vscode.ExtensionContext,
+  onRun: (dirA: string, dirB: string, options: DiffiniteOptions) => Promise<void>
+): void {
+  const panel = vscode.window.createWebviewPanel(
+    "diffiniteOptions",
+    "Diffinite — Analysis",
+    vscode.ViewColumn.One,
+    { enableScripts: true, retainContextWhenHidden: true }
+  );
 
-    const config = vscode.workspace.getConfiguration("diffinite");
-    const defaults = defaultOptions();
-    defaults.mode = getDefaultMode() as "simple" | "deep";
-    defaults.workers = config.get<number>("workers", 4);
-    defaults.noMerge = config.get<boolean>("noMerge", false);
-    defaults.preserveTree = config.get<boolean>("preserveTree", true);
-    const presets = getBatesPresets();
+  const config = vscode.workspace.getConfiguration("diffinite");
+  const defaults = defaultOptions();
+  defaults.mode = getDefaultMode() as "simple" | "deep";
+  defaults.workers = config.get<number>("workers", 4);
+  defaults.noMerge = config.get<boolean>("noMerge", false);
+  defaults.preserveTree = config.get<boolean>("preserveTree", true);
+  const presets = getBatesPresets();
 
-    panel.webview.html = buildOptionsHtml(defaults, presets);
+  panel.webview.html = buildOptionsHtml(defaults, presets);
 
-    panel.webview.onDidReceiveMessage(
-      (msg: { command: string; options?: DiffiniteOptions }) => {
-        if (msg.command === "run" && msg.options) {
-          resolve(msg.options);  // resolve BEFORE dispose
-          panel.dispose();
-        } else if (msg.command === "cancel") {
-          panel.dispose();
-          resolve(undefined);
+  panel.webview.onDidReceiveMessage(
+    async (msg: { command: string; target?: string; options?: DiffiniteOptions; dirA?: string; dirB?: string }) => {
+      if (msg.command === "run" && msg.options && msg.dirA && msg.dirB) {
+        // Trigger the pipeline but DO NOT dispose the panel.
+        // It stays open so users can tweak paths/options and run again safely!
+        try {
+          await onRun(msg.dirA, msg.dirB, msg.options);
+        } finally {
+          panel.webview.postMessage({ command: 'runComplete' });
         }
-      },
-      undefined,
-      context.subscriptions
-    );
-
-    panel.onDidDispose(() => resolve(undefined));
-  });
+      } else if (msg.command === "browse" && msg.target) {
+        // Open native directory selection dialog
+        const isDirA = msg.target === "dirA";
+        const uri = await vscode.window.showOpenDialog({
+          canSelectFolders: true,
+          canSelectFiles: false,
+          canSelectMany: false,
+          openLabel: `Select Directory ${isDirA ? 'A (Original)' : 'B (Suspect)'}`,
+          title: `Diffinite — Select Directory ${isDirA ? 'A' : 'B'}`,
+        });
+        if (uri && uri.length > 0) {
+          // Send selected path back to update the webview input
+          panel.webview.postMessage({ command: "setPath", target: msg.target, path: uri[0].fsPath });
+        }
+      } else if (msg.command === "cancel") {
+        panel.dispose();
+      }
+    },
+    undefined,
+    context.subscriptions
+  );
 }
 
 function buildOptionsHtml(defaults: DiffiniteOptions, presets: BatesPreset[]): string {
@@ -65,9 +81,24 @@ function buildOptionsHtml(defaults: DiffiniteOptions, presets: BatesPreset[]): s
   <style>${OPTIONS_CSS}</style>
 </head>
 <body>
-  <h1>Diffinite — Analysis Options</h1>
+  <h1>Diffinite — Code Comparison</h1>
 
   <form id="optForm">
+    <section>
+      <h2>Target Directories</h2>
+      <div class="field dir-input-row" style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
+        <label for="dirA" style="width: 80px; flex-shrink: 0;">Dir A (Org)</label>
+        <input type="text" id="dirA" class="path-input" style="flex-grow: 1; max-width: none;" placeholder="e.g. C:/source/project_v1">
+        <button type="button" id="btnBrowseA" class="btn-secondary" style="flex-shrink: 0;">Browse</button>
+      </div>
+      <div class="field dir-input-row" style="display: flex; gap: 8px; align-items: center;">
+        <label for="dirB" style="width: 80px; flex-shrink: 0;">Dir B (Susp)</label>
+        <input type="text" id="dirB" class="path-input" style="flex-grow: 1; max-width: none;" placeholder="e.g. C:/source/project_v2">
+        <button type="button" id="btnBrowseB" class="btn-secondary" style="flex-shrink: 0;">Browse</button>
+      </div>
+      <div id="dirError" style="color:var(--error); font-size:12px; margin-top:8px; display:none;">Please specify both directories!</div>
+    </section>
+
     <section>
       <h2>Execution</h2>
       <div class="field">
@@ -92,6 +123,10 @@ function buildOptionsHtml(defaults: DiffiniteOptions, presets: BatesPreset[]): s
       <div class="field checkbox">
         <input type="checkbox" id="byWord" ${defaults.byWord ? "checked" : ""}>
         <label for="byWord">Compare by word (instead of by line)</label>
+      </div>
+      <div class="field checkbox" style="margin-left:24px">
+        <input type="checkbox" id="normalizeWhitespace" ${defaults.normalizeWhitespace ? "checked" : ""}>
+        <label for="normalizeWhitespace">Normalize whitespace (tab→space, collapse multiple spaces)</label>
       </div>
       <div class="field checkbox">
         <input type="checkbox" id="collapseIdentical" ${defaults.collapseIdentical ? "checked" : ""}>
@@ -214,8 +249,7 @@ function buildOptionsHtml(defaults: DiffiniteOptions, presets: BatesPreset[]): s
     </section>
 
     <div class="actions">
-      <button type="button" id="btnCancel" class="btn-secondary">Cancel</button>
-      <button type="submit" class="btn-primary">&#9654; Run Analysis</button>
+      <button type="submit" class="btn-primary" style="width:100%">&#9654; Run Analysis</button>
     </div>
   </form>
 
@@ -232,6 +266,7 @@ const OPTIONS_CSS = `
     --fg-dim: #888;
     --accent: #0078d4;
     --border: #3c3c3c;
+    --error: #f48771;
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -242,7 +277,7 @@ const OPTIONS_CSS = `
     color: var(--fg);
     background: var(--bg);
     padding: 24px;
-    max-width: 560px;
+    max-width: 600px;
     margin: 0 auto;
   }
 
@@ -290,7 +325,7 @@ const OPTIONS_CSS = `
     color: var(--fg-dim);
   }
 
-  select, input[type="number"] {
+  select, input[type="number"], input[type="text"] {
     background: var(--bg);
     color: var(--fg);
     border: 1px solid var(--border);
@@ -301,7 +336,12 @@ const OPTIONS_CSS = `
     max-width: 200px;
   }
 
-  select:focus, input[type="number"]:focus {
+  .path-input {
+    font-family: monospace;
+    max-width: none !important; /* Overrides the 200px limit for path textboxes */
+  }
+
+  select:focus, input[type="number"]:focus, input[type="text"]:focus {
     outline: none;
     border-color: var(--accent);
   }
@@ -354,22 +394,6 @@ const OPTIONS_CSS = `
   }
 
   .bates-details.hidden { display: none; }
-
-  input[type="text"] {
-    background: var(--bg);
-    color: var(--fg);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 6px 10px;
-    font-size: 13px;
-    width: 100%;
-    max-width: 200px;
-  }
-
-  input[type="text"]:focus {
-    outline: none;
-    border-color: var(--accent);
-  }
 `;
 
 const OPTIONS_JS = `
@@ -378,6 +402,51 @@ const OPTIONS_JS = `
   const form = document.getElementById('optForm');
   const modeSelect = document.getElementById('mode');
   const deepSection = document.getElementById('deepSection');
+  const dirAEl = document.getElementById('dirA');
+  const dirBEl = document.getElementById('dirB');
+  const dirError = document.getElementById('dirError');
+  const btnRun = form.querySelector('.btn-primary');
+
+  // Handle Directory Browse clicks
+  document.getElementById('btnBrowseA').addEventListener('click', () => {
+    vscode.postMessage({ command: 'browse', target: 'dirA' });
+  });
+  document.getElementById('btnBrowseB').addEventListener('click', () => {
+    vscode.postMessage({ command: 'browse', target: 'dirB' });
+  });
+
+  // Handle incoming path selections from VSCode Native Dialogs
+  window.addEventListener('message', event => {
+    const msg = event.data;
+    if (msg.command === 'setPath') {
+      const el = msg.target === 'dirA' ? dirAEl : dirBEl;
+      if (el) {
+        el.value = msg.path;
+        formatPathAndScrollEnd(el);
+      }
+    } else if (msg.command === 'runComplete') {
+      // Revert loading text when the extension host acknowledges completion (or TreeViewer is blocked)
+      btnRun.innerHTML = '&#9654; Run Analysis';
+    }
+  });
+
+  // UX Requirement: Normalize path quotes/newlines and ALWAYS show trailing basename
+  function formatPathAndScrollEnd(el) {
+    let val = el.value || "";
+    // Remove wrapping quotes ("C:\\path" -> C:\\path) and strip newlines
+    val = val.replace(/^["']|["']$/g, '').replace(/[\\r\\n]+/g, '');
+    el.value = val;
+    
+    // Defer the scroll adjustment heavily so the browser paint catches up.
+    // This forces the input's scroll position strictly to the rightmost trailing string.
+    setTimeout(() => { el.scrollLeft = el.scrollWidth; }, 20);
+  }
+
+  // Format paths when losing focus or instantly after user pastes raw strings
+  dirAEl.addEventListener('blur', () => formatPathAndScrollEnd(dirAEl));
+  dirAEl.addEventListener('input', () => formatPathAndScrollEnd(dirAEl));
+  dirBEl.addEventListener('blur', () => formatPathAndScrollEnd(dirBEl));
+  dirBEl.addEventListener('input', () => formatPathAndScrollEnd(dirBEl));
 
   // Toggle deep section visibility based on mode
   function updateDeepVisibility() {
@@ -416,10 +485,21 @@ const OPTIONS_JS = `
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
+    dirError.style.display = 'none';
+
+    const dirA = dirAEl.value.trim();
+    const dirB = dirBEl.value.trim();
+
+    if (!dirA || !dirB) {
+      dirError.style.display = 'block';
+      return;
+    }
+
     const options = {
       mode: modeSelect.value,
       stripComments: document.getElementById('stripComments').checked,
       byWord: document.getElementById('byWord').checked,
+      normalizeWhitespace: document.getElementById('normalizeWhitespace').checked,
       normalize: document.getElementById('normalize').checked,
       collapseIdentical: document.getElementById('collapseIdentical').checked,
       detectMoved: document.getElementById('detectMoved').checked,
@@ -445,11 +525,13 @@ const OPTIONS_JS = `
       noMerge: document.getElementById('noMerge').checked,
       preserveTree: document.getElementById('preserveTree').checked,
     };
-    vscode.postMessage({ command: 'run', options });
+    
+    // Set UI to running state (does not disable button to allow parallel queueing test flows if desired)
+    btnRun.innerHTML = '<span style="opacity:0.7">&#10227;</span> Running...';
+
+    // Broadcast run event back to main extension process
+    vscode.postMessage({ command: 'run', dirA, dirB, options });
   });
 
-  document.getElementById('btnCancel').addEventListener('click', () => {
-    vscode.postMessage({ command: 'cancel' });
-  });
 })();
 `;

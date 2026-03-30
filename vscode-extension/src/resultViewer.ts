@@ -8,6 +8,7 @@
  *   (4) Keyboard shortcuts: J (next), K (prev)
  */
 import * as vscode from "vscode";
+import { getPdfFont, getPdfLang } from "./config";
 import { DiffiniteReport, DiffiniteOptions, runExport } from "./runner";
 
 /**
@@ -20,8 +21,8 @@ export function showResults(
 ): void {
   const panel = vscode.window.createWebviewPanel(
     "diffiniteResults",
-    "Diffinite — Results",
-    vscode.ViewColumn.One,
+    `Diffinite: Results (${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })})`,
+    vscode.ViewColumn.Active,
     { enableScripts: true, retainContextWhenHidden: true }
   );
 
@@ -58,6 +59,11 @@ export function showResults(
                 cancellable: false,
               },
               async (progress) => {
+                // Read latest PDF font config right before exporting
+                if (format === "pdf") {
+                  options.pdfFont = getPdfFont();
+                  options.pdfLang = getPdfLang();
+                }
                 await runExport(
                   report.dir_a, report.dir_b,
                   options, format, uri.fsPath, progress

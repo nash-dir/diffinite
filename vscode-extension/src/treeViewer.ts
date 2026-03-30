@@ -23,7 +23,7 @@ export class TreeViewerPanel {
     onGenerate: (selectedFilesA: string[]) => void
   ) {
     if (TreeViewerPanel.currentPanel) {
-      TreeViewerPanel.currentPanel._panel.reveal(vscode.ViewColumn.One);
+      TreeViewerPanel.currentPanel._panel.reveal(vscode.ViewColumn.Active);
       TreeViewerPanel.currentPanel.update(report);
       TreeViewerPanel.currentPanel._onGenerateCallback = onGenerate;
       return;
@@ -32,7 +32,7 @@ export class TreeViewerPanel {
     const panel = vscode.window.createWebviewPanel(
       "diffiniteTreeViewer",
       "Diffinite — Select Evidence Files",
-      vscode.ViewColumn.One,
+      vscode.ViewColumn.Active,
       {
         enableScripts: true,
         retainContextWhenHidden: true,

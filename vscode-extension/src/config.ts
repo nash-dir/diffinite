@@ -37,3 +37,13 @@ export async function updateBatesPresetStart(
     await config.update("batesPresets", presets, vscode.ConfigurationTarget.Global);
   }
 }
+
+export function getPdfFont(): string {
+  const config = vscode.workspace.getConfiguration("diffinite");
+  return config.get<string>("pdfFont", "");
+}
+
+export function getPdfLang(): string {
+  const config = vscode.workspace.getConfiguration("diffinite");
+  return config.get<string>("pdfLang", "ko");
+}
