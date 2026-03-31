@@ -35,6 +35,7 @@ import html as html_mod
 import json
 import logging
 import os
+import re
 import tempfile
 from pathlib import Path, PurePosixPath
 
@@ -167,6 +168,18 @@ def _process_match_chunk(
                 normalize_ws=normalize_ws,
             )
 
+            # Hard cap: 2 MB of HTML diff → xhtml2pdf layout will hang above this.
+            # Truncate and replace with a visible forensic notice.
+            _MAX_DIFF_HTML_BYTES = 2_000_000  # 2 MB — empirically safe for xhtml2pdf
+            if len(html_diff.encode('utf-8', errors='replace')) > _MAX_DIFF_HTML_BYTES:
+                truncated_kb = len(html_diff.encode('utf-8', errors='replace')) / 1024
+                html_diff = (
+                    '<p style="color:#c00;font-weight:bold;font-size:12px;">'
+                    f'⚠ Diff output truncated ({truncated_kb:.0f} KB). '
+                    f'Original file too large for inline PDF rendering. '
+                    f'Use HTML or JSON export for the full diff.</p>'
+                )
+
         results.append(DiffResult(
             match=m, ratio=ratio, additions=additions, deletions=deletions, html_diff=html_diff,
         ))
@@ -184,6 +197,22 @@ def _compute_ln_col_width(line_counts: list[int]) -> int:
     max_ln = max(line_counts) if line_counts else 1
     digits = len(str(max_ln))
     return max(28, digits * 7 + 10)
+
+
+# Natural sort: '1. foo' < '2. foo' < '10. foo'
+# Splits a string into alternating (text, int) segments so that
+# numeric substrings are compared by integer value, not lexicographically.
+_RE_NATURAL = re.compile(r'(\d+)')
+
+def _natural_sort_key(s: str) -> list:
+    """Natural sort key: compare numeric segments as integers.
+
+    '1. Handler.java' → ['', 1, '. handler.java']
+    '10. Bundle.java' → ['', 10, '. bundle.java']
+    → 1 < 10, so '1. Handler' sorts before '10. Bundle'.
+    """
+    parts = _RE_NATURAL.split(s.lower())
+    return [int(p) if p.isdigit() else p for p in parts]
 
 
 def _build_metadata_banner_md(meta: AnalysisMetadata) -> str:
@@ -821,7 +850,9 @@ def run_pipeline(
         
         with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
             futures = []
+            chunk_file_counts = []  # track how many files each worker was assigned
             for i, chunk in enumerate(chunks):
+                chunk_file_counts.append(len(chunk))
                 futures.append(executor.submit(
                     _process_match_chunk, i+1, chunk,
                     dir_a, dir_b, encoding, binary_handling,
@@ -830,14 +861,34 @@ def run_pipeline(
                     normalize_ws,
                 ))
             
-            for f in futures:
+            crashed_workers = 0
+            lost_file_count = 0
+            for idx, f in enumerate(futures):
                 try:
                     req, lines, errs = f.result()
                     results.extend(req)
                     all_line_counts.extend(lines)
                     unreadable_errors.extend(errs)
                 except Exception as exc:
-                    logger.error("A rendering worker crashed: %s", exc)
+                    crashed_workers += 1
+                    lost = chunk_file_counts[idx]
+                    lost_file_count += lost
+                    logger.error(
+                        "⚠ Worker %d CRASHED — %d file pair(s) lost from report: %s",
+                        idx + 1, lost, exc,
+                    )
+
+            if lost_file_count > 0:
+                logger.warning(
+                    "⚠ INTEGRITY WARNING: %d worker(s) crashed, "
+                    "%d of %d file pair(s) are MISSING from the final report.",
+                    crashed_workers, lost_file_count, len(matches),
+                )
+            if crashed_workers == len(futures):
+                raise RuntimeError(
+                    f"All {crashed_workers} rendering workers crashed. "
+                    f"Cannot produce a valid report. Check file permissions and encoding."
+                )
 
     total_files = len(results)
 
@@ -851,11 +902,11 @@ def run_pipeline(
         reverse = sort_order == "desc"
         if sort_by == "filename":
             results.sort(
-                key=lambda r: PurePosixPath(r.match.rel_path_a).name.lower(),
+                key=lambda r: _natural_sort_key(PurePosixPath(r.match.rel_path_a).name),
                 reverse=reverse,
             )
         elif sort_by == "path":
-            results.sort(key=lambda r: r.match.rel_path_a.lower(), reverse=reverse)
+            results.sort(key=lambda r: _natural_sort_key(r.match.rel_path_a), reverse=reverse)
         elif sort_by == "similarity":
             results.sort(key=lambda r: r.match.similarity, reverse=reverse)
         elif sort_by == "ratio":

@@ -403,6 +403,30 @@ def build_hash_table_html(
     return ''.join(parts)
 
 
+# ---------------------------------------------------------------------------
+# CJK font wrapping (tag-safe)
+# ---------------------------------------------------------------------------
+import re as _re
+
+_RE_HTML_TAG = _re.compile(r'(<[^>]+>)')
+_RE_NON_ASCII = _re.compile(r'([^\x00-\x7F]+)')
+
+
+def _wrap_cjk_text_nodes(html_text: str) -> str:
+    """Wrap non-ASCII text runs in <span class="cjk"> for font switching.
+
+    Splits the HTML string by tags, then applies the CJK span wrapping
+    ONLY to text segments (outside ``<...>`` brackets). This prevents
+    corruption of HTML attributes that may contain non-ASCII characters
+    (e.g. ``<th>한글.py</th>`` — the tag itself must not be modified).
+    """
+    parts = _RE_HTML_TAG.split(html_text)
+    for i, part in enumerate(parts):
+        if not part.startswith('<'):  # text node, safe to wrap
+            parts[i] = _RE_NON_ASCII.sub(r'<span class="cjk">\1</span>', part)
+    return ''.join(parts)
+
+
 def _html_wrap(
     title: str,
     body: str,
@@ -414,11 +438,9 @@ def _html_wrap(
     pdf_lang: Optional[str] = None,
 ) -> str:
     """Wrap body content in a full HTML document with CSS."""
-    import re
-    cjk_pattern = re.compile(r'([^\x00-\x7F]+)')
-    body = cjk_pattern.sub(r'<span class="cjk">\1</span>', body)
+    body = _wrap_cjk_text_nodes(body)
     if annotation_html:
-        annotation_html = cjk_pattern.sub(r'<span class="cjk">\1</span>', annotation_html)
+        annotation_html = _wrap_cjk_text_nodes(annotation_html)
         
     margin_bottom = "2cm" if has_footer else "1.2cm"
     margin_top = "2cm" if has_header else "1.2cm"
