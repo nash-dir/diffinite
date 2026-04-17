@@ -28,12 +28,15 @@ Pass 2 (Slow-path):
 from __future__ import annotations
 
 import enum
+import logging
 import re
 from typing import Optional
 
 from collections.abc import Iterator, Mapping
 
 from diffinite.models import CommentSpec
+
+_logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────────────────────────────
 # 언어 레지스트리 위임
@@ -379,6 +382,18 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
         # 라인 종료: IN_LINE_COMMENT → CODE 복귀
         if state is _State.IN_LINE_COMMENT:
             state = _State.CODE
+
+        # C1 안전장치: 닫히지 않은 단일 구분자 문자열은 줄 끝에서 복구
+        # 트리플-쿼트(""", ''') 문자열은 여러 줄에 걸치므로 예외.
+        # 깨진 소스코드에서 이후 전체 라인의 주석 제거가 무효화되는 것을 방지.
+        if state is _State.IN_STRING and string_delim is not None and len(string_delim) == 1:
+            _logger.debug(
+                "Unclosed string (delim=%r) at end of line %d — "
+                "resetting parser to CODE state.",
+                string_delim, line_idx + 1,
+            )
+            state = _State.CODE
+            string_delim = None
 
         out_parts.append("".join(line_out))
 

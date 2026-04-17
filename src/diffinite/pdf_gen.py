@@ -409,11 +409,24 @@ def build_hash_table_html(
 import re as _re
 
 _RE_HTML_TAG = _re.compile(r'(<[^>]+>)')
-_RE_NON_ASCII = _re.compile(r'([^\x00-\x7F]+)')
+# M2: CJK 유니코드 블록만 매칭 — 라틴 확장(é, ñ), 아랍어 등은 제외하여 tofu 방지
+_RE_CJK = _re.compile(
+    r'(['
+    r'\u2E80-\u2FDF'   # CJK Radicals
+    r'\u3000-\u303F'   # CJK Symbols and Punctuation
+    r'\u3040-\u30FF'   # Hiragana + Katakana
+    r'\u3100-\u318F'   # Bopomofo + Korean Jamo Compatibility
+    r'\u3400-\u4DBF'   # CJK Extension A
+    r'\u4E00-\u9FFF'   # CJK Unified Ideographs
+    r'\uAC00-\uD7AF'   # Korean Syllables
+    r'\uF900-\uFAFF'   # CJK Compatibility Ideographs
+    r'\U00020000-\U0002A6DF'  # CJK Extension B
+    r']+)'
+)
 
 
 def _wrap_cjk_text_nodes(html_text: str) -> str:
-    """Wrap non-ASCII text runs in <span class="cjk"> for font switching.
+    """Wrap CJK text runs in <span class="cjk"> for font switching.
 
     Splits the HTML string by tags, then applies the CJK span wrapping
     ONLY to text segments (outside ``<...>`` brackets). This prevents
@@ -423,7 +436,7 @@ def _wrap_cjk_text_nodes(html_text: str) -> str:
     parts = _RE_HTML_TAG.split(html_text)
     for i, part in enumerate(parts):
         if not part.startswith('<'):  # text node, safe to wrap
-            parts[i] = _RE_NON_ASCII.sub(r'<span class="cjk">\1</span>', part)
+            parts[i] = _RE_CJK.sub(r'<span class="cjk">\1</span>', part)
     return ''.join(parts)
 
 
@@ -754,7 +767,7 @@ def merge_with_bookmarks(
     output_path: str,
     *,
     deep_pdf: Optional[str] = None,
-) -> None:
+) -> list[dict]:
     """Merge PDFs and insert hierarchical bookmarks (TOC).
 
     Args:
@@ -762,9 +775,13 @@ def merge_with_bookmarks(
         diff_pdfs:  List of ``(pdf_path, DiffResult)`` tuples.
         output_path: Final merged PDF destination.
         deep_pdf:   Optional path to the deep-compare summary PDF.
+
+    Returns:
+        List of dictionaries containing pagination boundaries for each DiffResult.
     """
     writer = PdfWriter()
     page_offset = 0
+    layout_data = []
 
     # Cover page
     if Path(cover_pdf).exists() and Path(cover_pdf).stat().st_size > 0:
@@ -786,7 +803,16 @@ def merge_with_bookmarks(
 
         label = f"{result.match.rel_path_a} ↔ {result.match.rel_path_b}"
         writer.add_outline_item(label, page_offset)
-        page_offset += len(reader.pages)
+        
+        page_count = len(reader.pages)
+        layout_data.append({
+            'file_a': result.match.rel_path_a,
+            'file_b': result.match.rel_path_b,
+            'sim': result.match.similarity,
+            'start_page': page_offset + 1,
+            'end_page': page_offset + page_count
+        })
+        page_offset += page_count
 
     # Deep compare page
     if deep_pdf and Path(deep_pdf).exists() and Path(deep_pdf).stat().st_size > 0:
@@ -803,6 +829,7 @@ def merge_with_bookmarks(
     writer.close()
     logger.info("Merged PDF with bookmarks → %s (%d bytes)",
                 out.resolve(), out.stat().st_size)
+    return layout_data
 
 
 # ---------------------------------------------------------------------------

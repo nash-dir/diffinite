@@ -77,7 +77,8 @@ export async function executePipeline(
     );
     
     const actualPhase1Secs = Math.max(0.1, (Date.now() - phase1Start) / 1000);
-    const cpuMultiplier = actualPhase1Secs / expectedPhase1Secs;
+    const safeExpectedSecs = Math.max(0.1, expectedPhase1Secs);
+    const cpuMultiplier = actualPhase1Secs / safeExpectedSecs;
 
     // Show Tree Viewer instead of Result Viewer
     TreeViewerPanel.createOrShow(report1, async (selectedFiles) => {

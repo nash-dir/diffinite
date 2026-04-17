@@ -257,6 +257,15 @@ def main(argv: list[str] | None = None) -> None:
         default=10.0,
         help="Maximum file size in MB. Files larger than this will bypass memory decode and fall back to hash comparison (default: 10.0 MB).",
     )
+    # 2MB HTML is roughly ~100k DOM nodes. xhtml2pdf's html5lib parser is written in pure Python
+    # and recursive traversing hits RecursionError or extreme GC pauses beyond this point.
+    parser.add_argument(
+        "--max-diff-html-size",
+        type=float,
+        default=2.0,
+        dest="max_diff_html_size",
+        help="Maximum HTML diff size in MB before truncation (default: 2.0). Prevents xhtml2pdf OOM.",
+    )
     parser.add_argument(
         "--dir-alias-a",
         metavar="ALIAS",
@@ -516,22 +525,23 @@ def main(argv: list[str] | None = None) -> None:
         # Binary handling
         binary_handling=args.binary_handling,
         # Ignore list
-        ignore_file=getattr(args, "ignore_file", None),
+        ignore_file=args.ignore_file,
         # Phase 1/2 Architecture
-        metrics_only=getattr(args, "metrics_only", False),
-        filter_json=getattr(args, "filter_json", None),
+        metrics_only=args.metrics_only,
+        filter_json=args.filter_json,
         # Stability & Forensics
-        unreadable_log=getattr(args, "unreadable_log", None),
-        max_file_size_mb=getattr(args, "max_file_size", 10.0),
-        dir_alias_a=getattr(args, "dir_alias_a", None),
-        dir_alias_b=getattr(args, "dir_alias_b", None),
+        unreadable_log=args.unreadable_log,
+        max_file_size_mb=args.max_file_size,
+        max_diff_html_size_mb=args.max_diff_html_size,
+        dir_alias_a=args.dir_alias_a,
+        dir_alias_b=args.dir_alias_b,
         # Individual output
         preserve_tree=args.preserve_tree,
         # Whitespace normalization
         normalize_ws=args.normalize_whitespace,
         # PDF font
-        pdf_font=getattr(args, "pdf_font", None),
-        pdf_lang=getattr(args, "pdf_lang", None),
+        pdf_font=args.pdf_font,
+        pdf_lang=args.pdf_lang,
     )
 
 

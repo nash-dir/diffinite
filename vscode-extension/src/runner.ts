@@ -144,13 +144,13 @@ function resolveBinary(): { exe: string; prefixArgs: string[] } {
   if (process.platform === "win32") {
     const bundledPython = path.join(__dirname, "..", "bin", "python", "python.exe");
     if (fs.existsSync(bundledPython)) {
-      return { exe: bundledPython, prefixArgs: ["-m", "diffinite"] };
+      return { exe: bundledPython, prefixArgs: ["-I", "-m", "diffinite"] };
     }
   }
 
   // Fallback to system Python interpreter (all platforms)
   const pythonPath = getPythonPath();
-  return { exe: pythonPath, prefixArgs: ["-m", "diffinite"] };
+  return { exe: pythonPath, prefixArgs: ["-I", "-m", "diffinite"] };
 }
 
 /**
@@ -191,6 +191,9 @@ function buildArgs(opts: DiffiniteOptions): string[] {
   }
   if (opts.uncomparedFiles && opts.uncomparedFiles !== "inline") {
     args.push("--uncompared-files", opts.uncomparedFiles);
+  }
+  if (opts.binaryHandling && opts.binaryHandling !== "hash") {
+    args.push("--binary-handling", opts.binaryHandling);
   }
   // Auto-inject built-in ignore file if it exists
   const defaultIgnoreFile = path.join(os.homedir(), ".diffignore");
@@ -243,15 +246,11 @@ function spawnDiffinite(
   const allArgs = [...prefixArgs, ...extraArgs];
   console.log('[Diffinite] Spawning:', exe, allArgs.join(' '));
   
-  // Dev mode injection: if we exist inside the local diffinite workspace,
-  // we can inject PYTHONPATH so the bundled isolated Python environment
-  // imports the live source files instead of the stale built ones!
-  const srcPath = path.resolve(__dirname, '..', '..', 'src');
-  let env = process.env;
-  if (fs.existsSync(path.join(srcPath, 'diffinite'))) {
-      env = { ...process.env, PYTHONPATH: srcPath };
-      console.log('[Diffinite] Dev mode detected! Injecting PYTHONPATH:', srcPath);
-  }
+  // Dev mode injection removed (L3): The Windows Embedded Python ignores
+  // PYTHONPATH by design if a ._pth file exists. If running via system Python,
+  // standard rules apply. It's safer to rely on the properly installed package
+  // rather than dynamic runtime patching which causes silent fallbacks.
+  const env = process.env;
 
   return spawn(exe, allArgs, { env });
 }

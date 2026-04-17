@@ -69,7 +69,7 @@ def _process_match_chunk(
     dir_a: str, dir_b: str, encoding: str, binary_handling: str,
     strip_comments: bool, squash_blanks: bool, by_word: bool, autojunk: bool,
     metrics_only: bool, collapse_identical: bool, detect_moved: bool, max_file_size_mb: float = 10.0,
-    normalize_ws: bool = False,
+    normalize_ws: bool = False, max_diff_html_size_mb: float = 2.0,
 ) -> tuple[list[DiffResult], list[int], list[str]]:
     import sys
     results = []
@@ -168,14 +168,14 @@ def _process_match_chunk(
                 normalize_ws=normalize_ws,
             )
 
-            # Hard cap: 2 MB of HTML diff → xhtml2pdf layout will hang above this.
-            # Truncate and replace with a visible forensic notice.
-            _MAX_DIFF_HTML_BYTES = 2_000_000  # 2 MB — empirically safe for xhtml2pdf
-            if len(html_diff.encode('utf-8', errors='replace')) > _MAX_DIFF_HTML_BYTES:
+            # M4: xhtml2pdf DOM parsing scale limit. 2MB HTML ≈ 100K nodes.
+            # html5lib is pure Python; beyond this recursion limit/OOM crashes.
+            max_diff_bytes = int(max_diff_html_size_mb * 1024 * 1024)
+            if len(html_diff.encode('utf-8', errors='replace')) > max_diff_bytes:
                 truncated_kb = len(html_diff.encode('utf-8', errors='replace')) / 1024
                 html_diff = (
                     '<p style="color:#c00;font-weight:bold;font-size:12px;">'
-                    f'⚠ Diff output truncated ({truncated_kb:.0f} KB). '
+                    f'⚠ Diff output truncated ({truncated_kb:.0f} KB > {max_diff_html_size_mb:.1f} MB limit). '
                     f'Original file too large for inline PDF rendering. '
                     f'Use HTML or JSON export for the full diff.</p>'
                 )
@@ -837,7 +837,7 @@ def run_pipeline(
             1, matches, dir_a, dir_b, encoding, binary_handling,
             strip_comments, squash_blanks, by_word, autojunk, metrics_only,
             collapse_identical, detect_moved, max_file_size_mb,
-            normalize_ws=normalize_ws,
+            normalize_ws=normalize_ws, max_diff_html_size_mb=max_diff_html_size_mb,
         )
         results.extend(req)
         all_line_counts.extend(lines)
@@ -858,7 +858,7 @@ def run_pipeline(
                     dir_a, dir_b, encoding, binary_handling,
                     strip_comments, squash_blanks, by_word, autojunk,
                     metrics_only, collapse_identical, detect_moved, max_file_size_mb,
-                    normalize_ws,
+                    normalize_ws, max_diff_html_size_mb,
                 ))
             
             crashed_workers = 0
@@ -1002,6 +1002,20 @@ def run_pipeline(
         )
 
     logger.info("Done (reports) ✓")
+
+    # ── Report Integrity Checksums (SHA-256) ────────────────────────
+    import hashlib
+    for rep_file in (report_pdf, report_html):
+        if rep_file and Path(rep_file).exists() and not Path(rep_file).is_dir():
+            try:
+                with open(rep_file, "rb") as fh:
+                    digest = hashlib.sha256(fh.read()).hexdigest()
+                sig_path = str(Path(rep_file).with_suffix('.sig'))
+                with open(sig_path, "w", encoding="utf-8") as f:
+                    f.write(f"SHA-256: {digest}\nReport: {Path(rep_file).name}\n")
+                logger.info("  Integrity Hash (SHA-256) → %s", digest)
+            except Exception as e:
+                logger.warning("  Failed to generate signature for %s: %s", rep_file, e)
 
     # ── Write uncompared files to separate file ───────────────────
     if uncompared_mode == "separate" and (unmatched_a or unmatched_b):
@@ -1205,7 +1219,7 @@ def _generate_pdf_report(
             logger.info("  No-merge mode — %d PDFs saved",
                         1 + len(diff_pdf_pairs))
         elif cover_ok or diff_pdf_pairs:
-            merge_with_bookmarks(
+            exhibit_data = merge_with_bookmarks(
                 cover_dest, diff_pdf_pairs, output_pdf,
             )
             if show_bates_number:
@@ -1218,6 +1232,38 @@ def _generate_pdf_report(
                     prefix=bates_prefix,
                     suffix=bates_suffix,
                 )
+            
+            # Write CSV Exhibit Index
+            try:
+                csv_path = str(Path(output_pdf).with_suffix(".csv"))
+                import csv
+                from pypdf import PdfReader as _PR
+                total_pages = len(_PR(output_pdf).pages)
+                digits = max(4, len(str(bates_start + total_pages - 1)))
+                
+                with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
+                    writer = csv.writer(f)
+                    col_header = "Bates Range" if show_bates_number else "Page Range"
+                    writer.writerow(["Index", "File A", "File B", "Similarity (%)", col_header])
+                    
+                    for row_idx, row in enumerate(exhibit_data, 1):
+                        start_page = row['start_page']
+                        end_page = row['end_page']
+                        if show_bates_number:
+                            bs_num = bates_start + start_page - 1
+                            be_num = bates_start + end_page - 1
+                            bs = f"{bates_prefix}{str(bs_num).zfill(digits)}{bates_suffix}"
+                            be = f"{bates_prefix}{str(be_num).zfill(digits)}{bates_suffix}"
+                            range_str = bs if bs == be else f"{bs} - {be}"
+                        else:
+                            range_str = str(start_page) if start_page == end_page else f"{start_page} - {end_page}"
+                        
+                        writer.writerow([
+                            row_idx, row['file_a'], row['file_b'], f"{row['sim']:.1f}%", range_str
+                        ])
+                logger.info("  Exhibit Index CSV generated → %s", csv_path)
+            except Exception as e:
+                logger.warning("  Failed to generate Exhibit Index CSV: %s", e)
         else:
             logger.error("No PDF parts were generated — cannot create report")
 

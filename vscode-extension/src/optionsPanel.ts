@@ -6,7 +6,15 @@
  */
 import * as vscode from "vscode";
 import { DiffiniteOptions, defaultOptions } from "./runner";
-import { getDefaultMode, getBatesPresets, BatesPreset } from "./config";
+import { getDefaultMode, getBatesPresets, BatesPreset, getPdfFont, getPdfLang } from "./config";
+
+export interface TaskHistoryEntry {
+  id: string;
+  label: string;
+  dirA: string;
+  dirB: string;
+  options: DiffiniteOptions;
+}
 
 /**
  * Open the main options panel.
@@ -24,19 +32,51 @@ export function showOptionsPanel(
     { enableScripts: true, retainContextWhenHidden: true }
   );
 
-  const config = vscode.workspace.getConfiguration("diffinite");
-  const defaults = defaultOptions();
-  defaults.mode = getDefaultMode() as "simple" | "deep";
-  defaults.workers = config.get<number>("workers", 4);
-  defaults.noMerge = config.get<boolean>("noMerge", false);
-  defaults.preserveTree = config.get<boolean>("preserveTree", true);
-  const presets = getBatesPresets();
+  const lastDirs = context.globalState.get<{ dirA: string; dirB: string }>("diffinite.lastDirs") || { dirA: "", dirB: "" };
+  const lastRunOptions = context.globalState.get<Partial<DiffiniteOptions>>("diffinite.lastRunOptions");
 
-  panel.webview.html = buildOptionsHtml(defaults, presets);
+  const config = vscode.workspace.getConfiguration("diffinite");
+  const defaults = { ...defaultOptions(), ...(lastRunOptions || {}) };
+  defaults.mode = lastRunOptions?.mode || getDefaultMode() as "simple" | "deep";
+  defaults.workers = lastRunOptions?.workers || config.get<number>("workers", 4);
+  defaults.noMerge = lastRunOptions?.noMerge ?? config.get<boolean>("noMerge", false);
+  defaults.preserveTree = lastRunOptions?.preserveTree ?? config.get<boolean>("preserveTree", true);
+  defaults.pdfFont = lastRunOptions?.pdfFont || getPdfFont();
+  defaults.pdfLang = lastRunOptions?.pdfLang || getPdfLang();
+  
+  const presets = getBatesPresets();
+  const taskHistory = context.globalState.get<TaskHistoryEntry[]>("diffinite.taskHistory") || [];
+
+  panel.webview.html = buildOptionsHtml(defaults, presets, lastDirs, taskHistory);
 
   panel.webview.onDidReceiveMessage(
-    async (msg: { command: string; target?: string; options?: DiffiniteOptions; dirA?: string; dirB?: string }) => {
+    async (msg: { command: string; target?: string; options?: DiffiniteOptions; dirA?: string; dirB?: string; saveHistory?: boolean }) => {
       if (msg.command === "run" && msg.options && msg.dirA && msg.dirB) {
+        
+        // Save Persistence
+        await context.globalState.update("diffinite.lastRunOptions", msg.options);
+        await context.globalState.update("diffinite.lastDirs", { dirA: msg.dirA, dirB: msg.dirB });
+
+        // Save History if requested
+        if (msg.saveHistory) {
+          const history = context.globalState.get<TaskHistoryEntry[]>("diffinite.taskHistory") || [];
+          const now = new Date();
+          const baseA = msg.dirA.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "A";
+          const baseB = msg.dirB.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "B";
+          const label = `${now.toLocaleDateString()} ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} | ${baseA} vs ${baseB}`;
+          
+          history.push({ id: now.getTime().toString(), label, dirA: msg.dirA, dirB: msg.dirB, options: msg.options });
+          if (history.length > 50) history.shift(); // Cap history size
+          await context.globalState.update("diffinite.taskHistory", history);
+        }
+        // Save Presentation options automatically to Global Settings
+        if (msg.options.pdfFont !== undefined) {
+          await config.update("pdfFont", msg.options.pdfFont, vscode.ConfigurationTarget.Global);
+        }
+        if (msg.options.pdfLang !== undefined) {
+          await config.update("pdfLang", msg.options.pdfLang, vscode.ConfigurationTarget.Global);
+        }
+
         // Trigger the pipeline but DO NOT dispose the panel.
         // It stays open so users can tweak paths/options and run again safely!
         try {
@@ -60,6 +100,13 @@ export function showOptionsPanel(
         }
       } else if (msg.command === "cancel") {
         panel.dispose();
+      } else if (msg.command === "editIgnore") {
+        vscode.commands.executeCommand("diffinite.editIgnoreList");
+      } else if (msg.command === "flushHistory") {
+        await context.globalState.update("diffinite.taskHistory", []);
+        vscode.window.showInformationMessage("Task History flushed.");
+        panel.dispose();
+        vscode.commands.executeCommand("diffinite.compare");
       }
     },
     undefined,
@@ -67,10 +114,14 @@ export function showOptionsPanel(
   );
 }
 
-function buildOptionsHtml(defaults: DiffiniteOptions, presets: BatesPreset[]): string {
+function buildOptionsHtml(defaults: DiffiniteOptions, presets: BatesPreset[], lastDirs: { dirA: string; dirB: string }, taskHistory: TaskHistoryEntry[]): string {
   const presetOptions = presets.map((p) => {
     const label = `${p.name} (${p.prefix}…${p.suffix || ""})`;
     return `<option value="${p.name}" data-prefix="${p.prefix || ""}" data-suffix="${p.suffix || ""}" data-start="${p.nextBatesNumber || 1}">${label}</option>`;
+  }).join("\n");
+
+  const historyOptions = taskHistory.map((h) => {
+    return `<option value="${h.id}">${h.label}</option>`;
   }).join("\n");
 
   return `<!DOCTYPE html>
@@ -85,15 +136,27 @@ function buildOptionsHtml(defaults: DiffiniteOptions, presets: BatesPreset[]): s
 
   <form id="optForm">
     <section>
+      <h2>Task History</h2>
+      <div class="field" style="display:flex; gap: 8px; align-items:center;">
+        <select id="historySelect" style="flex-grow: 1;">
+          <option value="">— Select a previous task to load —</option>
+          ${historyOptions}
+        </select>
+        <button type="button" id="btnLoadHistory" class="btn-secondary" style="flex-shrink: 0;" ${taskHistory.length===0?'disabled':''}>Load Task</button>
+        <button type="button" id="btnFlushHistory" class="btn-secondary" style="flex-shrink: 0; color:var(--error);" ${taskHistory.length===0?'disabled':''}>Flush All</button>
+      </div>
+    </section>
+
+    <section>
       <h2>Target Directories</h2>
       <div class="field dir-input-row" style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
         <label for="dirA" style="width: 80px; flex-shrink: 0;">Dir A (Org)</label>
-        <input type="text" id="dirA" class="path-input" style="flex-grow: 1; max-width: none;" placeholder="e.g. C:/source/project_v1">
+        <input type="text" id="dirA" class="path-input" style="flex-grow: 1; max-width: none;" placeholder="e.g. C:/source/project_v1" value="${lastDirs.dirA || ''}">
         <button type="button" id="btnBrowseA" class="btn-secondary" style="flex-shrink: 0;">Browse</button>
       </div>
       <div class="field dir-input-row" style="display: flex; gap: 8px; align-items: center;">
         <label for="dirB" style="width: 80px; flex-shrink: 0;">Dir B (Susp)</label>
-        <input type="text" id="dirB" class="path-input" style="flex-grow: 1; max-width: none;" placeholder="e.g. C:/source/project_v2">
+        <input type="text" id="dirB" class="path-input" style="flex-grow: 1; max-width: none;" placeholder="e.g. C:/source/project_v2" value="${lastDirs.dirB || ''}">
         <button type="button" id="btnBrowseB" class="btn-secondary" style="flex-shrink: 0;">Browse</button>
       </div>
       <div id="dirError" style="color:var(--error); font-size:12px; margin-top:8px; display:none;">Please specify both directories!</div>
@@ -248,12 +311,44 @@ function buildOptionsHtml(defaults: DiffiniteOptions, presets: BatesPreset[]): s
       </div>
     </section>
 
-    <div class="actions">
-      <button type="submit" class="btn-primary" style="width:100%">&#9654; Run Analysis</button>
+    <section>
+      <h2>Dictionary & Presentation</h2>
+      <div class="field" style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 4px;">
+        <label>Exclusion Dictionary (.diffignore)</label>
+        <button type="button" id="btnEditIgnore" class="btn-secondary" style="font-size: 11px; padding: 4px 10px;">Edit Dictionary</button>
+      </div>
+      <div style="font-size: 11px; color: var(--fg-dim); margin-bottom: 16px; margin-left: 2px;">
+        Define patterns to exclude frameworks, virtual environments, or boilerplate code.
+      </div>
+      
+      <div class="field dir-input-row" style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
+        <label for="pdfFont" style="width: 140px; flex-shrink: 0;" title="Absolute path to a TrueType(.ttf) font file">PDF Font Path</label>
+        <input type="text" id="pdfFont" class="path-input" style="flex-grow: 1; max-width: none;" placeholder="e.g. C:/Windows/Fonts/malgun.ttf" value="${defaults.pdfFont || ''}">
+      </div>
+      <div class="field" style="display: flex; gap: 8px; align-items: center;">
+        <label for="pdfLang" style="width: 140px; flex-shrink: 0;">PDF Fallback Lang</label>
+        <select id="pdfLang" style="flex-grow: 1;">
+          <option value="ko" ${defaults.pdfLang === 'ko' ? 'selected' : ''}>Korean (ko)</option>
+          <option value="ja" ${defaults.pdfLang === 'ja' ? 'selected' : ''}>Japanese (ja)</option>
+          <option value="zh-cn" ${defaults.pdfLang === 'zh-cn' ? 'selected' : ''}>Chinese (zh-cn)</option>
+          <option value="en" ${defaults.pdfLang === 'en' ? 'selected' : ''}>English (en)</option>
+        </select>
+      </div>
+    </section>
+
+    <div class="actions" style="justify-content: space-between; align-items: center;">
+      <div class="field checkbox" style="margin-bottom:0;">
+        <input type="checkbox" id="saveHistory">
+        <label for="saveHistory" style="cursor:pointer; color:var(--accent); font-weight:bold;">Save to Task History</label>
+      </div>
+      <button type="submit" class="btn-primary" style="width:200px">&#9654; Run Analysis</button>
     </div>
   </form>
 
-  <script>${OPTIONS_JS}</script>
+  <script>
+    window.DiffiniteHistory = ${JSON.stringify(taskHistory)};
+    ${OPTIONS_JS}
+  </script>
 </body>
 </html>`;
 }
@@ -483,6 +578,71 @@ const OPTIONS_JS = `
     }
   });
 
+  document.getElementById('btnEditIgnore').addEventListener('click', () => {
+    vscode.postMessage({ command: 'editIgnore' });
+  });
+
+  const historySelect = document.getElementById('historySelect');
+  const btnLoadHistory = document.getElementById('btnLoadHistory');
+  const btnFlushHistory = document.getElementById('btnFlushHistory');
+
+  if (btnLoadHistory) {
+    btnLoadHistory.addEventListener('click', () => {
+      const selectedId = historySelect.value;
+      if (!selectedId) return;
+      const history = window.DiffiniteHistory || [];
+      const entry = history.find(h => h.id === selectedId);
+      if (entry) {
+        dirAEl.value = entry.dirA;
+        dirBEl.value = entry.dirB;
+        formatPathAndScrollEnd(dirAEl);
+        formatPathAndScrollEnd(dirBEl);
+        
+        const o = entry.options;
+        if(o) {
+          modeSelect.value = o.mode || 'deep';
+          document.getElementById('stripComments').checked = !!o.stripComments;
+          document.getElementById('byWord').checked = !!o.byWord;
+          document.getElementById('normalizeWhitespace').checked = !!o.normalizeWhitespace;
+          document.getElementById('normalize').checked = !!o.normalize;
+          document.getElementById('collapseIdentical').checked = !!o.collapseIdentical;
+          document.getElementById('detectMoved').checked = !!o.detectMoved;
+          document.getElementById('noAutojunk').checked = !!o.noAutojunk;
+          document.getElementById('threshold').value = o.threshold || 60;
+          document.getElementById('kGram').value = o.kGram || 5;
+          document.getElementById('window').value = o.window || 4;
+          document.getElementById('thresholdDeep').value = o.thresholdDeep || 5;
+          document.getElementById('pageNumber').checked = !!o.pageNumber;
+          document.getElementById('fileNumber').checked = !!o.fileNumber;
+          document.getElementById('batesNumber').checked = !!o.batesNumber;
+          document.getElementById('hash').checked = !!o.hash;
+          document.getElementById('uncomparedFiles').value = o.uncomparedFiles || 'inline';
+          document.getElementById('binaryHandling').value = o.binaryHandling || 'hash';
+          document.getElementById('sortBy').value = o.sortBy || '';
+          document.getElementById('sortOrder').value = o.sortOrder || 'asc';
+          document.getElementById('batesPrefix').value = o.batesPrefix || '';
+          document.getElementById('batesSuffix').value = o.batesSuffix || '';
+          document.getElementById('batesStart').value = o.batesStart || 1;
+          document.getElementById('workers').value = o.workers || 4;
+          document.getElementById('noMerge').checked = !!o.noMerge;
+          document.getElementById('preserveTree').checked = !!o.preserveTree;
+          document.getElementById('pdfFont').value = o.pdfFont || '';
+          document.getElementById('pdfLang').value = o.pdfLang || 'ko';
+          presetSelect.value = o._batesPresetName || '';
+          
+          updateDeepVisibility();
+          updateBatesVisibility();
+        }
+      }
+    });
+
+    btnFlushHistory.addEventListener('click', () => {
+      if (confirm('Are you sure you want to delete all saved task history?')) {
+        vscode.postMessage({ command: 'flushHistory' });
+      }
+    });
+  }
+
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     dirError.style.display = 'none';
@@ -524,13 +684,17 @@ const OPTIONS_JS = `
       workers: Number(document.getElementById('workers').value),
       noMerge: document.getElementById('noMerge').checked,
       preserveTree: document.getElementById('preserveTree').checked,
+      pdfFont: document.getElementById('pdfFont').value.trim(),
+      pdfLang: document.getElementById('pdfLang').value,
     };
     
     // Set UI to running state (does not disable button to allow parallel queueing test flows if desired)
     btnRun.innerHTML = '<span style="opacity:0.7">&#10227;</span> Running...';
+    
+    const saveHistory = document.getElementById('saveHistory').checked;
 
     // Broadcast run event back to main extension process
-    vscode.postMessage({ command: 'run', dirA, dirB, options });
+    vscode.postMessage({ command: 'run', dirA, dirB, options, saveHistory });
   });
 
 })();

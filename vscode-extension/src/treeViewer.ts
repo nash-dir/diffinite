@@ -10,6 +10,10 @@ import * as path from "path";
 import * as fs from "fs";
 import { DiffiniteReport } from "./runner";
 
+function escHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
 export class TreeViewerPanel {
   public static currentPanel: TreeViewerPanel | undefined;
   private readonly _panel: vscode.WebviewPanel;
@@ -116,10 +120,10 @@ export class TreeViewerPanel {
         rowsHtml += `
         <tr>
             <td style="text-align:center;">
-                <input type="checkbox" class="file-cb" value="${r.file_a}" ${defaultChecked}>
+                <input type="checkbox" class="file-cb" value="${escHtml(r.file_a)}" ${defaultChecked}>
             </td>
-            <td><code>${r.file_a}</code></td>
-            <td><code>${r.file_b}</code></td>
+            <td><code>${escHtml(r.file_a)}</code></td>
+            <td><code>${escHtml(r.file_b)}</code></td>
             <td style="text-align:center;">${nameSimPct}</td>
             <td style="text-align:center;">
                 <span style="background:${badgeColor}; color:${r.ratio >= 0.3 && r.ratio < 0.8 ? '#000': '#fff'}; padding: 2px 6px; border-radius: 4px; font-weight: bold;">

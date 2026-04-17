@@ -75,7 +75,7 @@ def collect_files(directory: str, ignore_patterns: list[str] | None = None, unre
         for f in filenames:
             if not should_ignore(f, ignore_patterns):
                 abs_file = current_dir / f
-                if abs_file.is_file():
+                if abs_file.is_file() and not abs_file.is_symlink():
                     paths.append(abs_file.relative_to(root).as_posix())
                     
     paths.sort()
@@ -131,6 +131,15 @@ def match_files(
     # 더 큰 R이 예상되면 rapidfuzz.process.extractBests() 기반
     # 헝가리안 할당으로 교체 검토 필요.
     if remaining_a and remaining_b:
+        # M1: O(R²) 안전장치 — R이 커지면 fuzz.ratio() 호출이 폭발적으로 증가
+        r_size = len(remaining_a) * len(remaining_b)
+        if r_size > 250_000:  # 500×500 = 250K comparisons ≈ 수십 초
+            import logging
+            logging.getLogger(__name__).warning(
+                "⚠ Fuzzy matching: %d × %d = %d comparisons — this may take a while. "
+                "Consider using --threshold to reduce false matches.",
+                len(remaining_a), len(remaining_b), r_size,
+            )
         candidates: list[Tuple[float, int, int]] = []
         for ri, (i, fa) in enumerate(remaining_a):
             for rj, (j, fb) in enumerate(remaining_b):

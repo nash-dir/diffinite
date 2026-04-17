@@ -47,6 +47,26 @@ HASH_MOD: int = (1 << 61) - 1
 """해시 모듈러. Mersenne 소수 2^61-1 사용 — Python의 `pow(base, exp, mod)`로
 효율적 모듈러 지수 연산 가능. 충돌 확률 ≈ 1/2^61."""
 
+# FNV offset basis and prime for 64-bit (Fowler-Noll-Vo, 1991).
+_FNV1A_OFFSET = 0xcbf29ce484222325
+_FNV1A_PRIME = 0x100000001b3
+_FNV1A_MASK = 0xFFFFFFFFFFFFFFFF
+
+
+def _fnv1a_64(s: str) -> int:
+    """FNV-1a 64-bit 결정적 해시 — 프로세스 간 재현성을 보장한다.
+
+    Python 내장 ``hash()``는 3.3+ 에서 프로세스별 랜덤 시드(PYTHONHASHSEED)를
+    사용하므로, ``ProcessPoolExecutor`` spawn 워커 간에 같은 문자열이 다른
+    해시값을 생성하여 Jaccard 비교를 오염시킨다.
+    FNV-1a는 결정적이고, 짧은 문자열(토큰)에서 고속이며, 충돌 분포가 균일하다.
+    """
+    h = _FNV1A_OFFSET
+    for b in s.encode('utf-8'):
+        h ^= b
+        h = (h * _FNV1A_PRIME) & _FNV1A_MASK
+    return h
+
 # 토크나이저 정규식 — 식별자, 숫자, 개별 구두점을 각각 토큰으로 분리.
 # 공백은 버린다.
 TOKEN_RE = re.compile(r"[A-Za-z_]\w*|[0-9]+(?:\.[0-9]+)?|[^\s]")
@@ -145,14 +165,14 @@ def rolling_hash(tokens: Sequence[str], k: int = DEFAULT_K) -> list[int]:
 
     # 첫 번째 윈도우 시드
     for i in range(k):
-        th = hash(tokens[i]) & 0x7FFFFFFFFFFFFFFF  # 양수 보장
+        th = _fnv1a_64(tokens[i])
         h = (h * HASH_BASE + th) % HASH_MOD
     hashes.append(h)
 
     # 롤링: 가장 오래된 토큰 제거 + 새 토큰 추가
     for i in range(k, n):
-        old_th = hash(tokens[i - k]) & 0x7FFFFFFFFFFFFFFF
-        new_th = hash(tokens[i]) & 0x7FFFFFFFFFFFFFFF
+        old_th = _fnv1a_64(tokens[i - k])
+        new_th = _fnv1a_64(tokens[i])
         h = ((h - old_th * base_pow) * HASH_BASE + new_th) % HASH_MOD
         hashes.append(h)
 

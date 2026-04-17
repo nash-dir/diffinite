@@ -56,30 +56,30 @@ def _extract_one(args: tuple) -> tuple[str, set[int], int]:
     """단일 파일의 핑거프린트를 추출한다.
 
     Args:
-        args: ``(abs_path, rel_path, extension, k, w, normalize)``
+        args: ``(side, abs_path, rel_path, extension, k, w, normalize)``
               — tuple 포장은 ``pool.map()`` 인터페이스 제약.
 
     Returns:
-        ``(rel_path, hash_set, fingerprint_count)``
+        ``(side, rel_path, hash_set, fingerprint_count)``
         읽기 실패 시 빈 set / count=0 반환.
     """
-    abs_path, rel_path, extension, k, w, normalize = args
+    side, abs_path, rel_path, extension, k, w, normalize = args
     
     try:
         text = read_file(abs_path)
     except PermissionError:
         logger.warning("Permission denied during deep compare: %s", rel_path)
-        return rel_path, set(), 0
+        return side, rel_path, set(), 0
 
     if text is None:
-        return rel_path, set(), 0
+        return side, rel_path, set(), 0
 
     cleaned = strip_comments(text, extension)
     fps = extract_fingerprints(
         cleaned, k=k, w=w, normalize=normalize,
     )
     hash_set = {fp.hash_value for fp in fps}
-    return rel_path, hash_set, len(fps)
+    return side, rel_path, hash_set, len(fps)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -166,11 +166,11 @@ def run_deep_compare(
 
     # Prepare work items
     items_a = [
-        (str(root_a / f), f, Path(f).suffix.lower(), k, w, normalize)
+        ("A", str(root_a / f), f, Path(f).suffix.lower(), k, w, normalize)
         for f in files_a
     ]
     items_b = [
-        (str(root_b / f), f, Path(f).suffix.lower(), k, w, normalize)
+        ("B", str(root_b / f), f, Path(f).suffix.lower(), k, w, normalize)
         for f in files_b
     ]
 
@@ -187,8 +187,8 @@ def run_deep_compare(
     with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
         results = list(pool.map(_extract_one, all_items))
 
-    for i, (rel, hset, cnt) in enumerate(results):
-        if i < len(items_a):
+    for side, rel, hset, cnt in results:
+        if side == "A":
             fp_a[rel] = hset
             fp_a_counts[rel] = cnt
         else:

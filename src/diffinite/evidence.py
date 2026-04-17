@@ -41,19 +41,6 @@ logger = logging.getLogger(__name__)
 _HASH_BUF_SIZE = 65536
 
 
-def jaccard_similarity(fp_a: set[int], fp_b: set[int]) -> float:
-    """Winnowing 핑거프린트 Jaccard 유사도. |A∩B| / |A∪B|.
-
-    "두 파일의 코드 지문 중 N%가 일치합니다" 형태로 보고서에 표시.
-    양쪽 모두 빈 집합이면 0.0 반환.
-    """
-    if not fp_a and not fp_b:
-        return 0.0
-    intersection = len(fp_a & fp_b)
-    union = len(fp_a | fp_b)
-    return intersection / union if union else 0.0
-
-
 # ---------------------------------------------------------------------------
 # SHA-256 해시 계산
 # ---------------------------------------------------------------------------
@@ -138,11 +125,15 @@ def write_manifest(
     report_entries = []
     for rp in report_paths:
         p = Path(rp)
-        if p.exists() and p.stat().st_size > 0:
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        if st.st_size > 0:
             report_entries.append({
                 "path": p.name,
                 "sha256": _sha256_file(p),
-                "size_bytes": p.stat().st_size,
+                "size_bytes": st.st_size,
             })
 
     manifest = {

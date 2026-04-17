@@ -37,34 +37,39 @@ from diffinite.models import MovedBlock
 
 logger = logging.getLogger(__name__)
 
+# 연속 공백 축소용 정규식 (선행 공백 포함, 2칸 이상 → 1칸)
+_RE_MULTI_SPACE = re.compile(r' {2,}')
+
 
 def normalize_whitespace(text: str) -> str:
     """탭을 스페이스로 변환하고 연속 공백을 단일 스페이스로 축소한다.
 
     줄 구조(개행)는 유지하면서 각 줄 내의 공백만 정규화.
-    탭→스페이스 변환 후 연속 공백을 1칸으로 줄임으로써,
+    탭→4-스페이스 변환 후 연속 공백을 1칸으로 줄임으로써,
     들여쓰기 스타일 차이(tab vs space)가 diff 결과를 왜곡하는 것을 방지한다.
+
+    Note:
+        들여쓰기가 4칸이든 8칸이든 1칸으로 축소되지만, 들여쓰기의 **유무**는 보존된다
+        (선행 공백이 있는 줄과 없는 줄은 구분 가능). 두 수준 이상의
+        중첩 들여쓰기 깊이 차이는 평탄화된다.
     """
     lines = text.splitlines(keepends=True)
     normalized = []
     for line in lines:
-        # 탭 → 스페이스
-        line = line.replace("\t", " ")
+        # 탭 → 4-스페이스 (expandtabs 표준 동작)
+        line = line.expandtabs(4)
         # 개행 분리 후 공백 축소, 개행 복원
         if line.endswith("\r\n"):
-            content = line[:-2]
-            content = " ".join(content.split())
+            content = _RE_MULTI_SPACE.sub(' ', line[:-2])
             normalized.append(content + "\r\n")
         elif line.endswith("\n"):
-            content = line[:-1]
-            content = " ".join(content.split())
+            content = _RE_MULTI_SPACE.sub(' ', line[:-1])
             normalized.append(content + "\n")
         elif line.endswith("\r"):
-            content = line[:-1]
-            content = " ".join(content.split())
+            content = _RE_MULTI_SPACE.sub(' ', line[:-1])
             normalized.append(content + "\r")
         else:
-            normalized.append(" ".join(line.split()))
+            normalized.append(_RE_MULTI_SPACE.sub(' ', line))
     return "".join(normalized)
 
 
@@ -289,11 +294,18 @@ def read_file(path: str, encoding: str | None = None) -> Optional[str]:
     # ── Auto-detect with charset_normalizer ──────────────────────
     result = from_bytes(raw).best()
     if result is not None:
-        try:
-            return str(result)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("charset_normalizer decode failed for %s (%s): %s",
-                           path, result.encoding, exc)
+        # M3: 신뢰도 검증 — chaos가 높으면 오탐 가능성이 높으므로 fallback 사용
+        if result.chaos > 0.3:  # 30% 이상 비정합 문자 → 인코딩 오탐 가능성
+            logger.debug(
+                "charset_normalizer detected %s for %s but chaos=%.2f — trying fallback",
+                result.encoding, path, result.chaos,
+            )
+        else:
+            try:
+                return str(result)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("charset_normalizer decode failed for %s (%s): %s",
+                               path, result.encoding, exc)
 
     # ── Fallback chain (Korean-optimized) ────────────────────────
     for fallback_enc in ("utf-8", "euc-kr", "cp949"):

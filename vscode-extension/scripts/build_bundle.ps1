@@ -39,9 +39,17 @@ New-Item -ItemType Directory -Path $binPythonDir | Out-Null
 # -------------------------------------------------------------------------
 $downloadUrl = "https://www.python.org/ftp/python/$pythonVersion/python-$pythonVersion-embed-amd64.zip"
 $zipPath = "$binPythonDir\python-embed.zip"
+# 공식 Python 3.12.9 릴리스 SHA256 해시값 (python.org 제공)
+$expectedPythonHash = "615861FB801E8B04C847598DB4E1E46E4B046295017CAA37CB5486DDE72B5865"
 
 Write-Host "Downloading Embedded Python v$pythonVersion..."
 Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath
+
+Write-Host "Verifying Python zip hash..."
+$actualPythonHash = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash
+if ($actualPythonHash -ne $expectedPythonHash) {
+    throw "Security Exception: Python download hash mismatch! Expected $expectedPythonHash, got $actualPythonHash"
+}
 
 Write-Host "Extracting Python..."
 Expand-Archive -Path $zipPath -DestinationPath $binPythonDir -Force
@@ -63,8 +71,19 @@ foreach ($pth in $pthFiles) {
 # 3. Bootstrap Pip
 # -------------------------------------------------------------------------
 Write-Host "Bootstrapping pip..."
-Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile "$binPythonDir\get-pip.py"
-& "$binPythonDir\python.exe" "$binPythonDir\get-pip.py" --no-warn-script-location
+# 공식 get-pip.py SHA256 해시값 (Pypa 제공 버전에 대한 해시)
+$expectedPipHash = "FEBA1C697DF45BE1B539B40D93C102C9EE9DDE1D966303323B830B06F3FBCA3C"
+$pipScriptPath = "$binPythonDir\get-pip.py"
+
+Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile $pipScriptPath
+
+Write-Host "Verifying get-pip.py hash..."
+$actualPipHash = (Get-FileHash -Path $pipScriptPath -Algorithm SHA256).Hash
+if ($actualPipHash -ne $expectedPipHash) {
+    throw "Security Exception: get-pip.py hash mismatch! Expected $expectedPipHash, got $actualPipHash"
+}
+
+& "$binPythonDir\python.exe" $pipScriptPath --no-warn-script-location
 if ($LASTEXITCODE -ne 0) { throw "Pip bootstrap failed." }
 
 # -------------------------------------------------------------------------
