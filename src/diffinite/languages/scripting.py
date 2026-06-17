@@ -8,7 +8,10 @@ from diffinite.models import CommentSpec
 register(LangSpec(
     name="Ruby",
     extensions=(".rb",),
-    comment=CommentSpec(line_markers=("#",), block_start="=begin", block_end="=end"),
+    comment=CommentSpec(
+        line_markers=("#",), block_start="=begin", block_end="=end",
+        block_markers_line_anchored=True,  # Ruby: =begin/=end only at column 0
+    ),
     keywords=frozenset({
         "if", "else", "elsif", "unless", "while", "until",
         "for", "do", "begin", "end", "def", "class",

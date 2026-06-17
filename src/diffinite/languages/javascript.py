@@ -4,7 +4,10 @@ from diffinite.languages._spec import LangSpec
 from diffinite.languages._registry import register
 from diffinite.models import CommentSpec
 
-_COMMENT = CommentSpec(line_markers=("//",), block_start="/*", block_end="*/")
+_COMMENT = CommentSpec(
+    line_markers=("//",), block_start="/*", block_end="*/",
+    has_regex_literals=True,
+)
 
 _JS_KEYWORDS = frozenset({
     # Control flow

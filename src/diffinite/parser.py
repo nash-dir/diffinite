@@ -162,13 +162,34 @@ class _State(enum.Enum):
     IN_LINE_COMMENT = "IN_LINE_COMMENT"
     IN_BLOCK_COMMENT = "IN_BLOCK_COMMENT"
     IN_TEMPLATE_LITERAL = "IN_TEMPLATE_LITERAL"
+    IN_REGEX = "IN_REGEX"
+
+
+# JS에서 ``/`` 직전 토큰이 아래에 속하면 식이 올 자리 → 정규식 리터럴로 본다.
+# (그렇지 않으면 나눗셈 연산자.) 표준 토크나이저 휴리스틱.
+_REGEX_PREV_CHARS = frozenset("(,;{}[=+-*%&|^!~<>?:")
+_REGEX_PREV_KEYWORDS = frozenset({
+    "return", "typeof", "instanceof", "in", "of", "new", "delete",
+    "void", "do", "else", "yield", "await", "case",
+})
+
+
+def _regex_allowed(prev_sig: str, prev_word: str) -> bool:
+    """직전 유의미 토큰을 보고 ``/`` 가 정규식 리터럴을 여는 위치인지 판정한다."""
+    if prev_word in _REGEX_PREV_KEYWORDS:
+        return True
+    if prev_sig == "":            # 입력/문맥 시작 — 식이 올 자리
+        return True
+    return prev_sig in _REGEX_PREV_CHARS
 
 
 def _has_any_marker(line: str, spec: CommentSpec) -> bool:
     """Fast-path 판별: 이 라인이 slow-path 스캔이 필요한지 확인.
 
-    주석 마커 외에 **문자열 구분자**(``"``, ``'``, `` ` ``)도 체크한다.
-    문자열이 열리/닫히면 후속 라인의 상태가 바뀌기 때문.
+    주석 마커 외에 **문자열/템플릿 구분자**와 (JS 계열의) ``/`` 도 체크한다.
+    문자열·정규식이 열리/닫히면 후속 라인의 상태가 바뀌기 때문이다.
+    구분자는 언어 사양(``spec``)에서 가져오므로, HTML/CSS처럼 따옴표를
+    데이터로 두는 언어에서는 따옴표만으로 slow-path를 타지 않는다.
     """
     for m in spec.line_markers:
         if m in line:
@@ -177,8 +198,13 @@ def _has_any_marker(line: str, spec: CommentSpec) -> bool:
         return True
     if spec.block_end and spec.block_end in line:
         return True
-    # 문자열 구분자는 크로스-라인 상태에 영향 (예: 트리플-쿼트)
-    if '"' in line or "'" in line or '`' in line:
+    for d in spec.string_delims:
+        if d in line:
+            return True
+    for d in spec.template_delims:
+        if d in line:
+            return True
+    if spec.has_regex_literals and "/" in line:
         return True
     return False
 
@@ -237,15 +263,42 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
     string_delim: Optional[str] = None  # 현재 열린 문자열 구분자
     escaped = False                      # 이전 문자가 백슬래시인지
     template_depth = 0                   # JS 템플릿 리터럴 중첩 깊이
+    regex_in_class = False               # IN_REGEX: 문자 클래스 [...] 내부 여부
+    # 정규식 vs 나눗셈 판별을 위한 직전 유의미 토큰 추적
+    prev_sig = ""                        # 직전 비공백 코드 문자
+    cur_word = ""                        # 직전(또는 현재) 식별자 토큰
+    in_word = False                      # 현재 식별자 토큰을 이어가는 중인지
 
     line_markers = spec.line_markers
     block_start = spec.block_start or ""
     block_end = spec.block_end or ""
+    string_delims = spec.string_delims
+    template_delims = spec.template_delims
+    has_regex = spec.has_regex_literals
+    block_anchored = spec.block_markers_line_anchored
+
+    def _value_end():
+        # 문자열/정규식/템플릿은 '값'이므로 이후 / 는 나눗셈이다.
+        nonlocal prev_sig, cur_word, in_word
+        prev_sig = ")"
+        cur_word = ""
+        in_word = False
 
     for line_idx, line in enumerate(lines):
         # ── Fast-path ──
         if state is _State.CODE and not _has_any_marker(line, spec):
             out_parts.append(line)
+            # JS 정규식 판별 정확도를 위해 통과한 코드의 끝 토큰을 기록한다
+            # (다음 줄 첫 토큰이 정규식인지 판단할 때 필요).
+            if has_regex:
+                s = line.rstrip()
+                if s:
+                    prev_sig = s[-1]
+                    j = len(s)
+                    while j > 0 and (s[j - 1].isalnum() or s[j - 1] in "_$"):
+                        j -= 1
+                    cur_word = s[j:]
+                    in_word = False
             continue
 
         # ── Slow-path: 문자 단위 상태 머신 ──
@@ -262,12 +315,30 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
 
             # ── IN_BLOCK_COMMENT: 종료 마커 탐색 ──
             if state is _State.IN_BLOCK_COMMENT:
-                if block_end and line[pos: pos + len(block_end)] == block_end:
+                if (block_end and (not block_anchored or pos == 0)
+                        and line[pos: pos + len(block_end)] == block_end):
                     pos += len(block_end)
                     state = _State.CODE
                 else:
                     pos += 1
                 continue
+
+            # ── IN_REGEX: 정규식 리터럴 내부 (코드로 보존) ──
+            if state is _State.IN_REGEX:
+                if escaped:
+                    line_out.append(ch); escaped = False; pos += 1; continue
+                if ch == "\\":
+                    escaped = True; line_out.append(ch); pos += 1; continue
+                if ch == "[":
+                    regex_in_class = True; line_out.append(ch); pos += 1; continue
+                if ch == "]":
+                    regex_in_class = False; line_out.append(ch); pos += 1; continue
+                if ch == "/" and not regex_in_class:
+                    line_out.append(ch); pos += 1
+                    state = _State.CODE
+                    _value_end()
+                    continue
+                line_out.append(ch); pos += 1; continue
 
             # ── IN_STRING: 이스케이프 및 닫힘 처리 ──
             if state is _State.IN_STRING:
@@ -287,6 +358,7 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
                     pos += 3
                     state = _State.CODE
                     string_delim = None
+                    _value_end()
                     continue
                 # 단일 구분자 닫힘
                 if len(string_delim) == 1 and ch == string_delim:
@@ -294,6 +366,7 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
                     pos += 1
                     state = _State.CODE
                     string_delim = None
+                    _value_end()
                     continue
                 line_out.append(ch)
                 pos += 1
@@ -317,19 +390,21 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
                     pos += 2
                     template_depth += 1
                     state = _State.CODE
+                    prev_sig = "{"; cur_word = ""; in_word = False
                     continue
-                # 백틱 닫힘 → CODE 복귀
-                if ch == "`":
+                # 닫는 구분자(백틱) → CODE 복귀
+                if ch in template_delims:
                     line_out.append(ch)
                     pos += 1
                     state = _State.CODE
+                    _value_end()
                     continue
                 line_out.append(ch)
                 pos += 1
                 continue
 
             # ── CODE: 문자열 열림 감지 ──
-            if ch in ('"', "'"):
+            if ch in string_delims:
                 triple = ch * 3
                 if line[pos: pos + 3] == triple:
                     line_out.append(triple)
@@ -344,7 +419,7 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
                 continue
 
             # 백틱 템플릿 리터럴 (JS/Go)
-            if ch == "`":
+            if ch in template_delims:
                 line_out.append(ch)
                 pos += 1
                 state = _State.IN_TEMPLATE_LITERAL
@@ -358,8 +433,20 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
                 state = _State.IN_TEMPLATE_LITERAL
                 continue
 
+            # ── CODE: JS 정규식 리터럴 시작 (식이 올 자리의 / ) ──
+            if has_regex and ch == "/":
+                nxt = line[pos + 1] if pos + 1 < length else ""
+                if nxt not in ("/", "*") and _regex_allowed(prev_sig, cur_word):
+                    line_out.append(ch)
+                    pos += 1
+                    state = _State.IN_REGEX
+                    regex_in_class = False
+                    continue
+                # 그 외(//, /*, 또는 나눗셈)는 아래 주석/코드 처리로 진행
+
             # ── CODE: 블록 주석 시작 ──
-            if block_start and line[pos: pos + len(block_start)] == block_start:
+            if (block_start and (not block_anchored or pos == 0)
+                    and line[pos: pos + len(block_start)] == block_start):
                 state = _State.IN_BLOCK_COMMENT
                 pos += len(block_start)
                 continue
@@ -375,8 +462,18 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
             if marker_matched:
                 continue
 
-            # 일반 코드 문자
+            # 일반 코드 문자 — 정규식 판별용 토큰 추적
             line_out.append(ch)
+            if ch.isspace():
+                in_word = False           # 단어 경계 (cur_word는 직전 토큰으로 유지)
+            elif ch.isalnum() or ch in "_$":
+                cur_word = (cur_word + ch) if in_word else ch
+                in_word = True
+                prev_sig = ch
+            else:
+                prev_sig = ch
+                cur_word = ""
+                in_word = False
             pos += 1
 
         # 라인 종료: IN_LINE_COMMENT → CODE 복귀
@@ -394,6 +491,12 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
             )
             state = _State.CODE
             string_delim = None
+
+        # 정규식 리터럴은 한 줄을 넘지 않는다 — 줄 끝에서 미닫힘이면 CODE로 복구.
+        if state is _State.IN_REGEX:
+            state = _State.CODE
+            regex_in_class = False
+            _value_end()
 
         out_parts.append("".join(line_out))
 

@@ -133,3 +133,83 @@ class TestSQLComments:
         result = strip_comments(src, ".sql")
         assert "-- get all" not in result
         assert "SELECT * FROM t;" in result
+
+
+class TestJsRegexLiterals:
+    """JS/TS regex literals must not be mistaken for comments."""
+
+    def test_regex_slash_star_not_block_comment(self):
+        # /foo/ is a regex; the following '/*' must NOT open a block comment
+        # that swallows real code on later lines.
+        src = "const re = /foo/*bar/;\nconst SECRET = 1;\ndoStuff();\n"
+        result = strip_comments(src, ".js")
+        assert "SECRET" in result
+        assert "doStuff" in result
+        assert "const re" in result
+
+    def test_regex_with_double_slash_inside_class(self):
+        # A regex char-class containing '/' and '//'-looking content stays code.
+        src = "const p = /[a-z/]+\\/\\//;\nKEEP = 2;\n"
+        result = strip_comments(src, ".js")
+        assert "KEEP" in result
+
+    def test_division_is_not_regex(self):
+        # Plain arithmetic with '//' line comment after it still strips.
+        src = "let r = total / count; // ratio\nnext();\n"
+        result = strip_comments(src, ".js")
+        assert "// ratio" not in result
+        assert "total / count" in result
+        assert "next();" in result
+
+    def test_real_line_comment_after_value_still_stripped(self):
+        src = "let x = 5; // keep value\n"
+        result = strip_comments(src, ".js")
+        assert "// keep value" not in result
+        assert "let x = 5;" in result
+
+
+class TestMarkupQuotesAreData:
+    """In HTML/XML/SVG/CSS a quote is data, not a string delimiter."""
+
+    def test_html_apostrophe_does_not_hide_comment(self):
+        src = "<p>it's a test <!-- secret comment --> visible</p>\n"
+        result = strip_comments(src, ".html")
+        assert "secret comment" not in result
+        assert "visible" in result
+        assert "it's a test" in result
+
+    def test_html_attribute_quotes_preserved(self):
+        src = '<a href="x">link</a><!-- c -->\n'
+        result = strip_comments(src, ".html")
+        assert 'href="x"' in result
+        assert "<!-- c -->" not in result and "c -->" not in result
+
+    def test_css_apostrophe_does_not_leak_comment(self):
+        src = "p::after { content: 'o'clock'; } /* note */ a{}\n"
+        result = strip_comments(src, ".css")
+        assert "note" not in result
+        assert "content:" in result
+
+
+class TestRubyBlockAnchored:
+    """Ruby =begin/=end are comment markers only at column 0."""
+
+    def test_begin_midline_is_not_block_comment(self):
+        src = "result =begin_value\nputs result\n"
+        result = strip_comments(src, ".rb")
+        assert "puts result" in result
+        assert "begin_value" in result
+
+    def test_begin_at_column_zero_strips_block(self):
+        src = "x = 1\n=begin\nhidden doc here\n=end\ny = 2\n"
+        result = strip_comments(src, ".rb")
+        assert "hidden doc here" not in result
+        assert "x = 1" in result
+        assert "y = 2" in result
+
+    def test_indented_end_does_not_close_early(self):
+        src = "=begin\nline one\n  =end still comment\nreal_code = 1\n=end\nafter = 2\n"
+        result = strip_comments(src, ".rb")
+        assert "line one" not in result
+        assert "real_code" not in result   # still inside the block (indented =end ignored)
+        assert "after = 2" in result
