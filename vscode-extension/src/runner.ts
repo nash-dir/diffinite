@@ -266,11 +266,14 @@ export async function runAnalysis(
   token?: vscode.CancellationToken
 ): Promise<DiffiniteReport> {
   const tmpJson = path.join(os.tmpdir(), `diffinite_${Date.now()}.json`);
+  const cleanupTmp = () => { try { fs.unlinkSync(tmpJson); } catch { /* ignore */ } };
 
+  // Options first, then '--', then the positional directories. The '--' sentinel
+  // stops argparse treating a path that begins with '-' as an option.
   const cliArgs = [
-    dirA, dirB,
     "--report-json", tmpJson,
     ...buildArgs(opts),
+    "--", dirA, dirB,
   ];
 
   progress.report({ message: "Running diffinite analysis…" });
@@ -281,8 +284,15 @@ export async function runAnalysis(
     // Handle User Cancellation
     if (token) {
       token.onCancellationRequested(() => {
-        console.log('[Diffinite] User requested cancellation. Killing child process…');
-        proc.kill('SIGTERM'); // Use 'SIGTERM' for graceful shutdown
+        console.log('[Diffinite] User requested cancellation. Killing process tree…');
+        // On Windows the multiprocessing workers are separate processes; a plain
+        // kill on the parent orphans them. taskkill /t terminates the whole tree.
+        if (os.platform() === 'win32' && proc.pid) {
+          exec(`taskkill /pid ${proc.pid} /t /f`);
+        } else {
+          proc.kill('SIGTERM');
+        }
+        cleanupTmp();
         reject(new Error("Analysis cancelled by user."));
       });
     }
@@ -348,20 +358,23 @@ export async function runAnalysis(
       console.log('[Diffinite] Process exited with code:', code);
       if (code !== 0) {
         console.error('[Diffinite] stderr:', stderrData);
+        cleanupTmp();
         reject(new Error(`diffinite exited with code ${code}:\n${stderrData}`));
         return;
       }
       try {
         const raw = fs.readFileSync(tmpJson, "utf-8");
         const report: DiffiniteReport = JSON.parse(raw);
-        try { fs.unlinkSync(tmpJson); } catch { /* ignore */ }
+        cleanupTmp();
         resolve(report);
       } catch (err) {
+        cleanupTmp();
         reject(new Error(`Failed to parse JSON report: ${err}`));
       }
     });
 
     proc.on("error", (err) => {
+      cleanupTmp();
       reject(new Error(
         `Failed to start diffinite. Check that the bundled binary exists ` +
         `or set diffinite.pythonPath in settings.\n${err.message}`
@@ -385,9 +398,9 @@ export async function runExport(
   const formatFlag = `--report-${format}`;
 
   const cliArgs = [
-    dirA, dirB,
     formatFlag, outputPath,
     ...buildArgs(opts),
+    "--", dirA, dirB,
   ];
 
   progress.report({ message: `Exporting ${format.toUpperCase()} report…` });

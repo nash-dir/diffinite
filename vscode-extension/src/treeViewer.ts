@@ -14,6 +14,13 @@ function escHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+function getNonce(): string {
+  let s = "";
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  for (let i = 0; i < 32; i++) s += chars.charAt(Math.floor(Math.random() * chars.length));
+  return s;
+}
+
 export class TreeViewerPanel {
   public static currentPanel: TreeViewerPanel | undefined;
   private readonly _panel: vscode.WebviewPanel;
@@ -96,8 +103,9 @@ export class TreeViewerPanel {
     // but a sortable table accomplishes the exact same selection capability
     // in a much more robust and readable way without complex JS tree libraries.
     
+    const nonce = getNonce();
     let rowsHtml = "";
-    
+
     // Sort results by similarity descending
     const sortedResults = [...report.results].sort((a, b) => {
        // Push exact matches (1.0 ratio) and high name similarity to top
@@ -140,6 +148,7 @@ export class TreeViewerPanel {
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
     <title>Select Evidence</title>
     <style>
         :root {
@@ -234,7 +243,7 @@ export class TreeViewerPanel {
         </div>
     </div>
 
-    <script>
+    <script nonce="${nonce}">
         const vscode = acquireVsCodeApi();
         const checkboxes = document.querySelectorAll('.file-cb');
         const countLabel = document.getElementById('sel-count');

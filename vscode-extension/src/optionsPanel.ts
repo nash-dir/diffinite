@@ -16,6 +16,24 @@ export interface TaskHistoryEntry {
   options: DiffiniteOptions;
 }
 
+/** Escape a value for safe interpolation into HTML text or a double-quoted attribute. */
+function escHtml(s: unknown): string {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/** Random nonce for the webview Content-Security-Policy (allows our inline script only). */
+function getNonce(): string {
+  let s = "";
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  for (let i = 0; i < 32; i++) s += chars.charAt(Math.floor(Math.random() * chars.length));
+  return s;
+}
+
 /**
  * Open the main options panel.
  * @param context VSCode extension context
@@ -115,19 +133,21 @@ export function showOptionsPanel(
 }
 
 function buildOptionsHtml(defaults: DiffiniteOptions, presets: BatesPreset[], lastDirs: { dirA: string; dirB: string }, taskHistory: TaskHistoryEntry[]): string {
+  const nonce = getNonce();
   const presetOptions = presets.map((p) => {
-    const label = `${p.name} (${p.prefix}…${p.suffix || ""})`;
-    return `<option value="${p.name}" data-prefix="${p.prefix || ""}" data-suffix="${p.suffix || ""}" data-start="${p.nextBatesNumber || 1}">${label}</option>`;
+    const label = `${escHtml(p.name)} (${escHtml(p.prefix)}…${escHtml(p.suffix || "")})`;
+    return `<option value="${escHtml(p.name)}" data-prefix="${escHtml(p.prefix || "")}" data-suffix="${escHtml(p.suffix || "")}" data-start="${escHtml(p.nextBatesNumber || 1)}">${label}</option>`;
   }).join("\n");
 
   const historyOptions = taskHistory.map((h) => {
-    return `<option value="${h.id}">${h.label}</option>`;
+    return `<option value="${escHtml(h.id)}">${escHtml(h.label)}</option>`;
   }).join("\n");
 
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <title>Diffinite Options</title>
   <style>${OPTIONS_CSS}</style>
 </head>
@@ -151,12 +171,12 @@ function buildOptionsHtml(defaults: DiffiniteOptions, presets: BatesPreset[], la
       <h2>Target Directories</h2>
       <div class="field dir-input-row" style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
         <label for="dirA" style="width: 80px; flex-shrink: 0;">Dir A (Org)</label>
-        <input type="text" id="dirA" class="path-input" style="flex-grow: 1; max-width: none;" placeholder="e.g. C:/source/project_v1" value="${lastDirs.dirA || ''}">
+        <input type="text" id="dirA" class="path-input" style="flex-grow: 1; max-width: none;" placeholder="e.g. C:/source/project_v1" value="${escHtml(lastDirs.dirA || '')}">
         <button type="button" id="btnBrowseA" class="btn-secondary" style="flex-shrink: 0;">Browse</button>
       </div>
       <div class="field dir-input-row" style="display: flex; gap: 8px; align-items: center;">
         <label for="dirB" style="width: 80px; flex-shrink: 0;">Dir B (Susp)</label>
-        <input type="text" id="dirB" class="path-input" style="flex-grow: 1; max-width: none;" placeholder="e.g. C:/source/project_v2" value="${lastDirs.dirB || ''}">
+        <input type="text" id="dirB" class="path-input" style="flex-grow: 1; max-width: none;" placeholder="e.g. C:/source/project_v2" value="${escHtml(lastDirs.dirB || '')}">
         <button type="button" id="btnBrowseB" class="btn-secondary" style="flex-shrink: 0;">Browse</button>
       </div>
       <div id="dirError" style="color:var(--error); font-size:12px; margin-top:8px; display:none;">Please specify both directories!</div>
@@ -269,11 +289,11 @@ function buildOptionsHtml(defaults: DiffiniteOptions, presets: BatesPreset[], la
         </div>
         <div class="field">
           <label for="batesPrefix">Prefix</label>
-          <input type="text" id="batesPrefix" value="${defaults.batesPrefix}" placeholder="e.g. PLAINTIFF-">
+          <input type="text" id="batesPrefix" value="${escHtml(defaults.batesPrefix)}" placeholder="e.g. PLAINTIFF-">
         </div>
         <div class="field">
           <label for="batesSuffix">Suffix</label>
-          <input type="text" id="batesSuffix" value="${defaults.batesSuffix}" placeholder="e.g. -CONFIDENTIAL">
+          <input type="text" id="batesSuffix" value="${escHtml(defaults.batesSuffix)}" placeholder="e.g. -CONFIDENTIAL">
         </div>
         <div class="field">
           <label for="batesStart">Starting number</label>
@@ -323,7 +343,7 @@ function buildOptionsHtml(defaults: DiffiniteOptions, presets: BatesPreset[], la
       
       <div class="field dir-input-row" style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
         <label for="pdfFont" style="width: 140px; flex-shrink: 0;" title="Absolute path to a TrueType(.ttf) font file">PDF Font Path</label>
-        <input type="text" id="pdfFont" class="path-input" style="flex-grow: 1; max-width: none;" placeholder="e.g. C:/Windows/Fonts/malgun.ttf" value="${defaults.pdfFont || ''}">
+        <input type="text" id="pdfFont" class="path-input" style="flex-grow: 1; max-width: none;" placeholder="e.g. C:/Windows/Fonts/malgun.ttf" value="${escHtml(defaults.pdfFont || '')}">
       </div>
       <div class="field" style="display: flex; gap: 8px; align-items: center;">
         <label for="pdfLang" style="width: 140px; flex-shrink: 0;">PDF Fallback Lang</label>
@@ -345,8 +365,8 @@ function buildOptionsHtml(defaults: DiffiniteOptions, presets: BatesPreset[], la
     </div>
   </form>
 
-  <script>
-    window.DiffiniteHistory = ${JSON.stringify(taskHistory)};
+  <script nonce="${nonce}">
+    window.DiffiniteHistory = ${JSON.stringify(taskHistory).replace(/</g, "\\u003c")};
     ${OPTIONS_JS}
   </script>
 </body>

@@ -12,9 +12,12 @@ export async function compareDirectories(
   context: vscode.ExtensionContext
 ): Promise<void> {
   // Step 1: Launch options panel immediately. It acts as the home base.
-  showOptionsPanel(context, async (dirA: string, dirB: string, options: DiffiniteOptions) => {
-    executePipeline(context, dirA, dirB, options);
-  });
+  // Return the pipeline promise so optionsPanel's `await onRun(...)` waits for
+  // the full run before reverting the button / posting runComplete (otherwise
+  // it resolves at the first await, mid-Phase-1).
+  showOptionsPanel(context, (dirA: string, dirB: string, options: DiffiniteOptions) =>
+    executePipeline(context, dirA, dirB, options)
+  );
 }
 
 export async function executePipeline(

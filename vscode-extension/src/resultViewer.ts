@@ -97,6 +97,7 @@ export function showResults(
 function buildResultHtml(report: DiffiniteReport): string {
   const meta = report.metadata;
   const summary = report.summary;
+  const nonce = getNonce();
 
   // --- Summary section ---
   let summaryHtml = `
@@ -113,7 +114,7 @@ function buildResultHtml(report: DiffiniteReport): string {
         <span>Mode: <strong>${escHtml(meta.exec_mode)}</strong></span>
         <span>K=${meta.k}</span>
         <span>W=${meta.w}</span>
-        <span>T=${meta.threshold.toFixed(2)}</span>
+        <span>min Jaccard=${meta.threshold.toFixed(1)}%</span>
       </div>
     `;
   }
@@ -196,6 +197,7 @@ function buildResultHtml(report: DiffiniteReport): string {
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <title>Diffinite Results</title>
   <style>${CSS}</style>
 </head>
@@ -226,7 +228,7 @@ function buildResultHtml(report: DiffiniteReport): string {
     <button class="export-btn" data-format="md" title="Export Markdown">&#128221; MD</button>
   </nav>
 
-  <script>${JS}</script>
+  <script nonce="${nonce}">${JS}</script>
 </body>
 </html>`;
 }
@@ -465,4 +467,11 @@ const JS = `
 
 function escHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function getNonce(): string {
+  let s = "";
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  for (let i = 0; i < 32; i++) s += chars.charAt(Math.floor(Math.random() * chars.length));
+  return s;
 }
