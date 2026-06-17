@@ -64,4 +64,5 @@ Thumbs.db
 
 # Local working notes & transient patches (not for the public repo)
 *-readme-audit.md
+HANDOFF-*.md
 *.patch
