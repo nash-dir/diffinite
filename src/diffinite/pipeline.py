@@ -743,6 +743,7 @@ def run_pipeline(
     # Stability & Forensics
     unreadable_log: str | None = None,
     max_file_size_mb: float = 10.0,
+    max_diff_html_size_mb: float = 2.0,
     dir_alias_a: str | None = None,
     dir_alias_b: str | None = None,
     # Individual output tree structure
