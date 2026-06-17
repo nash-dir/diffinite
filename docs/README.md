@@ -14,4 +14,12 @@ table of matched file pairs (File A / File B, Name Sim., Content Match,
 Added / Deleted), ideally from a deep-mode run so the N:M cross-match section is
 also visible. A clean export from a throwaway pair of directories is enough;
 prefer a light background and a width that stays legible when scaled to README
-column width.
+column width. The current image is the AOSP example (`example/aosp/left` vs
+`example/aosp/right`) run with comments included (the default).
+
+## `report-diff-sample.png`
+
+Second image, embedded under **Output Report → Diff Pages** in the main README to
+illustrate the side-by-side diff. Capture a **single diff page** (zoomed in enough
+that the code and the green/red highlights are readable at README width), e.g. the
+`Handler.java` page of the same AOSP report. Same raw-URL/`master` caveat applies.

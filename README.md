@@ -119,6 +119,8 @@ Each matched pair gets a side-by-side diff page with:
 - **Blue highlight** — Lines moved to this position (`--detect-moved`)
 - **No highlight** — Identical lines (with configurable context folding)
 
+![diff page](https://raw.githubusercontent.com/nash-dir/diffinite/master/docs/report-diff-sample.png)
+
 ### Deep Compare Section
 
 When running in `deep` mode (default), the report includes an N:M cross-matching table:
