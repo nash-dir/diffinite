@@ -405,17 +405,21 @@ diffinite example/plagiarism/case-01/original example/plagiarism/case-01/plagiar
 **Why this dataset**: Two versions of Android's `Handler`/`Looper`/`Message` framework. Small evolutionary changes between versions.
 
 ```bash
+# Default run, comments included (the configuration shown in the sample image above)
+diffinite example/aosp/left example/aosp/right
+
+# With comment stripping (reproduces example/benchmark/aosp.md)
 diffinite example/aosp/left example/aosp/right \
     --strip-comments --report-md example/benchmark/aosp.md
 ```
 
-| File | Match (difflib) |
-|------|:-:|
-| `Handler.java` | 88.6% |
-| `Looper.java` | 90.0% |
-| `Message.java` | 96.3% |
+| File | Match — comments included | Match — comments stripped |
+|------|:-:|:-:|
+| `Handler.java` | 90.6% | 88.6% |
+| `Looper.java` | 89.1% | 90.0% |
+| `Message.java` | 96.0% | 96.3% |
 
-**Observation**: High Match scores correctly reflect that these are minor revisions of the same codebase.
+**Observation**: High Match scores correctly reflect that these are minor revisions of the same codebase — and the scores stay high whether comments are included (the default) or stripped, showing the measurement is robust to that choice. The sample report image at the top of this README uses this dataset with comments included.
 
 ---
 
