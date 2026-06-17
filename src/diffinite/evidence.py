@@ -41,6 +41,19 @@ logger = logging.getLogger(__name__)
 _HASH_BUF_SIZE = 65536
 
 
+def jaccard_similarity(fp_a: set[int], fp_b: set[int]) -> float:
+    """Jaccard similarity of two Winnowing fingerprint sets: |A∩B| / |A∪B|.
+
+    Reported as "N% of the two files' code fingerprints match."
+    Returns 0.0 when both sets are empty.
+    """
+    if not fp_a and not fp_b:
+        return 0.0
+    intersection = len(fp_a & fp_b)
+    union = len(fp_a | fp_b)
+    return intersection / union if union else 0.0
+
+
 # ---------------------------------------------------------------------------
 # SHA-256 해시 계산
 # ---------------------------------------------------------------------------
