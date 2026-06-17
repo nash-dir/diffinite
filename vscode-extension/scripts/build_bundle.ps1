@@ -71,8 +71,9 @@ foreach ($pth in $pthFiles) {
 # 3. Bootstrap Pip
 # -------------------------------------------------------------------------
 Write-Host "Bootstrapping pip..."
-# 공식 get-pip.py SHA256 해시값 (Pypa 제공 버전에 대한 해시)
-$expectedPipHash = "FEBA1C697DF45BE1B539B40D93C102C9EE9DDE1D966303323B830B06F3FBCA3C"
+# get-pip.py SHA256 — bootstrap.pypa.io는 항상 최신본을 주는 롤링 URL이라,
+# pip 릴리스로 내용이 바뀌면 이 핀을 갱신해야 한다(장기적으로는 버전 고정 스냅샷 권장).
+$expectedPipHash = "A341E1A43E38001C551A1508A73FF23636A11970B61D901D9A1CAD2A18F57055"
 $pipScriptPath = "$binPythonDir\get-pip.py"
 
 Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile $pipScriptPath
