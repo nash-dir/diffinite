@@ -92,7 +92,7 @@ def _extract_one(args: tuple) -> tuple[str, set[int], int]:
 def build_inverted_index(
     fp_map: dict[str, set[int]],
     max_entries: int = 10_000_000,
-) -> dict[int, set[str]]:
+) -> tuple[dict[int, set[str]], bool]:
     """해시값 → 파일 ID 집합의 역 인덱스를 구축한다.
 
     이 인덱스 덕분에 A-파일의 각 해시를 O(1)로 조회하여
@@ -102,6 +102,10 @@ def build_inverted_index(
     메모리: O(Σ|fp_b|) — 대규모 코퍼스에서 수 GB 가능.
     ``max_entries`` 초과 시 경고 로그 출력 후 truncated index 반환.
     ``--max-index-entries`` CLI 옵션으로 제어 가능.
+
+    Returns:
+        ``(index, truncated)``. ``truncated`` 가 True이면 상한에 도달해 일부
+        엔트리가 누락된 것이므로, 호출쪽은 이를 보고서에 표기해야 한다.
     """
     index: dict[int, set[str]] = defaultdict(set)
     entry_count = 0
@@ -115,21 +119,16 @@ def build_inverted_index(
                     "(--max-index-entries). Some matches may be missed.",
                     max_entries,
                 )
-                return index
-    return index
+                return index, True
+    return index, False
 
 
 # ──────────────────────────────────────────────────────────────────────
 # Jaccard 유사도 & N:M 매칭
 # ──────────────────────────────────────────────────────────────────────
-def _jaccard(set_a: set[int], set_b: set[int]) -> float:
-    """두 해시 집합의 Jaccard 유사도 계수. |A∩B| / |A∪B|.
-    양쪽 모두 빈 집합이면 0.0 반환."""
-    if not set_a and not set_b:
-        return 0.0
-    intersection = len(set_a & set_b)
-    union = len(set_a | set_b)
-    return intersection / union if union else 0.0
+# 유사도 공식의 단일 출처(single source of truth). 운영 경로와 테스트가
+# **정확히 같은 함수**를 쓰도록 evidence 모듈의 구현을 그대로 재사용한다.
+from diffinite.evidence import jaccard_similarity as _jaccard  # noqa: E402
 
 
 def run_deep_compare(
@@ -144,6 +143,7 @@ def run_deep_compare(
     min_jaccard: float = 0.05,
     normalize: bool = False,
     max_index_entries: int = 10_000_000,
+    status: Optional[dict] = None,
 ) -> list[DeepMatchResult]:
     """Execute N:M cross-matching between two directories.
 
@@ -160,11 +160,15 @@ def run_deep_compare(
         workers: Number of parallel worker processes.
         min_jaccard: Minimum Jaccard similarity to include in results.
         normalize: If *True*, normalise tokens before fingerprinting.
+        status: Optional dict; if given, ``status["index_truncated"]`` is set
+            to whether the inverted index hit ``max_index_entries`` (so the
+            caller can flag an incomplete report).
 
     Returns:
         List of :class:`DeepMatchResult` for every A-file that has at
         least one B-file match above the threshold.
     """
+    workers = max(1, workers)  # library guard: ProcessPoolExecutor needs >= 1
     root_a = Path(dir_a).resolve()
     root_b = Path(dir_b).resolve()
 
@@ -199,7 +203,9 @@ def run_deep_compare(
             fp_b[rel] = hset
 
     # Build inverted index over B-files
-    inv_b = build_inverted_index(fp_b, max_entries=max_index_entries)
+    inv_b, index_truncated = build_inverted_index(fp_b, max_entries=max_index_entries)
+    if status is not None:
+        status["index_truncated"] = index_truncated
 
     # Query each A-file against the index
     deep_results: list[DeepMatchResult] = []
@@ -223,8 +229,11 @@ def run_deep_compare(
             if jaccard >= min_jaccard:
                 matched_b.append((file_id_b, shared, round(jaccard, 4)))
 
-        # Sort by Jaccard descending
-        matched_b.sort(key=lambda x: x[2], reverse=True)
+        # Sort by Jaccard desc, then shared-hash count desc, then file id asc.
+        # The full tie-break is seed-independent: without it, equal-Jaccard
+        # matches kept set-iteration order (PYTHONHASHSEED-dependent), so the
+        # reported "top match" could change run-to-run on identical inputs.
+        matched_b.sort(key=lambda x: (-x[2], -x[1], x[0]))
 
         if matched_b:
             deep_results.append(DeepMatchResult(

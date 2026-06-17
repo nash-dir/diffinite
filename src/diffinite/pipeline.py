@@ -31,6 +31,7 @@ PDF 전략 (Divide-and-Conquer):
 
 from __future__ import annotations
 
+import dataclasses
 import html as html_mod
 import json
 import logging
@@ -227,6 +228,13 @@ def _build_metadata_banner_md(meta: AnalysisMetadata) -> str:
         f"| **Threshold (T)** | `{meta.threshold:.2f}` |",
         "",
     ]
+    if meta.deep_index_truncated:
+        lines.append(
+            "> ⚠ **Incomplete results:** the Deep Compare inverted index hit the "
+            "`--max-index-entries` cap, so some cross-matches are missing and "
+            "similarity is **under-reported**. Re-run with a higher "
+            "`--max-index-entries` for complete results.\n"
+        )
     return "\n".join(lines)
 
 
@@ -241,7 +249,14 @@ def _build_metadata_banner_html(meta: AnalysisMetadata) -> str:
         f"<strong>Mode:</strong> {html_mod.escape(meta.exec_mode)} &nbsp;|&nbsp; "
         f"<strong>K=</strong>{meta.k}, <strong>W=</strong>{meta.w}, "
         f"<strong>T=</strong>{meta.threshold:.2f}"
-        "\n</div>\n"
+        + (
+            '<br><span style="color:#b00020;font-weight:bold;">'
+            "⚠ Incomplete results: Deep Compare index truncated at "
+            "--max-index-entries; some cross-matches missing "
+            "(similarity under-reported).</span>"
+            if meta.deep_index_truncated else ""
+        )
+        + "\n</div>\n"
     )
 
 
@@ -319,8 +334,10 @@ def _generate_markdown_report(
         lines.append("|--------|-----------|:-------------:|:-------:|")
         for dr in deep_results:
             for b_file, shared, jaccard in dr.matched_files_b:
+                # 2 decimals of percent reflect the 4-dp Jaccard used for ordering,
+                # so the displayed value and the sort order agree.
                 lines.append(
-                    f"| `{dr.file_a}` | `{b_file}` | {shared} | {jaccard*100:.1f}% |"
+                    f"| `{dr.file_a}` | `{b_file}` | {shared} | {jaccard*100:.2f}% |"
                 )
 
     out = Path(output_path)
@@ -363,6 +380,7 @@ def _generate_json_report(
             "w": metadata.w,
             "threshold": metadata.threshold,
             "autojunk": metadata.autojunk,
+            "deep_index_truncated": metadata.deep_index_truncated,
         }
 
     result_list = []
@@ -918,13 +936,18 @@ def run_pipeline(
     deep_results = None
     if exec_mode == "deep":
         logger.info("Step 4b: Running Deep Compare (N:M cross-matching) …")
+        deep_status: dict = {}
         deep_results = run_deep_compare(
             dir_a, dir_b, files_a, files_b,
             k=kgram_size, w=window_size,
             workers=workers, min_jaccard=min_jaccard,
             normalize=normalize,
             max_index_entries=max_index_entries,
+            status=deep_status,
         )
+        # Surface index truncation so a capped run is not read as complete.
+        if deep_status.get("index_truncated") and metadata is not None:
+            metadata = dataclasses.replace(metadata, deep_index_truncated=True)
     elif exec_mode == "simple":
         logger.info("Step 4b: Skipped (simple mode — no Winnowing)")
 
