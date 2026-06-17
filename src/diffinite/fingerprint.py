@@ -1,22 +1,23 @@
-"""Winnowing 핑거프린트 추출 엔진.
+"""Winnowing fingerprint extraction engine.
 
-Stanford MOSS 스타일 문서 핑거프린팅 파이프라인을 구현한다.
-전체 흐름: Tokenize → K-gram → Rolling Hash → Winnow → Fingerprint Set
+Implements a Stanford MOSS–style document-fingerprinting pipeline.
+Flow: Tokenize → K-gram → Rolling Hash → Winnow → Fingerprint Set
 
-핵심 보장:
-    **밀도 보장 (Density Guarantee)** -- 두 문서가 >= (W + K - 1) 토큰의
-    공통 부분 문자열을 공유하면, 반드시 1개 이상의 공통 핑거프린트가 생성된다.
-    현재 설정(K=5, W=4)에서 >= 8 토큰 공유 시 탐지 보장.
+Core guarantee:
+    **Density guarantee** -- if two documents share a common substring of
+    >= (W + K - 1) tokens, at least one common fingerprint is produced.
+    With the current settings (K=5, W=4), any shared run of >= 8 tokens is
+    guaranteed to be detected.
 
-참조:
+Reference:
     Schleimer, Wilkerson, Aiken. "Winnowing: Local Algorithms for Document
     Fingerprinting". SIGMOD 2003.
 
-의존:
-    - ``models.FingerprintEntry``: 핑거프린트 결과 VO
-    - ``languages/``: 키워드 세트 (토큰 정규화용)
+Depends on:
+    - ``models.FingerprintEntry``: fingerprint result value object
+    - ``languages/``: keyword sets (for token normalization)
 
-호출관계:
+Call graph:
     ``deep_compare._extract_one()`` → ``extract_fingerprints()``
     ``extract_fingerprints()`` → ``tokenize()`` → ``rolling_hash()`` → ``winnow()``
 """

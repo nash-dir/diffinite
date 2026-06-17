@@ -1,30 +1,34 @@
-"""N:M Deep 크로스매칭 엔진.
+"""N:M deep cross-matching engine.
 
-Winnowing 핑거프린트의 **역 인덱스(Inverted Index)** 를 활용하여,
-코드가 여러 파일로 분산·병합된 경우에도 유사 코드를 효율적으로 탐지한다.
+Uses an **inverted index** over Winnowing fingerprints to efficiently detect
+similar code even when it has been split across or merged from multiple files.
 
-아키텍처:
-    1. ``ProcessPoolExecutor``로 모든 파일의 핑거프린트를 **병렬 추출**.
-    2. B-파일의 해시값으로 역 인덱스 구축: ``hash → {file_ids}``.
-    3. A-파일별로 인덱스 조회 → 후보 B-파일 결정 → Jaccard 계산.
+Architecture:
+    1. Extract fingerprints for all files **in parallel** via
+       ``ProcessPoolExecutor``.
+    2. Build an inverted index from B-file hashes: ``hash → {file_ids}``.
+    3. For each A-file, query the index → pick candidate B-files →
+       compute Jaccard similarity.
 
-복잡도:
-    - 핑거프린트 추출: O((N+M) × L) — L = 평균 파일 길이, 병렬화로 wall time ↓
-    - 역 인덱스 구축: O(Σ|fp_b|)
-    - A-파일별 조회: O(|fp_a|) — 나이브 O(N×M) 대비 극적 개선
-    - 전체: O((N+M)×L + Σ|fp_a|) ≈ 선형
+Complexity:
+    - Fingerprint extraction: O((N+M) × L) — L = avg file length; parallelism
+      lowers wall time.
+    - Inverted index build: O(Σ|fp_b|)
+    - Per A-file lookup: O(|fp_a|) — a dramatic improvement over the naive
+      O(N×M) pairwise comparison.
+    - Total: O((N+M)×L + Σ|fp_a|) ≈ linear.
 
-병렬화 제약:
-    워커 함수(``_extract_one``)는 모듈 최상위에 정의해야 한다.
-    ``ProcessPoolExecutor``가 pickle로 함수를 직렬화하기 때문.
-    클래스 메서드나 람다를 사용하면 ``PicklingError`` 발생.
+Parallelism constraint:
+    The worker function (``_extract_one``) must be defined at module top level,
+    because ``ProcessPoolExecutor`` serializes it via pickle. Using a class
+    method or lambda raises ``PicklingError``.
 
-의존:
-    - ``fingerprint.py``: 핑거프린트 추출 파이프라인
-    - ``parser.py``: 주석 제거
-    - ``differ.py``: 파일 읽기 (인코딩 감지)
+Depends on:
+    - ``fingerprint.py``: fingerprint extraction pipeline
+    - ``parser.py``: comment stripping
+    - ``differ.py``: file reading (encoding detection)
 
-호출관계:
+Call graph:
     ``pipeline.run_pipeline()`` → ``run_deep_compare()``
 """
 
