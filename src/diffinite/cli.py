@@ -457,6 +457,25 @@ def main(argv: list[str] | None = None) -> None:
 
     args = parser.parse_args(argv)
 
+    # ── Validate numeric ranges at the boundary ──────────────────────
+    # Degenerate values must fail loudly here, not crash mid-run after the
+    # rendering phase (--workers/--window) or silently fabricate forensic
+    # numbers (--k-gram 0 → every file collapses to one fingerprint → 100%).
+    if args.k_gram < 1:
+        parser.error("--k-gram must be >= 1.")
+    if args.window < 1:
+        parser.error("--window must be >= 1.")
+    if args.workers < 1:
+        parser.error("--workers must be >= 1.")
+    if args.max_index_entries < 1:
+        parser.error("--max-index-entries must be >= 1.")
+    if not 0 <= args.threshold <= 100:
+        parser.error("--threshold must be between 0 and 100.")
+    if not 0 <= args.threshold_deep <= 100:
+        parser.error("--threshold-deep must be between 0 and 100.")
+    if args.bates_start < 1:
+        parser.error("--bates-start must be >= 1.")
+
     # Convert threshold-deep from 0-100 (user-facing) to 0-1 (internal)
     min_jaccard_internal = args.threshold_deep / 100.0
 
