@@ -145,16 +145,18 @@ def _strip_ifdef_zero(text: str) -> str:
 # 상태 머신
 # ──────────────────────────────────────────────────────────────────────
 class _State(enum.Enum):
-    """2-pass 파서의 5가지 상태.
+    """2-pass 파서의 6가지 상태.
 
     ``CODE`` → ``IN_STRING``: 문자열 구분자(``"``, ``'``) 만남
     ``CODE`` → ``IN_TEMPLATE_LITERAL``: 백틱(`` ` ``) 만남 (JS 템플릿 리터럴)
     ``CODE`` → ``IN_LINE_COMMENT``: 라인 주석 마커 만남
     ``CODE`` → ``IN_BLOCK_COMMENT``: 블록 주석 시작 만남
+    ``CODE`` → ``IN_REGEX``: 식이 올 자리의 ``/`` 만남 (JS 정규식 리터럴)
     ``IN_LINE_COMMENT`` → ``CODE``: 줄 바꿈
     ``IN_BLOCK_COMMENT`` → ``CODE``: 블록 주석 종료 마커 만남
     ``IN_STRING`` → ``CODE``: 닫는 구분자 만남
     ``IN_TEMPLATE_LITERAL`` → ``CODE``: ``${`` 진입 (depth증가 후 CODE로) / 백틱 닫힘
+    ``IN_REGEX`` → ``CODE``: 닫는 ``/`` 만남 (문자 클래스 ``[...]`` 밖)
     ``CODE`` → ``IN_TEMPLATE_LITERAL``: ``}`` with template_depth > 0
     """
     CODE = "CODE"

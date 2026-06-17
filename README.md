@@ -82,8 +82,8 @@ Diffinite runs a two-stage pipeline:
 ### Stage 1: 1:1 File Matching (`simple` mode)
 
 1. **Fuzzy name matching** — Pairs files across `dir_a` and `dir_b` using [RapidFuzz](https://github.com/rapidfuzz/RapidFuzz) string similarity (configurable threshold).
-2. **Comment stripping** — Optionally removes comments using a 5-state finite state machine parser supporting 30+ file extensions.
-3. **Side-by-side diff** — Computes line-by-line (or word-by-word) diffs using Python's `difflib.SequenceMatcher` with `autojunk=True` for O(n) performance on large files.
+2. **Comment stripping** — Optionally removes comments using a 6-state finite state machine parser supporting 30+ file extensions.
+3. **Side-by-side diff** — Computes line-by-line (or word-by-word) diffs using Python's `difflib.SequenceMatcher` with `autojunk=True`, a heuristic that drops high-frequency lines to speed up matching on large files (`SequenceMatcher` itself remains worst-case quadratic).
 4. **Report generation** — Renders syntax-highlighted HTML diffs via Pygments, then converts to PDF with xhtml2pdf.
 
 ### Stage 2: N:M Cross-Matching (`deep` mode, default)
@@ -114,7 +114,7 @@ Each matched pair gets a side-by-side diff page with:
 
 - **Green highlight** — Lines present only in File B (additions)
 - **Red highlight** — Lines present only in File A (deletions)
-- **Yellow highlight** — Lines changed between A and B (word-level diff in `--by-word` mode)
+- **Yellow highlight** — Lines changed between A and B; in `--by-word` mode the changed words within are further marked (removed words struck through, added words bold)
 - **Purple highlight** — Lines moved from this position (`--detect-moved`)
 - **Blue highlight** — Lines moved to this position (`--detect-moved`)
 - **No highlight** — Identical lines (with configurable context folding)
@@ -127,6 +127,7 @@ When running in `deep` mode (default), the report includes an N:M cross-matching
 |--------|-------------|
 | **File A** | Source file from directory A |
 | **Matched Files (B)** | All files from directory B that share fingerprints above the Jaccard threshold |
+| **Shared Hashes** | Count of Winnowing fingerprints the file pair has in common |
 | **Jaccard** | `|A∩B| / |A∪B|` — the fraction of shared Winnowing fingerprints. |
 
 Jaccard similarity is a well-defined set metric. Its interpretation depends on the domain, code size, and language. Diffinite reports the raw value without attaching qualitative labels.
@@ -161,8 +162,7 @@ dir_b    Path to the comparison source directory (B)
 
 | Option | Description |
 |--------|-------------|
-| `-o`, `--output-pdf PATH` | Output PDF path (default: `report.pdf`). Ignored when `--report-*` is specified. |
-| `--report-pdf PATH` | Generate merged PDF report |
+| `--report-pdf PATH` (alias `-o`) | Generate a merged PDF report. Defaults to `report.pdf` when no `--report-*` flag is given. |
 | `--report-html PATH` | Generate standalone HTML report (single file, no external deps) |
 | `--report-md PATH` | Generate Markdown summary report |
 | `--report-json PATH` | Generate machine-readable JSON report (used by VS Code extension) |
@@ -173,7 +173,7 @@ dir_b    Path to the comparison source directory (B)
 
 | Option | Default | Description |
 |--------|:-------:|-------------|
-| `--strip-comments` | off | Strip comments before comparison (5-state FSM parser, 30+ extensions) |
+| `--strip-comments` | off | Strip comments before comparison (6-state FSM parser, 30+ extensions) |
 | `--by-word` | off | Compare by word instead of by line |
 | `--squash-blanks` | off | Collapse runs of 3+ blank lines. ⚠️ Changes line numbers — not recommended for forensic line-tracing. |
 | `--threshold N` | `60` | Fuzzy file-name matching threshold (0–100). Lower = more aggressive matching. |
@@ -187,7 +187,7 @@ dir_b    Path to the comparison source directory (B)
 |--------|:-------:|-------------|
 | `--k-gram N` | `5` | K-gram size for Winnowing. Larger K = fewer but more specific fingerprints. (Schleimer 2003, §4.2) |
 | `--window N` | `4` | Winnowing window size. Guarantees detection of any shared sequence ≥ `K+W−1` = 8 tokens. |
-| `--threshold-deep F` | `0.05` | Minimum Jaccard similarity to include in results. Below 5% is considered noise. |
+| `--threshold-deep N` | `5` | Minimum Jaccard similarity (percent, on a 0–100 scale) to include in results. Below 5% is considered noise. |
 | `--normalize` | off | Normalize identifiers → `ID`, literals → `LIT` before fingerprinting. Improves Type-2 clone detection (renamed variables). |
 | `--workers N` | `4` | Number of parallel worker processes for diff rendering and fingerprint extraction. |
 
@@ -197,9 +197,9 @@ dir_b    Path to the comparison source directory (B)
 |--------|:-------:|-------------|
 | `--no-autojunk` | off | Disable `SequenceMatcher`'s autojunk heuristic. Treats all tokens equally — slower but more precise for forensic analysis. |
 | `--max-index-entries N` | `10,000,000` | Memory cap for inverted index. Prevents OOM on large corpora. ~800MB at 10M entries. |
-| `--max-file-size-mb N` | `10.0` | Skip files exceeding this size (MB). Prevents OOM on large binary/generated files. |
+| `--max-file-size N` | `10.0` | Files larger than this (MB) bypass the in-memory text decode and fall back to a SHA-256 hash comparison (reported as match/no-match rather than a line diff). Prevents OOM/CPU lock on large binary/generated files. |
 | `--hash` | off | Embed SHA-256 evidence integrity hashes for all analyzed files in the report. |
-| `--uncompared-mode {inline,separate,none}` | `inline` | Control how unmatched files are displayed: inline in main report, as separate appendix, or omitted. |
+| `--uncompared-files {inline,separate,none}` | `inline` | Control how unmatched files are displayed: inline in the main report, written to a separate `*_uncompared.txt` file, or omitted. |
 
 ### Page Annotation Options
 
@@ -223,7 +223,7 @@ dir_b    Path to the comparison source directory (B)
 # Full forensic report with all annotations
 diffinite plaintiff_code/ defendant_code/ -o exhibit_A.pdf \
     --strip-comments \
-    --bates-number --bates-prefix "CASE2026-" --bates-suffix "-CONFIDENTIAL" \
+    --bates-number --bates-prefix=CASE2026- --bates-suffix=-CONFIDENTIAL \
     --bates-start 1 --page-number --file-number --filename \
     --collapse-identical --detect-moved --hash
 ```
@@ -267,8 +267,8 @@ diffinite dir_a/ dir_b/ \
 # Larger K-gram = fewer false positives, may miss short matches
 diffinite dir_a/ dir_b/ --k-gram 7 --window 5
 
-# Lower Jaccard threshold = show weaker matches
-diffinite dir_a/ dir_b/ --threshold-deep 0.02
+# Lower Jaccard threshold = show weaker matches (0–100 scale; default 5)
+diffinite dir_a/ dir_b/ --threshold-deep 2
 
 # Stricter file name matching
 diffinite dir_a/ dir_b/ --threshold 80
@@ -278,12 +278,12 @@ diffinite dir_a/ dir_b/ --threshold 80
 
 ## Comment Stripping Support
 
-The `--strip-comments` flag removes comments using a 5-state finite state machine parser:
+The `--strip-comments` flag removes comments using a 6-state finite state machine parser:
 
 | Extensions | Comment Styles |
 |------------|---------------|
-| `.py` | `# line comments`, `"""docstrings"""` |
-| `.js`, `.ts`, `.jsx`, `.tsx` | `// line`, `/* block */`, `` `template literals` `` |
+| `.py` | `# line comments` |
+| `.js`, `.ts`, `.jsx`, `.tsx` | `// line`, `/* block */` |
 | `.java`, `.c`, `.cpp`, `.h`, `.cs`, `.go`, `.rs`, `.kt`, `.scala` | `// line`, `/* block */` |
 | `.html`, `.xml`, `.svg`, `.htm` | `<!-- block -->` |
 | `.css`, `.scss`, `.less` | `/* block */` |
@@ -292,6 +292,8 @@ The `--strip-comments` flag removes comments using a 5-state finite state machin
 | `.sh`, `.bash`, `.zsh` | `# line` |
 | `.lua` | `-- line`, `--[[ block ]]` |
 | `.r` | `# line` |
+
+> String and triple-quoted literals (including Python docstrings), template literals, and regex literals are deliberately **preserved**, not stripped — they are recognized only so that comment markers appearing inside them (e.g. `//` inside a string) are not mistaken for comments.
 
 ---
 
@@ -303,7 +305,7 @@ diffinite/
 │   ├── cli.py              # CLI entry point & argument parsing
 │   ├── pipeline.py         # Orchestration (simple/deep modes, parallel rendering)
 │   ├── collector.py        # File collection & fuzzy name matching
-│   ├── parser.py           # 5-state comment stripping FSM
+│   ├── parser.py           # 6-state comment stripping FSM
 │   ├── differ.py           # Diff computation, moved-block detection & HTML rendering
 │   ├── fingerprint.py      # Winnowing fingerprint extraction
 │   ├── deep_compare.py     # N:M cross-matching (inverted index + Jaccard)
@@ -350,15 +352,15 @@ diffinite example/Case-Oracle/AOSP_Google example/Case-Oracle/OpenJDK_Oracle \
     --strip-comments --report-md example/benchmark/case_oracle.md
 ```
 
-| File | Match (difflib) | Deep Cross-Match |
+| File | Match (difflib) | Deep Cross-Match (Jaccard) |
 |------|:-:|:-:|
-| `ArrayList.java` | 9.0% | — |
-| `Collections.java` | 4.5% | — |
-| `List.java` | 6.3% | — |
-| `Math.java` | 5.2% | — |
-| `String.java` | 3.3% | — |
+| `ArrayList.java` | 9.0% | 7.9% |
+| `Collections.java` | 4.5% | 23.1% |
+| `List.java` | 6.3% | 11.6% |
+| `Math.java` | 5.2% | 6.3% |
+| `String.java` | 3.3% | 6.8% |
 
-**Observation**: Low Match scores and no Jaccard cross-matches above 5% confirm these are **independent implementations** of the same API specification. The structural similarity comes from identical method signatures, not copied logic.
+**Observation**: The line-level Match (difflib) scores stay under 10%, confirming the *bodies* are independently written. Deep Compare still surfaces shared Winnowing fingerprints — Jaccard 6–23% (highest on `Collections.java`) — because the API *signatures and declarations* are necessarily similar. High structural similarity alongside low line-level Match is precisely the SSO pattern at issue in the case: the same interface, independently implemented. Diffinite reports both numbers; interpreting them is the expert's job.
 
 ### 2. Eclipse Collections v. OpenJDK — Negative Control
 
@@ -389,14 +391,14 @@ diffinite example/plagiarism/case-01/original example/plagiarism/case-01/plagiar
 |----------|-------------|:-:|
 | `T1.java` | `L2/04/hellow.java` | 100.0% |
 | `T1.java` | `L1/04/T1.java` | 100.0% |
-| `T1.java` | `L1/05/HelloWorld.java` | 90.0% |
+| `T1.java` | `L1/05/HelloWorld.java` | 100.0% |
 | `T1.java` | `L4/05/hellow.java` | 56.2% |
 | `T1.java` | `L5/02/Main.java` | 38.1% |
-| `T1.java` | `L6/07/PrintJava.java` | 34.8% |
-| `T1.java` | `L6/01/L6.java` | 26.1% |
-| `T1.java` | `L6/05/HelloWorld.java` | 17.9% |
+| `T1.java` | `L6/07/PrintJava.java` | 36.4% |
+| `T1.java` | `L6/01/L6.java` | 25.0% |
+| `T1.java` | `L6/05/HelloWorld.java` | 15.4% |
 
-**Observation**: Jaccard decreases monotonically as the plagiarism level increases (L1→L6). Verbatim copies score 100%. Heavily restructured copies (L5, L6) still show 18–38% shared fingerprints — well above the negative control baseline.
+**Observation**: Jaccard decreases as the plagiarism level increases (L1→L6). Verbatim and lightly-edited copies (L1–L3) score 100%. Heavily restructured copies (L5, L6) still show 15–38% shared fingerprints — well above the negative control baseline.
 
 ### 4. AOSP Framework — Same Codebase, Minor Edits
 
