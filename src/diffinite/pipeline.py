@@ -260,6 +260,22 @@ def _build_metadata_banner_html(meta: AnalysisMetadata) -> str:
     )
 
 
+def _md_escape(s: str) -> str:
+    """Escape a value embedded in a Markdown code span / GFM table cell.
+
+    Untrusted file paths (POSIX names may contain backticks, pipes, angle
+    brackets) must not break out of the code span, corrupt the table, or inject
+    markup in viewers that render embedded HTML.
+    """
+    return (
+        s.replace("\\", "\\\\")
+         .replace("`", "\\`")
+         .replace("|", "\\|")
+         .replace("<", "&lt;")
+         .replace(">", "&gt;")
+    )
+
+
 # ---------------------------------------------------------------------------
 # Markdown report generator
 # ---------------------------------------------------------------------------
@@ -287,8 +303,8 @@ def _generate_markdown_report(
     if metadata:
         lines.append(_build_metadata_banner_md(metadata))
 
-    lines.append(f"- **Dir A:** `{dir_a}`")
-    lines.append(f"- **Dir B:** `{dir_b}`")
+    lines.append(f"- **Dir A:** `{_md_escape(dir_a)}`")
+    lines.append(f"- **Dir B:** `{_md_escape(dir_b)}`")
     lines.append(f"- **Comparison unit:** {unit}")
     lines.append(f"- **Comments:** {comment_mode}")
     lines.append(f"- **Matched pairs:** {len(results)}")
@@ -302,7 +318,7 @@ def _generate_markdown_report(
         if r.binary:
             status = "✓ Match" if r.hash_match else "✗ Mismatch"
             lines.append(
-                f"| {idx} | `{r.match.rel_path_a}` | `{r.match.rel_path_b}` "
+                f"| {idx} | `{_md_escape(r.match.rel_path_a)}` | `{_md_escape(r.match.rel_path_b)}` "
                 f"| {r.match.similarity:.1f} | [Binary: {status}] "
                 f"| — | — |"
             )
@@ -310,7 +326,7 @@ def _generate_markdown_report(
             pct = r.ratio * 100
             err = f" ⚠ {r.error}" if r.error else ""
             lines.append(
-                f"| {idx} | `{r.match.rel_path_a}` | `{r.match.rel_path_b}` "
+                f"| {idx} | `{_md_escape(r.match.rel_path_a)}` | `{_md_escape(r.match.rel_path_b)}` "
                 f"| {r.match.similarity:.1f} | {pct:.1f}%{err} "
                 f"| +{r.additions} | −{r.deletions} |"
             )
@@ -319,13 +335,13 @@ def _generate_markdown_report(
     if uncompared_mode == "inline" and (unmatched_a or unmatched_b):
         lines.append("\n## Unmatched Files\n")
         if unmatched_a:
-            lines.append(f"### Only in A (`{dir_a}`)\n")
+            lines.append(f"### Only in A (`{_md_escape(dir_a)}`)\n")
             for f in unmatched_a:
-                lines.append(f"- `{f}`")
+                lines.append(f"- `{_md_escape(f)}`")
         if unmatched_b:
-            lines.append(f"\n### Only in B (`{dir_b}`)\n")
+            lines.append(f"\n### Only in B (`{_md_escape(dir_b)}`)\n")
             for f in unmatched_b:
-                lines.append(f"- `{f}`")
+                lines.append(f"- `{_md_escape(f)}`")
 
     # Deep Compare
     if deep_results:
@@ -337,7 +353,8 @@ def _generate_markdown_report(
                 # 2 decimals of percent reflect the 4-dp Jaccard used for ordering,
                 # so the displayed value and the sort order agree.
                 lines.append(
-                    f"| `{dr.file_a}` | `{b_file}` | {shared} | {jaccard*100:.2f}% |"
+                    f"| `{_md_escape(dr.file_a)}` | `{_md_escape(b_file)}` "
+                    f"| {shared} | {jaccard*100:.2f}% |"
                 )
 
     out = Path(output_path)

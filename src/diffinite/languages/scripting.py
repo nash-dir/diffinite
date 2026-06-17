@@ -77,3 +77,31 @@ register(LangSpec(
         "then", "true", "until", "while",
     }),
 ))
+
+# ── Zsh ───────────────────────────────────────────────────────────
+register(LangSpec(
+    name="Zsh",
+    extensions=(".zsh",),
+    comment=CommentSpec(line_markers=("#",), block_start=None, block_end=None),
+    keywords=frozenset({
+        "if", "then", "else", "elif", "fi",
+        "for", "while", "do", "done", "case", "esac",
+        "function", "return", "exit",
+        "echo", "export", "local", "typeset", "readonly",
+        "true", "false",
+    }),
+))
+
+# ── R ─────────────────────────────────────────────────────────────
+# Both .r and .R are registered (the registry does exact-case lookup).
+register(LangSpec(
+    name="R",
+    extensions=(".r", ".R"),
+    comment=CommentSpec(line_markers=("#",), block_start=None, block_end=None),
+    keywords=frozenset({
+        "if", "else", "for", "while", "repeat", "function", "return",
+        "break", "next", "in",
+        "TRUE", "FALSE", "NULL", "NA", "Inf", "NaN",
+        "library", "require", "source",
+    }),
+))
