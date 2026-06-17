@@ -17,7 +17,7 @@ Diffinite compares two directories of source code and produces professional PDF/
 
 ## VS Code Extension
 
-The recommended way to use Diffinite is through the **VS Code extension**, which bundles an embedded Python runtime — no separate Python installation required.
+The recommended way to use Diffinite **on Windows** is through the **VS Code extension**, which bundles an embedded Python runtime — no separate Python installation required. On macOS/Linux the extension runs against a system Python (`pip install diffinite`, then set `diffinite.pythonPath`) — see [Platform Support](#platform-support).
 
 ### Features
 - **Visual directory picker** — Select two directories and configure options via a GUI panel
@@ -56,6 +56,17 @@ pip install -e ".[dev]"
 **Requirements**: Python ≥ 3.10
 
 **Dependencies**: [RapidFuzz](https://github.com/rapidfuzz/RapidFuzz), [Pygments](https://pygments.org/), [xhtml2pdf](https://github.com/xhtml2pdf/xhtml2pdf), [pypdf](https://github.com/py-pdf/pypdf), [reportlab](https://docs.reportlab.com/), [charset-normalizer](https://github.com/Ousret/charset_normalizer)
+
+---
+
+## Platform Support
+
+| Component | Windows | Linux | macOS |
+|-----------|:-------:|:-----:|:-----:|
+| **CLI** (`pip install diffinite`) | ✅ supported | ✅ tested in CI | ◯ expected to work (pure Python; not in CI) |
+| **VS Code extension** | ✅ bundles an embedded Python runtime; primary tested target | △ via system Python (`pip install diffinite` + `diffinite.pythonPath`); not officially tested | △ same as Linux; not officially tested |
+
+The published VS Code extension is packaged for **Windows** (`win32-x64`) and ships the embedded runtime. On macOS/Linux, use the CLI directly, or point the extension at your own interpreter via the `diffinite.pythonPath` setting. The CLI itself is pure Python and platform-independent.
 
 ---
 
