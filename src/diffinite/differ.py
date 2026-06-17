@@ -40,6 +40,22 @@ logger = logging.getLogger(__name__)
 # 연속 공백 축소용 정규식 (선행 공백 포함, 2칸 이상 → 1칸)
 _RE_MULTI_SPACE = re.compile(r' {2,}')
 
+# 포렌식 라인 경계: 실제 개행(\r\n, \r, \n)만 줄 구분자로 인정한다.
+# str.splitlines()는 폼피드(\x0c)·수직탭(\x0b)·NEL(\x85)·U+2028/2029 등도 분리하여
+# 에디터의 줄 번호와 어긋나고, keepends 비교는 CRLF/LF만 다른 동일 파일을 0%로
+# 떨어뜨린다 — 본 split_lines()는 둘 다 방지한다.
+_LINE_BOUNDARY = re.compile(r"\r\n|\r|\n")
+
+
+def split_lines(text: str) -> list[str]:
+    """텍스트를 줄 단위로 분할한다. ``\\r\\n`` / ``\\r`` / ``\\n`` 만 경계로 인정하며,
+    각 줄에 개행 문자는 포함하지 않는다(따라서 EOL 스타일 차이에 불변).
+    파일 끝 개행으로 생기는 마지막 빈 요소는 ``str.splitlines`` 의미에 맞춰 제거한다."""
+    lines = _LINE_BOUNDARY.split(text)
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
 
 def normalize_whitespace(text: str) -> str:
     """탭을 스페이스로 변환하고, 줄 내 연속 공백을 단일 스페이스로 축소하며,
@@ -345,8 +361,8 @@ def compute_diff(
         seq_a = text_a.split()
         seq_b = text_b.split()
     else:
-        seq_a = text_a.splitlines(keepends=True)
-        seq_b = text_b.splitlines(keepends=True)
+        seq_a = split_lines(text_a)
+        seq_b = split_lines(text_b)
 
     matcher = difflib.SequenceMatcher(None, seq_a, seq_b, autojunk=autojunk)
     ratio = matcher.ratio()
@@ -506,8 +522,8 @@ def generate_html_diff(
         text_a = normalize_whitespace(text_a)
         text_b = normalize_whitespace(text_b)
 
-    lines_a = text_a.splitlines()
-    lines_b = text_b.splitlines()
+    lines_a = split_lines(text_a)
+    lines_b = split_lines(text_b)
 
     # 반응형 라인 번호 열 너비 계산
     # 공식: 7px/digit + 10px padding, 최소 28px
