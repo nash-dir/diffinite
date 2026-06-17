@@ -453,7 +453,6 @@ def _generate_html_report(
     strip_comments: bool,
     deep_results: list[DeepMatchResult] | None,
     output_path: str,
-    ln_col_width: int = 28,
     *,
     metadata: AnalysisMetadata | None = None,
     hash_table_html: str | None = None,
@@ -528,7 +527,6 @@ def _generate_individual_html(
     strip_comments: bool,
     deep_results: list[DeepMatchResult] | None,
     output_path: str,
-    ln_col_width: int = 28,
     *,
     preserve_tree: bool = True,
     metadata: AnalysisMetadata | None = None,
@@ -779,6 +777,18 @@ def run_pipeline(
     if report_pdf is None and report_html is None and report_md is None and report_json is None:
         report_pdf = "report.pdf"
 
+    # --metrics-only emits ONLY the JSON metrics format (Markdown/HTML/PDF are
+    # skipped). Without this, a --metrics-only run with no --report-json default
+    # produced the PDF default which is then gated off → a silent no-op.
+    if metrics_only and not report_json:
+        anchor = report_pdf or report_html or report_md or "report.pdf"
+        report_json = str(Path(anchor).with_suffix(".json"))
+        logger.warning(
+            "--metrics-only generates only the JSON metrics report → %s "
+            "(Markdown/HTML/PDF are not produced in metrics-only mode).",
+            report_json,
+        )
+
     # Determine effective aliases
     dir_a_disp = dir_alias_a if dir_alias_a else Path(dir_a).resolve().name
     dir_b_disp = dir_alias_b if dir_alias_b else Path(dir_b).resolve().name
@@ -913,10 +923,11 @@ def run_pipeline(
 
     total_files = len(results)
 
-    # Compute global unified line-number column width for meta reports
-    ln_col_width = _compute_ln_col_width(all_line_counts)
     if not metrics_only:
-        logger.info("  Responsive max ln width: %dpx", ln_col_width)
+        # Diagnostic only: each HTML diff page sizes its own line-number column
+        # in the worker, so there is no single applied width to thread here.
+        logger.info("  Max line-number column width: %dpx",
+                    _compute_ln_col_width(all_line_counts))
 
     # ── Sort results ──────────────────────────────────────────────
     if sort_by:
@@ -984,7 +995,7 @@ def run_pipeline(
             _generate_individual_html(
                 results, unmatched_a, unmatched_b,
                 dir_a_disp, dir_b_disp, by_word, strip_comments,
-                deep_results, report_html, ln_col_width,
+                deep_results, report_html,
                 preserve_tree=preserve_tree,
                 metadata=metadata,
                 hash_table_html=hash_table_html,
@@ -995,7 +1006,7 @@ def run_pipeline(
             _generate_html_report(
                 results, unmatched_a, unmatched_b,
                 dir_a_disp, dir_b_disp, by_word, strip_comments,
-                deep_results, report_html, ln_col_width,
+                deep_results, report_html,
                 metadata=metadata,
                 hash_table_html=hash_table_html,
                 uncompared_mode=uncompared_mode,
@@ -1036,7 +1047,10 @@ def run_pipeline(
             try:
                 with open(rep_file, "rb") as fh:
                     digest = hashlib.sha256(fh.read()).hexdigest()
-                sig_path = str(Path(rep_file).with_suffix('.sig'))
+                # Append (not with_suffix) so report.pdf → report.pdf.sig and
+                # report.html → report.html.sig; with_suffix collapsed both to
+                # report.sig, overwriting the PDF's signature with the HTML's.
+                sig_path = str(rep_file) + ".sig"
                 with open(sig_path, "w", encoding="utf-8") as f:
                     f.write(f"SHA-256: {digest}\nReport: {Path(rep_file).name}\n")
                 logger.info("  Integrity Hash (SHA-256) → %s", digest)
@@ -1254,14 +1268,23 @@ def _generate_pdf_report(
             )
             if show_bates_number:
                 logger.info("  Stamping Bates numbers …")
-                bates_tmp = os.path.join(tmpdir, "bates_tmp.pdf")
+                # Stage the temp on the SAME volume as output_pdf. tmpdir is on
+                # the system drive, so os.replace(output_pdf, tmpdir/...) is a
+                # cross-volume move that raises WinError 17 on Windows when the
+                # user's -o path is on another drive.
+                bates_tmp = str(Path(output_pdf).with_name(
+                    Path(output_pdf).stem + ".bates_tmp.pdf"
+                ))
                 os.replace(output_pdf, bates_tmp)
-                add_bates_numbers(
-                    bates_tmp, output_pdf,
-                    start=bates_start,
-                    prefix=bates_prefix,
-                    suffix=bates_suffix,
-                )
+                try:
+                    add_bates_numbers(
+                        bates_tmp, output_pdf,
+                        start=bates_start,
+                        prefix=bates_prefix,
+                        suffix=bates_suffix,
+                    )
+                finally:
+                    Path(bates_tmp).unlink(missing_ok=True)
             
             # Write CSV Exhibit Index
             try:

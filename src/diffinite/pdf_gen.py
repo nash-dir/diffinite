@@ -82,9 +82,11 @@ def _resolve_font_from_lang(pdf_lang: str) -> str | None:
             continue
         
         if lang not in merged_map:
-            merged_map[lang] = os_dict
+            merged_map[lang] = dict(os_dict)
         else:
-            merged_map[lang].update(os_dict)
+            # New dict — a shallow builtin_map.copy() shares the nested per-lang
+            # dicts by reference, so .update() would mutate the built-in map.
+            merged_map[lang] = {**merged_map[lang], **os_dict}
 
     if pdf_lang not in merged_map:
         logger.warning(
@@ -747,11 +749,22 @@ def build_diff_page_html(
 # HTML → PDF
 # ---------------------------------------------------------------------------
 def html_to_pdf(html_content: str, output_path: str) -> bool:
-    """Convert an HTML string to a PDF file via xhtml2pdf."""
+    """Convert an HTML string to a PDF file via xhtml2pdf.
+
+    Returns False (never raises) on failure so the caller's per-page skip path
+    runs. xhtml2pdf parses/lays out HTML recursively, so a pathological page can
+    raise RecursionError/MemoryError straight out of CreatePDF; without this
+    guard one bad page would abort the entire report (cover + all rendered
+    diffs + the N:M analysis).
+    """
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    with open(str(out), "w+b") as fh:
-        status = pisa.CreatePDF(html_content, dest=fh)
+    try:
+        with open(str(out), "w+b") as fh:
+            status = pisa.CreatePDF(html_content, dest=fh)
+    except Exception as exc:  # noqa: BLE001 — incl. RecursionError/MemoryError
+        logger.error("PDF conversion failed for %s: %s", output_path, exc)
+        return False
     if status.err:
         logger.error("PDF conversion error for %s", output_path)
         return False
