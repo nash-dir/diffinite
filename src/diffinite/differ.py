@@ -42,34 +42,26 @@ _RE_MULTI_SPACE = re.compile(r' {2,}')
 
 
 def normalize_whitespace(text: str) -> str:
-    """탭을 스페이스로 변환하고 연속 공백을 단일 스페이스로 축소한다.
+    """탭을 스페이스로 변환하고, 줄 내 연속 공백을 단일 스페이스로 축소하며,
+    선행 들여쓰기를 제거한다.
 
-    줄 구조(개행)는 유지하면서 각 줄 내의 공백만 정규화.
-    탭→4-스페이스 변환 후 연속 공백을 1칸으로 줄임으로써,
-    들여쓰기 스타일 차이(tab vs space)가 diff 결과를 왜곡하는 것을 방지한다.
-
-    Note:
-        들여쓰기가 4칸이든 8칸이든 1칸으로 축소되지만, 들여쓰기의 **유무**는 보존된다
-        (선행 공백이 있는 줄과 없는 줄은 구분 가능). 두 수준 이상의
-        중첩 들여쓰기 깊이 차이는 평탄화된다.
+    줄 구조(개행)는 유지하면서 각 줄 내의 공백만 정규화한다.
+    들여쓰기 방식 차이(tab vs space), 깊이 차이, 들여쓰기 유무가 diff 결과를
+    왜곡하지 않도록 선행 공백을 완전히 제거한다.
     """
     lines = text.splitlines(keepends=True)
     normalized = []
     for line in lines:
-        # 탭 → 4-스페이스 (expandtabs 표준 동작)
+        # 탭 → 4-스페이스 후, 본문/개행 분리 → 연속 공백 축소 + 선행 들여쓰기 제거
         line = line.expandtabs(4)
-        # 개행 분리 후 공백 축소, 개행 복원
-        if line.endswith("\r\n"):
-            content = _RE_MULTI_SPACE.sub(' ', line[:-2])
-            normalized.append(content + "\r\n")
-        elif line.endswith("\n"):
-            content = _RE_MULTI_SPACE.sub(' ', line[:-1])
-            normalized.append(content + "\n")
-        elif line.endswith("\r"):
-            content = _RE_MULTI_SPACE.sub(' ', line[:-1])
-            normalized.append(content + "\r")
+        for eol in ("\r\n", "\n", "\r"):
+            if line.endswith(eol):
+                body = line[:-len(eol)]
+                break
         else:
-            normalized.append(_RE_MULTI_SPACE.sub(' ', line))
+            body, eol = line, ""
+        body = _RE_MULTI_SPACE.sub(' ', body).lstrip(' ')
+        normalized.append(body + eol)
     return "".join(normalized)
 
 
