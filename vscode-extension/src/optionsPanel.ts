@@ -7,6 +7,7 @@
 import * as vscode from "vscode";
 import { DiffiniteOptions, defaultOptions } from "./runner";
 import { getDefaultMode, getBatesPresets, BatesPreset, getPdfFont, getPdfLang } from "./config";
+import { escHtml, getNonce } from "./webviewUtils";
 
 export interface TaskHistoryEntry {
   id: string;
@@ -14,24 +15,6 @@ export interface TaskHistoryEntry {
   dirA: string;
   dirB: string;
   options: DiffiniteOptions;
-}
-
-/** Escape a value for safe interpolation into HTML text or a double-quoted attribute. */
-function escHtml(s: unknown): string {
-  return String(s ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-/** Random nonce for the webview Content-Security-Policy (allows our inline script only). */
-function getNonce(): string {
-  let s = "";
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) s += chars.charAt(Math.floor(Math.random() * chars.length));
-  return s;
 }
 
 /**
@@ -69,8 +52,13 @@ export function showOptionsPanel(
 
   panel.webview.onDidReceiveMessage(
     async (msg: { command: string; target?: string; options?: DiffiniteOptions; dirA?: string; dirB?: string; saveHistory?: boolean }) => {
-      if (msg.command === "run" && msg.options && msg.dirA && msg.dirB) {
-        
+      if (
+        msg.command === "run" &&
+        typeof msg.options === "object" && msg.options !== null &&
+        typeof msg.dirA === "string" && msg.dirA &&
+        typeof msg.dirB === "string" && msg.dirB
+      ) {
+
         // Save Persistence
         await context.globalState.update("diffinite.lastRunOptions", msg.options);
         await context.globalState.update("diffinite.lastDirs", { dirA: msg.dirA, dirB: msg.dirB });
@@ -102,7 +90,7 @@ export function showOptionsPanel(
         } finally {
           panel.webview.postMessage({ command: 'runComplete' });
         }
-      } else if (msg.command === "browse" && msg.target) {
+      } else if (msg.command === "browse" && (msg.target === "dirA" || msg.target === "dirB")) {
         // Open native directory selection dialog
         const isDirA = msg.target === "dirA";
         const uri = await vscode.window.showOpenDialog({

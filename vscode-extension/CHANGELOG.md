@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.12.1] — 2026-06-17
+
+### Security
+
+- **Webview hardening**: every webview (options panel, result viewer, tree viewer) now sets a strict Content-Security-Policy with a per-render nonce, closing the script-injection surface. Rendered `html_diff` is backend-escaped and CSP-protected.
+
+### Fixed
+
+- **Cancellation, temp files, argument passing**: in-flight analysis/export processes are reliably terminated on cancel and temporary working files are cleaned up; hardened how analysis options and temp paths are forwarded to the bundled Python backend.
+
+### Changed
+
+- **Supply-chain hardened bundle build**: `build_bundle.ps1` now installs the embedded-Python dependencies from a pinned, hash-verified `requirements-bundle.lock` via `pip install --require-hashes`, with SHA-256 verification of the Python embeddable zip and `get-pip.py`.
+- **Smaller VSIX**: the bundle prune step is fixed (it previously pruned nothing) and now runs last; `pip-licenses` is built in a throwaway directory instead of shipping into the runtime, dropping ~12 MB of `__pycache__`/`.pyc` and build-only packages.
+
+### Docs
+
+- Added a Platform Support matrix to the README; the embedded-Python runtime is scoped to Windows (macOS/Linux use system Python via the CLI).
+
+## [0.12.0] — 2026-03-31
+
+### Added
+
+- **Parallel execution**: multi-process Phase-2 rendering for faster reports on large selections.
+- **Persistent Options Panel**: the options panel remembers the last run's settings and directories.
+
+### Fixed
+
+- **CJK font rendering** in PDF output.
+
 ## [0.11.1] — 2026-03-28
 
 ### Fixed

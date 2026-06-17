@@ -1,14 +1,26 @@
 .vsix
 node_modules/
 src/
+.vscode/**
 .vscode-test/
-*.map
-*.ts
+scripts/
+**/*.map
+**/*.ts
 tsconfig.json
+# Build-only Python residue (backstop — build_bundle.ps1 prunes these too)
+**/__pycache__/
+**/*.pyc
+**/*.pyo
 bin/python/Scripts/
 bin/python/Lib/site-packages/pip/
 bin/python/Lib/site-packages/pip-*/
 bin/python/Lib/site-packages/pip_licenses*/
+bin/python/Lib/site-packages/piplicenses*/
+bin/python/Lib/site-packages/prettytable*/
+bin/python/Lib/site-packages/wcwidth*/
+bin/python/Lib/site-packages/wheel*/
+bin/python/Lib/site-packages/_distutils_hack/
+bin/python/Lib/site-packages/distutils-precedence.pth
 bin/python/Lib/site-packages/setuptools*/
 # Legacy PyInstaller binary (replaced by Embeddable Python)
 bin/win-x64/

@@ -354,7 +354,7 @@ export async function runAnalysis(
       }
     });
 
-    proc.on("close", (code) => {
+    proc.on("close", async (code) => {
       console.log('[Diffinite] Process exited with code:', code);
       if (code !== 0) {
         console.error('[Diffinite] stderr:', stderrData);
@@ -363,7 +363,9 @@ export async function runAnalysis(
         return;
       }
       try {
-        const raw = fs.readFileSync(tmpJson, "utf-8");
+        // Phase-2 JSON embeds full html_diff per file and can be large, so read
+        // it off the UI thread to avoid freezing VS Code on big selections.
+        const raw = await fs.promises.readFile(tmpJson, "utf-8");
         const report: DiffiniteReport = JSON.parse(raw);
         cleanupTmp();
         resolve(report);

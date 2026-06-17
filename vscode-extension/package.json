@@ -9,12 +9,17 @@
     "type": "git",
     "url": "https://github.com/nash-dir/diffinite"
   },
+  "homepage": "https://github.com/nash-dir/diffinite",
+  "bugs": {
+    "url": "https://github.com/nash-dir/diffinite/issues"
+  },
+  "qna": "https://github.com/nash-dir/diffinite/issues",
   "icon": "icon.png",
-  "keywords": ["diff", "code comparison", "forensic", "winnowing", "plagiarism"],
+  "keywords": ["diff", "code comparison", "forensic", "winnowing", "plagiarism", "similarity", "source code", "litigation", "code audit", "side-by-side"],
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Other"],
+  "categories": ["Other", "Visualization"],
   "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
@@ -45,11 +50,6 @@
           "default": "deep",
           "enum": ["simple", "deep"],
           "description": "Default execution mode"
-        },
-        "diffinite.batesPrefix": {
-          "type": "string",
-          "default": "DIFF-",
-          "description": "Prefix for Bates numbering in reports."
         },
         "diffinite.workers": {
           "type": "integer",

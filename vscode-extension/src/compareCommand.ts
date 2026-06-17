@@ -13,8 +13,10 @@ export async function compareDirectories(
 ): Promise<void> {
   // Step 1: Launch options panel immediately. It acts as the home base.
   // Return the pipeline promise so optionsPanel's `await onRun(...)` waits for
-  // the full run before reverting the button / posting runComplete (otherwise
-  // it resolves at the first await, mid-Phase-1).
+  // Phase 1 + opening the Tree Viewer before reverting the button / posting
+  // runComplete (otherwise it would resolve at the first await, mid-Phase-1).
+  // NOTE: this does NOT cover Phase 2 — the Tree Viewer's "Generate Report"
+  // callback runs later and is not awaited here.
   showOptionsPanel(context, (dirA: string, dirB: string, options: DiffiniteOptions) =>
     executePipeline(context, dirA, dirB, options)
   );

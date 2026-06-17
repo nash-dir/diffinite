@@ -10,6 +10,7 @@
 import * as vscode from "vscode";
 import { getPdfFont, getPdfLang } from "./config";
 import { DiffiniteReport, DiffiniteOptions, runExport } from "./runner";
+import { escHtml, getNonce } from "./webviewUtils";
 
 /**
  * Show the analysis results in a Webview panel.
@@ -31,8 +32,8 @@ export function showResults(
   // Handle messages from the Webview (export buttons)
   panel.webview.onDidReceiveMessage(
     async (msg: { command: string; format?: string }) => {
-      if (msg.command === "export" && msg.format) {
-        const format = msg.format as "pdf" | "html" | "md";
+      if (msg.command === "export" && (msg.format === "pdf" || msg.format === "html" || msg.format === "md")) {
+        const format = msg.format;
         const filters: Record<string, string[]> = {
           pdf: { "PDF": ["pdf"] },
           html: { "HTML": ["html"] },
@@ -465,13 +466,3 @@ const JS = `
 })();
 `;
 
-function escHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-
-function getNonce(): string {
-  let s = "";
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) s += chars.charAt(Math.floor(Math.random() * chars.length));
-  return s;
-}

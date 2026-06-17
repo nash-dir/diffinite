@@ -9,17 +9,7 @@ import * as vscode from "vscode";
 import * as path from "path";
 import * as fs from "fs";
 import { DiffiniteReport } from "./runner";
-
-function escHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-
-function getNonce(): string {
-  let s = "";
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) s += chars.charAt(Math.floor(Math.random() * chars.length));
-  return s;
-}
+import { escHtml, getNonce } from "./webviewUtils";
 
 export class TreeViewerPanel {
   public static currentPanel: TreeViewerPanel | undefined;
@@ -67,13 +57,16 @@ export class TreeViewerPanel {
     this._panel.webview.onDidReceiveMessage(
       (message) => {
         switch (message.command) {
-          case "generate":
-            const selectedFiles: string[] = message.files;
+          case "generate": {
+            const selectedFiles: string[] = Array.isArray(message.files)
+              ? message.files.filter((f: unknown): f is string => typeof f === "string")
+              : [];
             if (this._onGenerateCallback) {
                 this._onGenerateCallback(selectedFiles);
             }
             this.dispose(); // Close tree view and proceed
             return;
+          }
           case "cancel":
             this.dispose();
             return;

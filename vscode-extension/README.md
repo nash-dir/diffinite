@@ -106,7 +106,6 @@ N:M cross-matching table (deep mode):
 | `diffinite.workers` | `4` | Number of CPU cores for parallel diff rendering |
 | `diffinite.noMerge` | `false` | Save individual reports per file instead of one merged PDF |
 | `diffinite.preserveTree` | `true` | Preserve directory tree structure in individual output |
-| `diffinite.batesPrefix` | `DIFF-` | Default Bates number prefix |
 | `diffinite.batesPresets` | `[]` | Saved Bates presets (prefix/suffix/start number per case) |
 
 ```json
