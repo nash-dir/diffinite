@@ -9,13 +9,15 @@
     the VS CE deployment bundle will work perfectly in production.
 
     Steps:
-    1. Downloads & Extracts Python Embeddable zip
+    1. Downloads & Extracts Python Embeddable zip (SHA256 verified)
     2. Enables 'import site' in ._pth
-    3. Bootstraps pip
-    4. Installs the local 'diffinite' package to target folder
-    5. Extracts Dependency Licenses
-    6. Aggressive Pruning (removes __pycache__, tests, .c/.cpp files, etc.)
-    7. Smoke Test (runs the bundled python.exe -m diffinite --help)
+    3. Bootstraps pip (SHA256 verified)
+    4. Installs dependencies with --require-hashes (supply-chain hardened)
+       4a. Hash-verified PyPI deps from requirements-bundle.lock
+       4b. Local diffinite package (--no-deps)
+    5. Extracts Dependency Licenses (build-only pip-licenses in a temp dir)
+    6. Smoke Test (runs the bundled python.exe -m diffinite --help)
+    7. Aggressive Pruning (removes __pycache__, tests, .c/.cpp files, etc.) — last
 #>
 param(
     [string]$pythonVersion = "3.12.9"
@@ -88,66 +90,115 @@ if ($actualPipHash -ne $expectedPipHash) {
 if ($LASTEXITCODE -ne 0) { throw "Pip bootstrap failed." }
 
 # -------------------------------------------------------------------------
-# 4. Install diffinite package and dependencies
+# 4. Install diffinite package and dependencies (Supply-Chain Hardened)
 # -------------------------------------------------------------------------
 Write-Host "Installing build dependencies (setuptools, wheel)..."
 & "$binPythonDir\python.exe" -m pip install setuptools wheel --no-warn-script-location
 
-Write-Host "Installing diffinite & dependencies into target folder..."
 $sitePackages = "$binPythonDir\Lib\site-packages"
 New-Item -ItemType Directory -Path $sitePackages -Force | Out-Null
 
-& "$binPythonDir\python.exe" -m pip install --target $sitePackages --no-warn-script-location $workspaceRoot
+# 4a. Install hash-verified dependencies from lock file
+$lockFile = "$PSScriptRoot\requirements-bundle.lock"
+if (-not (Test-Path $lockFile)) {
+    throw "Security Exception: requirements-bundle.lock not found at $lockFile. Run update_lockfile.ps1 first."
+}
+
+Write-Host "Installing hash-verified dependencies from lock file..."
+Write-Host "  Lock file: $lockFile"
+& "$binPythonDir\python.exe" -m pip install `
+    --require-hashes `
+    --no-deps `
+    --target $sitePackages `
+    --no-warn-script-location `
+    -r $lockFile
+if ($LASTEXITCODE -ne 0) {
+    throw "Security Exception: Dependency hash verification failed! A package may have been tampered with."
+}
+
+# 4b. Install diffinite itself (local source, no deps — already hash-verified above)
+Write-Host "Installing diffinite package (local source, --no-deps)..."
+& "$binPythonDir\python.exe" -m pip install `
+    --no-deps `
+    --target $sitePackages `
+    --no-warn-script-location `
+    $workspaceRoot
 if ($LASTEXITCODE -ne 0) { throw "Diffinite installation failed." }
 
 # -------------------------------------------------------------------------
 # 5. Extract Dependency Licenses
 # -------------------------------------------------------------------------
+# pip-licenses is a BUILD-ONLY tool, but it (and prettytable/wcwidth) must be
+# importable by the bundled interpreter to enumerate license metadata. The
+# embedded Python is driven by a `._pth` file, which makes it ignore PYTHONPATH
+# and any --target dir, so it can only import from site-packages. We therefore
+# install it into site-packages and strip it (plus its deps) in the final prune
+# step (#7); .vscodeignore is a second backstop so it never reaches the VSIX.
 Write-Host "Extracting open-source licenses..."
-& "$binPythonDir\python.exe" -m pip install pip-licenses --no-warn-script-location
 $pythonExeTemplate = "$binPythonDir\python.exe"
+& $pythonExeTemplate -m pip install pip-licenses --no-warn-script-location
+if ($LASTEXITCODE -ne 0) { throw "pip-licenses install failed." }
 
-# Get all installed non-system packages
-$installedPackages = (& $pythonExeTemplate -m pip list --format=freeze) | 
-                     Where-Object { $_ -notmatch '^(pip|setuptools|wheel)=' } | 
+# Enumerate runtime packages, excluding pip/setuptools/wheel and the build-only
+# license tooling itself (pip-licenses, prettytable, wcwidth).
+$installedPackages = (& $pythonExeTemplate -m pip list --format=freeze) |
+                     Where-Object { $_ -notmatch '^(pip|setuptools|wheel|pip-licenses|prettytable|wcwidth)=' } |
                      ForEach-Object { ($_ -split '=')[0] }
-$packagesArg = $installedPackages -join " "
 
 & $pythonExeTemplate -m piplicenses --with-license-file --format=markdown --output-file="$extRoot\DEPENDENCY_LICENSES.md" --packages $installedPackages
 if ($LASTEXITCODE -ne 0) { throw "License extraction failed." }
 Write-Host "Licenses saved to DEPENDENCY_LICENSES.md"
 
 # -------------------------------------------------------------------------
-# 6. Aggressive Pruning (Size Optimization)
+# 6. Smoke Test
+# -------------------------------------------------------------------------
+# Run BEFORE pruning: importing diffinite regenerates __pycache__/*.pyc in
+# site-packages, so the prune must be the final step to actually shrink the
+# shipped bundle.
+Write-Host "Running smoke test on bundled python..."
+& "$binPythonDir\python.exe" -m diffinite --help
+if ($LASTEXITCODE -ne 0) { throw "Smoke test failed! The bundled Python architecture is broken." }
+
+# -------------------------------------------------------------------------
+# 7. Aggressive Pruning (Size Optimization) — must be the LAST step
 # -------------------------------------------------------------------------
 Write-Host "Pruning unnecessary files and caches..."
 
-# Prune function
+# Prune function.
+# NOTE: Get-ChildItem -Include is a no-op unless -Path ends in '\*'; the prior
+# version silently pruned nothing and leaked ~12 MB of __pycache__/.pyc into the
+# VSIX. Filter with Where-Object on the piped items instead.
 function Prune-Folder {
     param([string]$path)
-    if (Test-Path $path) {
-        # Delete __pycache__, tests, examples
-        Get-ChildItem -Path $path -Recurse -Directory -Include "__pycache__", "tests", "test", "examples" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
-        # Delete compiled generic caches and unused sources
-        Get-ChildItem -Path $path -Recurse -File -Include "*.pyc", "*.c", "*.cpp", "*.h" -ErrorAction SilentlyContinue | Remove-Item -Force
-        # Delete dist-info/egg-info (licenses are already collected)
-        Get-ChildItem -Path $path -Recurse -Directory -Include "*.dist-info", "*.egg-info" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
-    }
+    if (-not (Test-Path $path)) { return }
+    # Delete __pycache__, tests, examples directories
+    Get-ChildItem -Path $path -Recurse -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -in @("__pycache__", "tests", "test", "examples") } |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    # Delete compiled caches and unused C/C++ sources
+    Get-ChildItem -Path $path -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Extension -in @(".pyc", ".pyo", ".c", ".cpp", ".h") } |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+    # Delete dist-info/egg-info (licenses are already collected in step 5)
+    Get-ChildItem -Path $path -Recurse -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like "*.dist-info" -or $_.Name -like "*.egg-info" } |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Prune-Folder $binPythonDir
 
-# Remove pip, setuptools, and Scripts directory (not needed at runtime)
-Get-ChildItem -Path $sitePackages -Directory -Include "pip*", "setuptools*" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
+# Remove pip, setuptools, wheel, and the build-only license tooling
+# (pip-licenses + prettytable + wcwidth) — none are used at runtime.
+$buildOnlyPatterns = @(
+    "pip*", "setuptools*", "wheel*",
+    "pip_licenses*", "piplicenses*", "prettytable*", "wcwidth*",
+    "_distutils_hack", "distutils-precedence.pth"
+)
+Get-ChildItem -Path $sitePackages -ErrorAction SilentlyContinue |
+    Where-Object { $name = $_.Name; $buildOnlyPatterns | Where-Object { $name -like $_ } } |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 if (Test-Path "$binPythonDir\Scripts") { Remove-Item "$binPythonDir\Scripts" -Recurse -Force }
 if (Test-Path "$binPythonDir\get-pip.py") { Remove-Item "$binPythonDir\get-pip.py" -Force }
-
-# -------------------------------------------------------------------------
-# 7. Smoke Test
-# -------------------------------------------------------------------------
-Write-Host "Running smoke test on bundled python..."
-& "$binPythonDir\python.exe" -m diffinite --help
-if ($LASTEXITCODE -ne 0) { throw "Smoke test failed! The bundled Python architecture is broken." }
 
 Write-Host "=========================================================="
 Write-Host "✓ SUCCESS: Bundle built and verified successfully."
