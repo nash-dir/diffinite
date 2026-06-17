@@ -19,7 +19,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Tuple
 
 from rapidfuzz import fuzz
@@ -40,10 +40,27 @@ import os
 # ──────────────────────────────────────────────────────────────────────
 # 파일 수집 & 무시 패턴 처리
 # ──────────────────────────────────────────────────────────────────────
-def should_ignore(name: str, patterns: list[str]) -> bool:
-    """Check if a file or directory name matches any ignore pattern."""
+def should_ignore(rel_path: str, patterns: list[str]) -> bool:
+    """Check whether a POSIX relative path matches any ignore pattern.
+
+    gitignore-비슷한 의미 (CLI/확장 도움말이 광고하는 동작):
+    - 슬래시가 없는 패턴(``node_modules``, ``*.log``)은 **베이스네임**에 매칭되어
+      모든 깊이에서 적용된다.
+    - 슬래시나 ``**`` 가 포함된 패턴(``build/output``, ``src/gen/*``,
+      ``**/*.gen.cs``)은 루트 기준 **상대경로 전체**에 매칭된다. 이전에는
+      이런 패턴이 단일 컴포넌트에만 비교되어 **절대 매칭되지 않았다**.
+    """
+    name = rel_path.rsplit("/", 1)[-1]
     for pat in patterns:
-        if fnmatch.fnmatch(name, pat):
+        p = pat.strip()
+        if not p:
+            continue
+        if "/" in p or "**" in p:
+            anchored = p.lstrip("/").rstrip("/")
+            if (fnmatch.fnmatch(rel_path, anchored)
+                    or fnmatch.fnmatch(rel_path, anchored + "/*")):
+                return True
+        elif fnmatch.fnmatch(name, p):
             return True
     return False
 
@@ -67,17 +84,32 @@ def collect_files(directory: str, ignore_patterns: list[str] | None = None, unre
             unreadable_list.append(str(err.filename))
             
     for dirpath, dirnames, filenames in os.walk(root, onerror=on_err):
-        # 1. Prune ignored directories (modify in-place for os.walk)
-        dirnames[:] = [d for d in dirnames if not should_ignore(d, ignore_patterns)]
-        
-        # 2. Collect non-ignored files
         current_dir = Path(dirpath)
+        rel_dir = current_dir.relative_to(root).as_posix()
+        rel_dir = "" if rel_dir == "." else rel_dir
+
+        # 1. Prune ignored directories (modify in-place for os.walk).
+        #    Test the relative dir path so path-anchored patterns also prune.
+        kept_dirs = []
+        for d in dirnames:
+            rel_d = f"{rel_dir}/{d}" if rel_dir else d
+            if not should_ignore(rel_d, ignore_patterns):
+                kept_dirs.append(d)
+        dirnames[:] = kept_dirs
+
+        # 2. Collect non-ignored files
         for f in filenames:
-            if not should_ignore(f, ignore_patterns):
-                abs_file = current_dir / f
-                if abs_file.is_file() and not abs_file.is_symlink():
-                    paths.append(abs_file.relative_to(root).as_posix())
-                    
+            rel_f = f"{rel_dir}/{f}" if rel_dir else f
+            if should_ignore(rel_f, ignore_patterns):
+                continue
+            abs_file = current_dir / f
+            if abs_file.is_file() and not abs_file.is_symlink():
+                paths.append(rel_f)
+            elif abs_file.is_symlink() and unreadable_list is not None:
+                # Disclose skipped symlinks instead of dropping them silently —
+                # otherwise the report's 'complete' claim is undermined.
+                unreadable_list.append(f"{rel_f} (skipped: symbolic link)")
+
     paths.sort()
     return paths
 
@@ -140,10 +172,16 @@ def match_files(
                 "Consider using --threshold to reduce false matches.",
                 len(remaining_a), len(remaining_b), r_size,
             )
+        # Score on the basename, not the full relative path: 'Name Sim.' means
+        # filename similarity. Full-path scoring falsely matched files sharing a
+        # long directory prefix and missed same-named files in differently-named
+        # subtrees (old/src/util.py vs new/lib/util.py) — the renamed/moved case.
+        names_a = [PurePosixPath(fa).name for _, fa in remaining_a]
+        names_b = [PurePosixPath(fb).name for _, fb in remaining_b]
         candidates: list[Tuple[float, int, int]] = []
         for ri, (i, fa) in enumerate(remaining_a):
             for rj, (j, fb) in enumerate(remaining_b):
-                score = fuzz.ratio(fa, fb)
+                score = fuzz.ratio(names_a[ri], names_b[rj])
                 if score >= threshold:
                     candidates.append((score, ri, rj))
 
