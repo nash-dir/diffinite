@@ -46,3 +46,22 @@ AGENTS.md
 
 # Benchmark
 tmp/
+
+# CLI report outputs written to the working dir (default run leaves these in cwd)
+/report.csv
+/report.html
+/report.md
+/report.json
+*.sig
+*_uncompared.txt
+
+# Virtual environments (any variant, e.g. .venv-ci)
+.venv*/
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# Local working notes & transient patches (not for the public repo)
+*-readme-audit.md
+*.patch
