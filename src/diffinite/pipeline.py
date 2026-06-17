@@ -1072,13 +1072,17 @@ def run_pipeline(
     write_manifest(
         dir_a, dir_b, hashes_a, hashes_b,
         all_report_paths, manifest_path,
+        root_label_a=dir_a_disp, root_label_b=dir_b_disp,
     )
 
-    # Evidence bundle (--bundle)
+    # Evidence bundle (--bundle) — driven by the exact hashed file set so the
+    # ZIP contents always match the integrity manifest.
     if bundle_path:
         logger.info("Creating evidence bundle …")
         create_evidence_bundle(
             dir_a, dir_b,
+            [h.rel_path for h in hashes_a],
+            [h.rel_path for h in hashes_b],
             manifest_path, all_report_paths,
             bundle_path,
         )

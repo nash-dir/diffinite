@@ -121,6 +121,8 @@ def write_manifest(
     hashes_b: list[FileHashEntry],
     report_paths: list[str],
     output_path: str,
+    root_label_a: Optional[str] = None,
+    root_label_b: Optional[str] = None,
 ) -> str:
     """``manifest.sha256.json``을 생성한다.
 
@@ -130,6 +132,11 @@ def write_manifest(
     Args:
         report_paths: 생성된 리포트 파일 경로 목록 (존재하는 파일만 해시).
         output_path: 매니페스트 JSON 저장 경로.
+        root_label_a / root_label_b: 매니페스트에 기록할 소스 루트 표시명.
+            지정하지 않으면 **베이스네임**을 사용한다 — 해석된 절대경로를 그대로
+            기록하면 OS 사용자명·내부 디렉토리 구조·클라이언트 식별자 등이
+            (보통 의도치 않게) 디스커버리 산출물로 노출되기 때문이다.
+            사람이 읽는 리포트가 쓰는 alias(``dir_alias_*``)와 일치시킨다.
 
     Returns:
         생성된 매니페스트 파일의 절대경로.
@@ -155,8 +162,14 @@ def write_manifest(
         "created_at": datetime.datetime.now(
             tz=datetime.timezone.utc
         ).isoformat(),
+        "integrity_note": (
+            "Integrity is verified by the per-file sha256 values below. "
+            "created_at is informational only: re-running on identical inputs "
+            "yields identical per-file hashes but a different created_at, so a "
+            "differing manifest-as-a-whole hash is expected and is not tampering."
+        ),
         "source_a": {
-            "root": str(Path(dir_a).resolve()),
+            "root": root_label_a if root_label_a is not None else Path(dir_a).name,
             "file_count": len(hashes_a),
             "files": [
                 {
@@ -169,7 +182,7 @@ def write_manifest(
             ],
         },
         "source_b": {
-            "root": str(Path(dir_b).resolve()),
+            "root": root_label_b if root_label_b is not None else Path(dir_b).name,
             "file_count": len(hashes_b),
             "files": [
                 {
@@ -200,6 +213,8 @@ def write_manifest(
 def create_evidence_bundle(
     dir_a: str,
     dir_b: str,
+    files_a: list[str],
+    files_b: list[str],
     manifest_path: str,
     report_paths: list[str],
     output_zip: str,
@@ -212,13 +227,21 @@ def create_evidence_bundle(
         ├── manifest.sha256.json
         ├── report.pdf (등 생성된 리포트)
         ├── source_a/
-        │   └── (dir_a 전체 파일)
+        │   └── (해시된 dir_a 파일)
         └── source_b/
-            └── (dir_b 전체 파일)
+            └── (해시된 dir_b 파일)
 
     zip 생성 후 zip 파일 자체의 SHA-256을 ``{output_zip}.sha256``로 기록.
 
+    무결성 핵심:
+        번들에 담는 소스 파일 집합은 **매니페스트가 해시한 집합과 정확히 동일**하다.
+        ``files_a``/``files_b`` 는 ``collector.collect_files()`` 가 돌려준
+        (심볼릭 링크·ignore 제외가 적용된) 상대경로 목록이어야 한다.
+        독립적인 ``rglob`` walk를 쓰지 않으므로, 매니페스트에 없는(해시되지 않은)
+        파일·심볼릭 링크 대상(트리 밖 내용)·제외 대상이 번들에 섞일 수 없다.
+
     Args:
+        files_a / files_b: 매니페스트가 해시한 것과 동일한 상대경로 목록.
         output_zip: 생성할 zip 파일 경로.
 
     Returns:
@@ -230,28 +253,42 @@ def create_evidence_bundle(
     root_a = Path(dir_a).resolve()
     root_b = Path(dir_b).resolve()
 
+    used_arcnames: set[str] = set()
+
+    def _unique(name: str) -> str:
+        """zip 멤버 이름 충돌 방지: 중복이면 숫자 접미사를 붙인다."""
+        if name not in used_arcnames:
+            used_arcnames.add(name)
+            return name
+        base, dot, ext = name.rpartition(".")
+        stem, suffix = (base, "." + ext) if dot else (name, "")
+        i = 1
+        while f"{stem}_{i}{suffix}" in used_arcnames:
+            i += 1
+        chosen = f"{stem}_{i}{suffix}"
+        used_arcnames.add(chosen)
+        return chosen
+
     with zipfile.ZipFile(str(out), "w", zipfile.ZIP_DEFLATED) as zf:
-        # Source A
-        for item in root_a.rglob("*"):
-            if item.is_file():
-                arcname = f"source_a/{item.relative_to(root_a).as_posix()}"
-                zf.write(str(item), arcname)
+        # Source files — exactly the set recorded in the manifest.
+        for rel in files_a:
+            src = root_a / rel
+            if src.is_file():
+                zf.write(str(src), _unique(f"source_a/{rel}"))
+        for rel in files_b:
+            src = root_b / rel
+            if src.is_file():
+                zf.write(str(src), _unique(f"source_b/{rel}"))
 
-        # Source B
-        for item in root_b.rglob("*"):
-            if item.is_file():
-                arcname = f"source_b/{item.relative_to(root_b).as_posix()}"
-                zf.write(str(item), arcname)
-
-        # Manifest
+        # Manifest (reserved before reports so a report cannot shadow it).
         if Path(manifest_path).exists():
-            zf.write(manifest_path, "manifest.sha256.json")
+            zf.write(manifest_path, _unique("manifest.sha256.json"))
 
         # Reports
         for rp in report_paths:
             p = Path(rp)
             if p.exists() and p.stat().st_size > 0:
-                zf.write(str(p), p.name)
+                zf.write(str(p), _unique(p.name))
 
     # Compute zip hash
     zip_hash = _sha256_file(out)

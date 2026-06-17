@@ -125,7 +125,9 @@ class TestCreateEvidenceBundle:
         manifest.write_text("{}", encoding="utf-8")
 
         zip_path = str(tmp_path / "evidence.zip")
-        create_evidence_bundle(str(d_a), str(d_b), str(manifest), [], zip_path)
+        create_evidence_bundle(
+            str(d_a), str(d_b), ["main.py"], ["main.py"], str(manifest), [], zip_path,
+        )
 
         assert Path(zip_path).exists()
         with zipfile.ZipFile(zip_path) as zf:
@@ -145,7 +147,7 @@ class TestCreateEvidenceBundle:
 
         zip_path = str(tmp_path / "evidence.zip")
         returned_hash = create_evidence_bundle(
-            str(d_a), str(d_b), str(manifest), [], zip_path,
+            str(d_a), str(d_b), ["x.txt"], [], str(manifest), [], zip_path,
         )
 
         # Verify sidecar file
@@ -156,6 +158,78 @@ class TestCreateEvidenceBundle:
         actual_hash = hashlib.sha256(Path(zip_path).read_bytes()).hexdigest()
         assert returned_hash == actual_hash
         assert actual_hash in sidecar.read_text(encoding="utf-8")
+
+
+class TestBundleManifestIntegrity:
+    """Bundle contents must match the hashed/manifest file set, not a fresh walk."""
+
+    def test_bundle_only_contains_listed_files(self, tmp_path):
+        d_a = tmp_path / "src_a"; d_a.mkdir()
+        (d_a / "keep.py").write_text("x = 1", encoding="utf-8")
+        # A file on disk that was NOT in the hashed list (e.g. ignored / symlink)
+        # must NOT leak into the bundle.
+        (d_a / "secret.env").write_text("TOKEN=abc", encoding="utf-8")
+
+        manifest = tmp_path / "manifest.sha256.json"
+        manifest.write_text("{}", encoding="utf-8")
+        zip_path = str(tmp_path / "ev.zip")
+
+        create_evidence_bundle(
+            str(d_a), str(tmp_path / "empty_b"),
+            ["keep.py"], [], str(manifest), [], zip_path,
+        )
+        with zipfile.ZipFile(zip_path) as zf:
+            names = set(zf.namelist())
+        assert "source_a/keep.py" in names
+        assert "source_a/secret.env" not in names
+
+    def test_report_basename_collision_de_duplicated(self, tmp_path):
+        d_a = tmp_path / "a"; d_a.mkdir()
+        manifest = tmp_path / "manifest.sha256.json"
+        manifest.write_text("{}", encoding="utf-8")
+        # Two distinct reports that share a basename.
+        r1 = tmp_path / "one" / "report.pdf"; r1.parent.mkdir()
+        r2 = tmp_path / "two" / "report.pdf"; r2.parent.mkdir()
+        r1.write_text("PDF1", encoding="utf-8")
+        r2.write_text("PDF2", encoding="utf-8")
+        zip_path = str(tmp_path / "ev.zip")
+
+        create_evidence_bundle(
+            str(d_a), str(tmp_path / "b"),
+            [], [], str(manifest), [str(r1), str(r2)], zip_path,
+        )
+        with zipfile.ZipFile(zip_path) as zf:
+            report_members = [n for n in zf.namelist() if n.endswith(".pdf")]
+        # Both reports survive as distinct members (no silent overwrite).
+        assert len(report_members) == 2
+        assert len(set(report_members)) == 2
+
+
+class TestManifestPrivacy:
+    """Manifest must not leak absolute source-root paths by default."""
+
+    def test_root_is_basename_not_absolute_path(self, tmp_path):
+        d_a = tmp_path / "plaintiff_code"; d_a.mkdir()
+        d_b = tmp_path / "defendant_code"; d_b.mkdir()
+        (d_a / "f.py").write_text("a", encoding="utf-8")
+        ha = compute_file_hashes(str(d_a), ["f.py"])
+        manifest_path = str(tmp_path / "m.json")
+        write_manifest(str(d_a), str(d_b), ha, [], [], manifest_path)
+
+        data = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+        assert data["source_a"]["root"] == "plaintiff_code"
+        assert str(tmp_path) not in json.dumps(data["source_a"])
+
+    def test_explicit_label_is_honored(self, tmp_path):
+        d_a = tmp_path / "a"; d_a.mkdir()
+        manifest_path = str(tmp_path / "m.json")
+        write_manifest(
+            str(d_a), str(tmp_path / "b"), [], [], [], manifest_path,
+            root_label_a="EXHIBIT-A", root_label_b="EXHIBIT-B",
+        )
+        data = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+        assert data["source_a"]["root"] == "EXHIBIT-A"
+        assert data["source_b"]["root"] == "EXHIBIT-B"
 
 
 # ---------------------------------------------------------------------------
