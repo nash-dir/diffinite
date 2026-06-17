@@ -150,7 +150,9 @@ def detect_moved_blocks(
     del_index: dict[int, list[int]] = {}
     for a_idx in deleted_lines:
         line = _normalize_line(lines_a[a_idx])
-        if not line:  # 빈 줄은 제외
+        # 빈 줄·보일러플레이트(공백/구두점/중괄호만)는 제외 — 단독 `}` 나 `);` 같은
+        # 줄이 이동 후보를 anchor 하여 허위 이동 블록을 만드는 것을 막는다.
+        if not line or _RE_BOILERPLATE.match(line):
             continue
         h = hash(line)
         del_index.setdefault(h, []).append(a_idx)
@@ -223,33 +225,29 @@ def detect_moved_blocks(
     move_id = 0
 
     for block_a_lines, block_b_lines in raw_blocks:
-        valid_a = [a for a in block_a_lines if a not in used_a]
-        valid_b = [b for b in block_b_lines if b not in used_b]
+        # 쌍 단위로 필터링: A/B 중 한쪽이라도 이미 다른 블록에 사용된 쌍은
+        # 통째로 버린다. (독립 필터링은 valid_a/valid_b 길이가 어긋나
+        # 정렬되지 않은 페어를 낳는다.) 실제 매칭된 줄만 담으므로 gap 줄이
+        # '이동'으로 표시되지 않는다.
+        kept_a: list[int] = []
+        kept_b: list[int] = []
+        for a, b in zip(block_a_lines, block_b_lines):
+            if a in used_a or b in used_b:
+                continue
+            kept_a.append(a)
+            kept_b.append(b)
 
-        # 범위를 연속으로 확장: gap 줄도 포함하여 del_start ~ del_end를 채움
-        if not valid_a or not valid_b:
+        # 최소 블록 크기 체크 (실제 매칭된 줄 수 기준)
+        if len(kept_a) < min_block_size:
             continue
 
-        del_start = min(valid_a)
-        del_end = max(valid_a) + 1
-        ins_start = min(valid_b)
-        ins_end = max(valid_b) + 1
-
-        # 최소 블록 크기 체크 (total matched lines, 보일러플레이트 포함)
-        # 보일러플레이트만으로 된 블록은 max_boilerplate_freq 필터로 이미 제거됨
-        if len(valid_a) < min_block_size:
-            continue
-
-        used_a.update(valid_a)
-        used_b.update(valid_b)
+        used_a.update(kept_a)
+        used_b.update(kept_b)
 
         result.append(MovedBlock(
-            del_start=del_start,
-            del_end=del_end,
-            ins_start=ins_start,
-            ins_end=ins_end,
+            a_lines=tuple(kept_a),
+            b_lines=tuple(kept_b),
             move_id=move_id,
-            confidence=1.0,
         ))
         move_id += 1
 
@@ -543,9 +541,9 @@ def generate_html_diff(
     if detect_moved:
         moved_blocks = detect_moved_blocks(opcodes, lines_a, lines_b)
         for mb in moved_blocks:
-            for ln in range(mb.del_start, mb.del_end):
+            for ln in mb.a_lines:
                 moved_a[ln] = mb.move_id
-            for ln in range(mb.ins_start, mb.ins_end):
+            for ln in mb.b_lines:
                 moved_b[ln] = mb.move_id
 
     rows: list[str] = []
