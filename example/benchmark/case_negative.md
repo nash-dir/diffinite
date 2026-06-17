@@ -7,7 +7,7 @@
 | **Execution Mode** | `deep` |
 | **K-gram (K)** | `5` |
 | **Window (W)** | `4` |
-| **Threshold (T)** | `5.00` |
+| **Threshold (min Jaccard)** | `5.0%` |
 
 - **Dir A:** `Eclipse_Collections`
 - **Dir B:** `OpenJDK`
