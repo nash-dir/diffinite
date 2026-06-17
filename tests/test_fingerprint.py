@@ -104,3 +104,35 @@ class TestExtractFingerprints:
         # Fewer tokens than K — no fingerprints
         fps = extract_fingerprints("x = 1", k=50, w=40)
         assert fps == []
+
+
+class TestUnicodeTokenization:
+    """Non-ASCII identifiers must tokenize as whole tokens, like Latin ones."""
+
+    def test_cjk_identifier_is_single_token(self):
+        assert tokenize("데이터 = 값") == ["데이터", "=", "값"]
+
+    def test_cjk_token_count_matches_latin_structure(self):
+        cjk = tokenize("함수 = 데이터 + 결과")
+        latin = tokenize("func = data + result")
+        assert len(cjk) == len(latin)
+
+    def test_ascii_tokenization_unchanged(self):
+        assert tokenize("def foo(x): return x + 1") == [
+            "def", "foo", "(", "x", ")", ":", "return", "x", "+", "1",
+        ]
+
+    def test_float_is_single_token(self):
+        assert "3.14" in tokenize("pi = 3.14")
+
+
+class TestFingerprintGuards:
+    """Degenerate k/w must raise, never silently fabricate fingerprints."""
+
+    def test_k_below_one_raises(self):
+        with pytest.raises(ValueError):
+            extract_fingerprints("a b c d e f", k=0, w=4)
+
+    def test_w_below_one_raises(self):
+        with pytest.raises(ValueError):
+            extract_fingerprints("a b c d e f", k=5, w=0)

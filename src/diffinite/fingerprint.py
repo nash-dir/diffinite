@@ -68,9 +68,12 @@ def _fnv1a_64(s: str) -> int:
         h = (h * _FNV1A_PRIME) & _FNV1A_MASK
     return h
 
-# 토크나이저 정규식 — 식별자, 숫자, 개별 구두점을 각각 토큰으로 분리.
-# 공백은 버린다.
-TOKEN_RE = re.compile(r"[A-Za-z_]\w*|[0-9]+(?:\.[0-9]+)?|[^\s]")
+# 토크나이저 정규식 — 식별자, 숫자, 개별 구두점을 각각 토큰으로 분리. 공백은 버린다.
+# 식별자는 유니코드 인식(``\w+``) — CJK·키릴 등 비ASCII 식별자를 글자당 토큰으로
+# 쪼개지 않고 하나의 토큰으로 묶는다(비ASCII 소스의 핑거프린트 개수·밀도가
+# ASCII와 비교 가능해진다). 숫자(소수 포함)를 먼저 매칭해 식별자 규칙이 숫자를
+# 삼키지 않게 한다. 결과적으로 순수 ASCII 코드의 토큰화는 종전과 동일하다.
+TOKEN_RE = re.compile(r"[0-9]+(?:\.[0-9]+)?|\w+|[^\s]")
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -116,10 +119,14 @@ def tokenize(source: str, *, normalize: bool = False) -> list[str]:
         Type-2 클론 탐지용 정규화:
         - 식별자 → ``"ID"`` (변수명 변경 무력화)
         - 숫자 리터럴 → ``"LIT"``
-        - 문자열 구분자 → ``"STR"``
+        - 문자열 **구분자**(따옴표) → ``"STR"``
         - 키워드/연산자 → 원문 보존
 
     주의:
+        문자열 **내용**은 정규화하지 않는다 — 따옴표만 ``STR``로 바뀌고 그 사이
+        문자는 일반 식별자/리터럴로 토큰화된다. 따라서 문자열 값만 바뀐 클론은
+        정규화 후에도 서로 다른 핑거프린트를 가질 수 있다(식별자 변경에는 둔감).
+
         입력 ``source``는 이미 주석이 제거된 텍스트여야 한다.
         ``parser.strip_comments()``를 먼저 호출할 것.
     """
@@ -228,17 +235,12 @@ def winnow(
     return fingerprints
 
 
-# Java import/package 문 제거 정규식
-_IMPORT_RE = re.compile(r"^(import|package)\s+.*;\s*$", re.MULTILINE)
-
-
 def extract_fingerprints(
     source: str,
     k: int = DEFAULT_K,
     w: int = DEFAULT_W,
     *,
     normalize: bool = False,
-    filter_imports: bool = False,
 ) -> list[FingerprintEntry]:
     """소스코드에서 핑거프린트를 추출하는 통합 API.
 
@@ -246,14 +248,19 @@ def extract_fingerprints(
 
     Args:
         source: 주석 제거된 소스코드.
-        k: K-gram 크기.
-        w: Winnowing 윈도우 크기.
+        k: K-gram 크기 (>= 1).
+        w: Winnowing 윈도우 크기 (>= 1).
         normalize: True이면 Type-2 클론 탐지용 토큰 정규화 적용.
-        filter_imports: True이면 Java import/package 문 제거.
-                        공유 import로 인한 위양성(FP)을 줄이는 데 유효.
+
+    Raises:
+        ValueError: ``k`` 또는 ``w`` 가 1 미만일 때. (k=0은 모듈러 역원으로 인해
+            모든 파일을 동일 핑거프린트로 만들어 유사도를 조작하므로 조용히
+            통과시키지 않는다.)
     """
-    if filter_imports:
-        source = _IMPORT_RE.sub("", source)
+    if k < 1:
+        raise ValueError(f"k-gram size must be >= 1, got {k}")
+    if w < 1:
+        raise ValueError(f"winnowing window must be >= 1, got {w}")
 
     tokens = tokenize(source, normalize=normalize)
     hashes = rolling_hash(tokens, k)
