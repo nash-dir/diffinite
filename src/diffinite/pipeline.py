@@ -225,7 +225,7 @@ def _build_metadata_banner_md(meta: AnalysisMetadata) -> str:
         f"| **Execution Mode** | `{meta.exec_mode}` |",
         f"| **K-gram (K)** | `{meta.k}` |",
         f"| **Window (W)** | `{meta.w}` |",
-        f"| **Threshold (T)** | `{meta.threshold:.2f}` |",
+        f"| **Threshold (min Jaccard)** | `{meta.threshold:.1f}%` |",
         "",
     ]
     if meta.deep_index_truncated:
@@ -248,7 +248,7 @@ def _build_metadata_banner_html(meta: AnalysisMetadata) -> str:
         "<strong>📋 Analysis Configuration</strong><br>\n"
         f"<strong>Mode:</strong> {html_mod.escape(meta.exec_mode)} &nbsp;|&nbsp; "
         f"<strong>K=</strong>{meta.k}, <strong>W=</strong>{meta.w}, "
-        f"<strong>T=</strong>{meta.threshold:.2f}"
+        f"<strong>min Jaccard=</strong>{meta.threshold:.1f}%"
         + (
             '<br><span style="color:#b00020;font-weight:bold;">'
             "⚠ Incomplete results: Deep Compare index truncated at "
@@ -789,7 +789,9 @@ def run_pipeline(
             exec_mode=exec_mode,
             k=kgram_size,
             w=window_size,
-            threshold=min_jaccard,
+            # Record on the 0-100 scale, matching the CLI (--threshold-deep) so
+            # the same setting reads identically regardless of entry point.
+            threshold=min_jaccard * 100,
         )
 
     # Parse ignore file if provided

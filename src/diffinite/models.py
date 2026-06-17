@@ -191,7 +191,10 @@ class AnalysisMetadata:
     """Winnowing 윈도우 크기. 밀도 보장: >=(W+K-1) 토큰 공유 시 반드시 탐지."""
 
     threshold: float
-    """최소 Jaccard 유사도 임계값. 이 미만의 매칭은 결과에서 제외."""
+    """최소 Jaccard 유사도 임계값을 **0–100 백분율 스케일**로 기록한다
+    (CLI ``--threshold-deep`` 와 동일 스케일). 예: 5.0 = 5%. 이 값은 보고서
+    표시·재현용 기록이며, 실제 필터링은 0–1 내부 값으로 별도 수행된다.
+    두 생성 경로(CLI/라이브러리)가 같은 스케일을 쓰도록 통일됨."""
 
     autojunk: bool = True
     """``difflib.SequenceMatcher``의 autojunk 옵션.
