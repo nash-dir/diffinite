@@ -46,6 +46,21 @@ jobs:
         with:
           node-version: "20"
 
+      # Fail fast if the release tag and the packaged version disagree, so we
+      # never publish a VSIX whose version differs from the tag people see.
+      - name: Verify version matches release tag
+        if: github.event_name == 'release'
+        shell: bash
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          VER="${TAG#v}"
+          PKG=$(node -p "require('./vscode-extension/package.json').version")
+          echo "tag=$TAG  expected=$VER  package.json=$PKG"
+          if [ "$VER" != "$PKG" ]; then
+            echo "::error::package.json version ($PKG) does not match release tag ($VER)"
+            exit 1
+          fi
+
       - name: Install Extension dependencies
         working-directory: vscode-extension
         run: npm install
@@ -99,21 +114,57 @@ jobs:
         with:
           files: vscode-extension/*.vsix
 
+      # No continue-on-error: a failed Marketplace publish (e.g. an expired
+      # VSCE_PAT) MUST turn the job red. The retry loop now records success and
+      # exits non-zero when all attempts fail, instead of silently ending on the
+      # trailing Start-Sleep.
       - name: Publish to VSCode Marketplace
         if: github.event_name == 'release'
         working-directory: vscode-extension
         timeout-minutes: 10
-        continue-on-error: true
         shell: pwsh
         run: |
           $vsix = (Get-ChildItem *.vsix | Select-Object -First 1).Name
-          Write-Output "Publishing $vsix..."
+          Write-Output "Publishing $vsix to VS Code Marketplace..."
+          $published = $false
           for ($i = 1; $i -le 3; $i++) {
             Write-Output "Attempt $i/3..."
             vsce publish --packagePath $vsix -p ${{ secrets.VSCE_PAT }}
-            if ($LASTEXITCODE -eq 0) { break }
-            Write-Output "Attempt $i failed, waiting 30s..."
-            Start-Sleep -Seconds 30
+            if ($LASTEXITCODE -eq 0) { $published = $true; break }
+            Write-Output "Attempt $i failed (exit $LASTEXITCODE)."
+            if ($i -lt 3) { Write-Output "Waiting 30s..."; Start-Sleep -Seconds 30 }
+          }
+          if (-not $published) {
+            Write-Error "vsce publish failed after 3 attempts. Is VSCE_PAT valid and unexpired?"
+            exit 1
+          }
+
+      # Open VSX (for Cursor / VSCodium / Windsurf / Eclipse Theia users).
+      # Opt-in: skipped unless an OVSX_PAT secret is configured, so it never
+      # blocks a release before the Open VSX namespace/token is set up.
+      # Prerequisite (one-time): `ovsx create-namespace nash-dir -p <OVSX_PAT>`.
+      - name: Publish to Open VSX
+        if: github.event_name == 'release' && env.OVSX_PAT != ''
+        working-directory: vscode-extension
+        timeout-minutes: 10
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        shell: pwsh
+        run: |
+          npm install -g ovsx
+          $vsix = (Get-ChildItem *.vsix | Select-Object -First 1).Name
+          Write-Output "Publishing $vsix to Open VSX..."
+          $published = $false
+          for ($i = 1; $i -le 3; $i++) {
+            Write-Output "Attempt $i/3..."
+            ovsx publish $vsix -p $env:OVSX_PAT
+            if ($LASTEXITCODE -eq 0) { $published = $true; break }
+            Write-Output "Attempt $i failed (exit $LASTEXITCODE)."
+            if ($i -lt 3) { Write-Output "Waiting 30s..."; Start-Sleep -Seconds 30 }
+          }
+          if (-not $published) {
+            Write-Error "ovsx publish failed after 3 attempts. Is OVSX_PAT valid and the namespace created?"
+            exit 1
           }
 
   # ─────────────────────────────────────────────
@@ -131,6 +182,19 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Verify version matches release tag
+        if: github.event_name == 'release'
+        shell: bash
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          VER="${TAG#v}"
+          PYP=$(grep -m1 '^version' pyproject.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "tag=$TAG  expected=$VER  pyproject=$PYP"
+          if [ "$VER" != "$PYP" ]; then
+            echo "::error::pyproject.toml version ($PYP) does not match release tag ($VER)"
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v5
