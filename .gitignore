@@ -33,12 +33,20 @@ vscode-extension/out/
 vscode-extension/bin/
 vscode-extension/*.vsix
 
-# Example — track only *.py and benchmark/*.md
+# Example — track only *.py (root helpers) and benchmark/*.md
 # Downloaded data is gitignored (re-download via: python example/download_examples.py)
 example/*/
 !example/benchmark/
 example/benchmark/*
 !example/benchmark/*.md
+# Generated CLI report outputs left in example/ root
+# (timestamped, e.g. left_right_20260622_2035.{csv,html,md,pdf,json};
+#  *.sig and manifest.sha256.json are already covered by global rules above)
+example/*.csv
+example/*.html
+example/*.md
+example/*.pdf
+example/*.json
 
 # AI Agent
 .agent
