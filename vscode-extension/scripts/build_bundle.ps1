@@ -145,7 +145,11 @@ $installedPackages = (& $pythonExeTemplate -m pip list --format=freeze) |
                      Where-Object { $_ -notmatch '^(pip|setuptools|wheel|pip-licenses|prettytable|wcwidth)=' } |
                      ForEach-Object { ($_ -split '=')[0] }
 
-& $pythonExeTemplate -m piplicenses --with-license-file --format=markdown --output-file="$extRoot\DEPENDENCY_LICENSES.md" --packages $installedPackages
+# --no-license-path: keep the license TEXT but drop the absolute LicenseFile
+# path column. Those paths can resolve to the builder's home dir (e.g. a package
+# also present in %APPDATA%\Python), leaking the local username into the public
+# VSIX; they are also meaningless on end-user machines.
+& $pythonExeTemplate -m piplicenses --with-license-file --no-license-path --format=markdown --output-file="$extRoot\DEPENDENCY_LICENSES.md" --packages $installedPackages
 if ($LASTEXITCODE -ne 0) { throw "License extraction failed." }
 Write-Host "Licenses saved to DEPENDENCY_LICENSES.md"
 
