@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.12.2] — 2026-06-22
+
+### Fixed
+
+- **Report labels — filename vs. content similarity**: every report format now shows filename similarity and content match as two clearly-labelled, distinct figures, so a 100% filename match is no longer mistaken for identical file content. The CSV exhibit index gains a `Content Match (%)` column alongside `Name Sim. (%)`; the Markdown summary, HTML evidence index, and per-file diff pages are relabelled consistently; binary pairs report their SHA-256 match status. (The PDF cover and JSON report already separated the two values.)
+
+### Docs
+
+- Corrected and expanded both READMEs: comment-stripping coverage (45+ extensions, derived from the language registry), previously-undocumented CLI flags, a PDF Font / CJK rendering section, and the `diffinite.pdfLang` / `diffinite.pdfFont` settings. Fixed the extension README's FSM state count, broken `master` license links, and the default deep-threshold value.
+
+### Chore
+
+- `.gitignore` now ignores generated CLI report outputs left in the `example/` root.
+
 ## [0.12.1] — 2026-06-17
 
 ### Security
