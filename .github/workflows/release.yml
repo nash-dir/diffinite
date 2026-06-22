@@ -23,6 +23,10 @@ jobs:
   # ─────────────────────────────────────────────
   publish-vsce:
     name: Publish VSIX (${{ matrix.target }})
+    # Job-level so the Open VSX step's `if` can read it — a step's own step-level
+    # env is NOT visible to that same step's `if` condition.
+    env:
+      OVSX_PAT: ${{ secrets.OVSX_PAT }}
     strategy:
       fail-fast: false
       matrix:
@@ -147,8 +151,6 @@ jobs:
         if: github.event_name == 'release' && env.OVSX_PAT != ''
         working-directory: vscode-extension
         timeout-minutes: 10
-        env:
-          OVSX_PAT: ${{ secrets.OVSX_PAT }}
         shell: pwsh
         run: |
           npm install -g ovsx
