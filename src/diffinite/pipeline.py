@@ -312,8 +312,8 @@ def _generate_markdown_report(
 
     # Summary table
     lines.append("## Summary\n")
-    lines.append("| # | File A | File B | Name Sim. | Match | +Added | −Deleted |")
-    lines.append("|---|--------|--------|:---------:|:-----:|:------:|:--------:|")
+    lines.append("| # | File A | File B | Name Sim. | Content Match | +Added | −Deleted |")
+    lines.append("|---|--------|--------|:---------:|:-------------:|:------:|:--------:|")
     for idx, r in enumerate(results, 1):
         if r.binary:
             status = "✓ Match" if r.hash_match else "✗ Mismatch"
@@ -500,7 +500,7 @@ def _generate_html_report(
             diff_sections.append(
                 f'<h2>{idx}. {html_mod.escape(r.match.rel_path_a)} &harr; '
                 f'{html_mod.escape(r.match.rel_path_b)}</h2>\n'
-                f'<p>Match ratio: {_ratio_badge(r.ratio)} &nbsp; '
+                f'<p>Content match: {_ratio_badge(r.ratio)} &nbsp; '
                 f'<span style="color:green">+{r.additions} {unit}(s)</span> &nbsp; '
                 f'<span style="color:red">-{r.deletions} {unit}(s)</span></p>\n'
                 f'{r.html_diff}\n'
@@ -583,7 +583,7 @@ def _generate_individual_html(
             body = (
                 f'<h2>{html_mod.escape(r.match.rel_path_a)} &harr; '
                 f'{html_mod.escape(r.match.rel_path_b)}</h2>\n'
-                f'<p>Match ratio: {_ratio_badge(r.ratio)} &nbsp; '
+                f'<p>Content match: {_ratio_badge(r.ratio)} &nbsp; '
                 f'<span style="color:green">+{r.additions} {unit}(s)</span> &nbsp; '
                 f'<span style="color:red">-{r.deletions} {unit}(s)</span></p>\n'
                 f'{r.html_diff}\n'
@@ -612,7 +612,10 @@ def _generate_individual_html(
             "idx": idx,
             "file_a": r.match.rel_path_a,
             "file_b": r.match.rel_path_b,
-            "ratio": r.ratio,
+            "name_similarity": r.match.similarity,  # fuzzy filename similarity, 0–100
+            "ratio": r.ratio,                       # content match (difflib), 0.0–1.0
+            "binary": r.binary,
+            "hash_match": r.hash_match,
             "additions": r.additions,
             "deletions": r.deletions,
             "link": rel_link,
@@ -643,16 +646,24 @@ def _build_index_html(
     """Generate an index.html with hyperlinks to all individual reports."""
     rows = []
     for e in entries:
-        ratio_pct = f"{e['ratio'] * 100:.1f}%"
+        name_sim = f"{e.get('name_similarity', 0.0):.1f}"
+        # "Content Match" mirrors the cover/CSV: percentage for text pairs,
+        # SHA-256 status for binary pairs (difflib ratio is meaningless there).
         if e["error"]:
-            ratio_pct = f'<span style="color:red">Error</span>'
+            content_match = '<span style="color:red">Error</span>'
+        elif e.get("binary"):
+            hm = e.get("hash_match")
+            content_match = "Binary match" if hm else ("Binary mismatch" if hm is False else "Binary")
+        else:
+            content_match = f"{e['ratio'] * 100:.1f}%"
         rows.append(
             f'<tr>'
             f'<td style="text-align:center">{e["idx"]}</td>'
             f'<td><a href="{html_mod.escape(e["link"])}">'
             f'{html_mod.escape(e["file_a"])}</a></td>'
             f'<td>{html_mod.escape(e["file_b"])}</td>'
-            f'<td style="text-align:center">{ratio_pct}</td>'
+            f'<td style="text-align:center">{name_sim}</td>'
+            f'<td style="text-align:center">{content_match}</td>'
             f'<td style="text-align:center;color:green">+{e["additions"]}</td>'
             f'<td style="text-align:center;color:red">-{e["deletions"]}</td>'
             f'</tr>\n'
@@ -699,7 +710,7 @@ a:hover {{ text-decoration: underline; }}
 <thead>
 <tr>
 <th>#</th><th>File A (→ Click to View)</th><th>File B</th>
-<th>Similarity</th><th>Added</th><th>Deleted</th>
+<th>Name Sim.</th><th>Content Match</th><th>Added</th><th>Deleted</th>
 </tr>
 </thead>
 <tbody>
@@ -1314,8 +1325,13 @@ def _generate_pdf_report(
                 with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
                     writer = csv.writer(f)
                     col_header = "Bates Range" if show_bates_number else "Page Range"
-                    writer.writerow(["Index", "File A", "File B", "Similarity (%)", col_header])
-                    
+                    # "Name Sim." = fuzzy filename similarity; "Content Match" = difflib
+                    # content ratio. Keeping them in separate, explicitly-labelled columns
+                    # prevents reading a 100% filename match as identical file content.
+                    writer.writerow(
+                        ["Index", "File A", "File B", "Name Sim. (%)", "Content Match (%)", col_header]
+                    )
+
                     for row_idx, row in enumerate(exhibit_data, 1):
                         start_page = row['start_page']
                         end_page = row['end_page']
@@ -1328,8 +1344,17 @@ def _generate_pdf_report(
                         else:
                             range_str = str(start_page) if start_page == end_page else f"{start_page} - {end_page}"
                         
+                        # Content match: percentage for text pairs; for binary pairs
+                        # difflib ratio is meaningless, so report SHA-256 match status.
+                        if row.get('binary'):
+                            hm = row.get('hash_match')
+                            content_str = "Binary match" if hm else ("Binary mismatch" if hm is False else "Binary")
+                        else:
+                            content_str = f"{row.get('ratio', 0.0) * 100:.1f}%"
+
                         writer.writerow([
-                            row_idx, row['file_a'], row['file_b'], f"{row['sim']:.1f}%", range_str
+                            row_idx, row['file_a'], row['file_b'],
+                            f"{row['sim']:.1f}%", content_str, range_str
                         ])
                 logger.info("  Exhibit Index CSV generated → %s", csv_path)
             except Exception as e:

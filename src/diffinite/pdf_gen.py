@@ -721,7 +721,7 @@ def build_diff_page_html(
         body = (
             f"<h2>{index}. {html.escape(r.match.rel_path_a)} &harr; "
             f"{html.escape(r.match.rel_path_b)}</h2>\n"
-            f"<p>Match ratio: {_ratio_badge(r.ratio)} &nbsp; "
+            f"<p>Content match: {_ratio_badge(r.ratio)} &nbsp; "
             f"<span style='color:green'>+{r.additions} {unit}(s)</span> &nbsp; "
             f"<span style='color:red'>-{r.deletions} {unit}(s)</span></p>\n"
             f"{r.html_diff}\n"
@@ -821,7 +821,10 @@ def merge_with_bookmarks(
         layout_data.append({
             'file_a': result.match.rel_path_a,
             'file_b': result.match.rel_path_b,
-            'sim': result.match.similarity,
+            'sim': result.match.similarity,   # filename (name) similarity, 0–100
+            'ratio': result.ratio,            # content match (difflib), 0.0–1.0
+            'binary': result.binary,
+            'hash_match': result.hash_match,
             'start_page': page_offset + 1,
             'end_page': page_offset + page_count
         })
