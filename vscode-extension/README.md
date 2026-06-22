@@ -6,6 +6,10 @@ Compare two directories of source code with [Winnowing fingerprints](https://the
 
 > **Design Principle**: Diffinite reports **how similar** and **where similar**. It does not classify the type of copying — that is the expert witness's job.
 
+![sample report](https://raw.githubusercontent.com/nash-dir/diffinite/master/docs/report-sample.png)
+
+![diff page](https://raw.githubusercontent.com/nash-dir/diffinite/master/docs/report-diff-sample.png)
+
 ---
 
 ## Features
@@ -13,7 +17,7 @@ Compare two directories of source code with [Winnowing fingerprints](https://the
 ### Core Analysis
 - **1:1 File Matching** — Pairs files across two directories using fuzzy name matching, then computes line-by-line or word-by-word diffs with syntax highlighting.
 - **N:M Cross-Matching (Deep Mode)** — Winnowing fingerprint-based Jaccard similarity across all file pairs. Detects code reuse even across renamed, split, or merged files.
-- **Comment Stripping** — 5-state FSM parser supporting 30+ file extensions (`.py`, `.js`, `.ts`, `.java`, `.c`, `.cpp`, `.go`, `.rs`, `.rb`, `.sql`, `.html`, `.css`, and more).
+- **Comment Stripping** — 6-state FSM parser supporting 45+ file extensions (`.py`, `.js`, `.ts`, `.java`, `.c`, `.cpp`, `.go`, `.rs`, `.swift`, `.rb`, `.php`, `.sql`, `.html`, `.css`, and more).
 - **Moved Block Detection** — Detects code blocks that were moved (not just added/deleted) and highlights them in purple (original position) and blue (moved destination).
 - **SHA-256 Evidence Integrity** — Embeds cryptographic hashes for all analyzed files directly in the report for forensic chain-of-custody.
 
@@ -49,7 +53,7 @@ Diffinite runs a two-stage pipeline:
 ### Stage 1: 1:1 File Matching (`simple` mode)
 
 1. **Fuzzy name matching** — Pairs files across directories using string similarity (configurable threshold).
-2. **Comment stripping** — Optionally removes comments using a 5-state finite state machine parser.
+2. **Comment stripping** — Optionally removes comments using a 6-state finite state machine parser.
 3. **Side-by-side diff** — Computes line-by-line (or word-by-word) diffs using `difflib.SequenceMatcher`.
 4. **Report generation** — Renders syntax-highlighted HTML diffs via Pygments, converts to PDF with xhtml2pdf.
 
@@ -93,6 +97,7 @@ N:M cross-matching table (deep mode):
 |--------|-------------|
 | **File A** | Source file from directory A |
 | **Matched Files (B)** | All B-files sharing fingerprints above the Jaccard threshold |
+| **Shared Hashes** | Count of Winnowing fingerprints the file pair has in common |
 | **Jaccard** | `|A∩B| / |A∪B|` — fraction of shared Winnowing fingerprints |
 
 ---
@@ -106,7 +111,11 @@ N:M cross-matching table (deep mode):
 | `diffinite.workers` | `4` | Number of CPU cores for parallel diff rendering |
 | `diffinite.noMerge` | `false` | Save individual reports per file instead of one merged PDF |
 | `diffinite.preserveTree` | `true` | Preserve directory tree structure in individual output |
+| `diffinite.pdfLang` | `ko` | Language for CJK font resolution in PDF output (`ko`, `ja`, `zh-cn`, `en`). Auto-resolves the best OS-installed font. |
+| `diffinite.pdfFont` | (empty) | Absolute path to a `.ttf`/`.otf` font to embed in the PDF. Overrides `pdfLang`. Leave empty to use built-in CJK fonts. |
 | `diffinite.batesPresets` | `[]` | Saved Bates presets (prefix/suffix/start number per case) |
+
+> **CJK / Unicode**: Korean, Japanese, and Chinese source code renders correctly in PDF and HTML reports. The `pdfLang` setting (default `ko`) picks an appropriate OS font for PDF output; HTML uses the browser's native font fallback.
 
 ```json
 {
@@ -136,7 +145,7 @@ All options are configurable through the built-in GUI panel:
 | **Threshold** | `60` | Fuzzy file-name matching threshold (0–100) |
 | **K-gram** | `5` | Winnowing K-gram size (Schleimer 2003 §4.2) |
 | **Window** | `4` | Winnowing window size. Detection guarantee: sequences ≥ K+W−1 tokens |
-| **Threshold (Deep)** | `0.05` | Minimum Jaccard similarity to include in results |
+| **Threshold (Deep)** | `5` | Minimum Jaccard similarity (0–100 scale) to include in results |
 | **Bates Preset** | — | Select a saved preset to auto-fill prefix/suffix/start |
 | **Bates Prefix** | (empty) | Prefix for Bates numbering (e.g. `PLAINTIFF-`) |
 | **Bates Suffix** | (empty) | Suffix for Bates numbering (e.g. `-CONFIDENTIAL`) |
@@ -157,17 +166,19 @@ pip install diffinite
 
 ## Comment Stripping Support
 
-The **Strip Comments** option removes comments using a 5-state FSM parser:
+The **Strip Comments** option removes comments using a 6-state FSM parser covering 45+ file extensions:
 
 | Extensions | Comment Styles |
 |------------|---------------|
-| `.py` | `# line`, `"""docstrings"""` |
-| `.js`, `.ts`, `.jsx`, `.tsx` | `// line`, `/* block */`, `` `template literals` `` |
-| `.java`, `.c`, `.cpp`, `.h`, `.cs`, `.go`, `.rs`, `.kt`, `.scala` | `// line`, `/* block */` |
-| `.html`, `.xml`, `.svg` | `<!-- block -->` |
+| `.py`, `.pyw` | `# line` (docstrings preserved) |
+| `.js`, `.jsx`, `.mjs`, `.ts`, `.tsx` | `// line`, `/* block */`, template literals, regex literals |
+| `.java`, `.kt`, `.kts`, `.scala`, `.c`, `.cc`, `.cpp`, `.h`, `.hpp`, `.cs`, `.go`, `.rs`, `.swift` | `// line`, `/* block */` |
+| `.html`, `.htm`, `.xml`, `.svg` | `<!-- block -->` |
 | `.css`, `.scss`, `.less` | `/* block */` |
-| `.sql` | `-- line`, `/* block */` |
-| `.rb`, `.sh`, `.bash`, `.r` | `# line` |
+| `.sql`, `.ddl`, `.dml`, `.pks`, `.pkb`, `.plsql`, `.tsql` | `-- line`, `/* block */` |
+| `.php` | `// line`, `# line`, `/* block */` |
+| `.rb` | `# line`, `=begin … =end` block |
+| `.pl`, `.pm`, `.sh`, `.bash`, `.zsh`, `.r`, `.yaml`, `.yml`, `.toml` | `# line` |
 | `.lua` | `-- line`, `--[[ block ]]` |
 
 ---
@@ -187,6 +198,6 @@ The **Strip Comments** option removes comments using a 5-state FSM parser:
 
 ## License
 
-[Apache License 2.0](https://github.com/nash-dir/diffinite/blob/main/LICENSE)
+[Apache License 2.0](https://github.com/nash-dir/diffinite/blob/master/LICENSE)
 
-See [NOTICE](https://github.com/nash-dir/diffinite/blob/main/NOTICE) for attribution.
+See [NOTICE](https://github.com/nash-dir/diffinite/blob/master/NOTICE) for attribution.

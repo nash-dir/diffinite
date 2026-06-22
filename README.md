@@ -93,7 +93,7 @@ Diffinite runs a two-stage pipeline:
 ### Stage 1: 1:1 File Matching (`simple` mode)
 
 1. **Fuzzy name matching** — Pairs files across `dir_a` and `dir_b` using [RapidFuzz](https://github.com/rapidfuzz/RapidFuzz) string similarity (configurable threshold).
-2. **Comment stripping** — Optionally removes comments using a 6-state finite state machine parser supporting 30+ file extensions.
+2. **Comment stripping** — Optionally removes comments using a 6-state finite state machine parser supporting 45+ file extensions.
 3. **Side-by-side diff** — Computes line-by-line (or word-by-word) diffs using Python's `difflib.SequenceMatcher` with `autojunk=True`, a heuristic that drops high-frequency lines to speed up matching on large files (`SequenceMatcher` itself remains worst-case quadratic).
 4. **Report generation** — Renders syntax-highlighted HTML diffs via Pygments, then converts to PDF with xhtml2pdf.
 
@@ -181,12 +181,25 @@ dir_b    Path to the comparison source directory (B)
 | `--report-json PATH` | Generate machine-readable JSON report (used by VS Code extension) |
 | `--no-merge` | Generate individual PDFs per file instead of one merged PDF |
 | `--preserve-tree` / `--no-preserve-tree` | Preserve directory tree structure in individual output (default: on) |
+| `--sort-by {filename,path,similarity,ratio}` | Sort matched pairs in the report. Default: insertion order (no sort). |
+| `--sort-order {asc,desc}` | Sort direction (default: `asc`). Only effective with `--sort-by`. |
+
+### PDF Font / CJK Rendering
+
+Korean, Japanese, and Chinese text is rendered correctly in PDF output. By default the built-in xhtml2pdf CJK font (`HYGothic-Medium`) is used as a fallback; for a specific typeface, supply one of the options below. HTML output relies on the browser's native font fallback and needs no configuration.
+
+| Option | Description |
+|--------|-------------|
+| `--pdf-lang {ko,ja,zh-cn,…}` | Auto-resolve the best OS-installed font for the given language from the built-in `pdf_fonts.json` map (Windows/macOS/Linux paths). |
+| `--pdf-font PATH` | Absolute path to a `.ttf`/`.otf` font to embed via `@font-face` as the primary typeface. Takes precedence over `--pdf-lang`. |
+
+> Extend or override language→font mappings by creating `~/.diffinite_fonts.json` (same schema as the built-in map). User entries are merged over the built-ins per language.
 
 ### Diff Options
 
 | Option | Default | Description |
 |--------|:-------:|-------------|
-| `--strip-comments` | off | Strip comments before comparison (6-state FSM parser, 30+ extensions) |
+| `--strip-comments` | off | Strip comments before comparison (6-state FSM parser, 45+ extensions) |
 | `--by-word` | off | Compare by word instead of by line |
 | `--squash-blanks` | off | Collapse runs of 3+ blank lines. ⚠️ Changes line numbers — not recommended for forensic line-tracing. |
 | `--threshold N` | `60` | Fuzzy file-name matching threshold (0–100). Lower = more aggressive matching. |
@@ -213,6 +226,19 @@ dir_b    Path to the comparison source directory (B)
 | `--max-file-size N` | `10.0` | Files larger than this (MB) bypass the in-memory text decode and fall back to a SHA-256 hash comparison (reported as match/no-match rather than a line diff). Prevents OOM/CPU lock on large binary/generated files. |
 | `--hash` | off | Embed SHA-256 evidence integrity hashes for all analyzed files in the report. |
 | `--uncompared-files {inline,separate,none}` | `inline` | Control how unmatched files are displayed: inline in the main report, written to a separate `*_uncompared.txt` file, or omitted. |
+| `--bundle PATH` | — | Create an evidence bundle ZIP at `PATH` containing source files, generated reports, and the integrity manifest. |
+| `--dir-alias-a TEXT` / `--dir-alias-b TEXT` | — | Display alias for directory A/B in reports (avoids exposing absolute paths). |
+
+### Filtering & Advanced Options
+
+| Option | Default | Description |
+|--------|:-------:|-------------|
+| `--ignore-file PATH` | — | Path to a `.diffignore` file with glob patterns (e.g. `node_modules`, `*.pyc`) to exclude from analysis. |
+| `--binary-handling {exclude,hash,error}` | `hash` | How to handle non-decodable (binary) files: skip, show SHA-256 match status, or report a decode error. |
+| `--max-diff-html-size N` | `2.0` | Max HTML diff size (MB) before truncation. Prevents xhtml2pdf OOM/`RecursionError` on huge diffs. |
+| `--metrics-only` | off | Phase 1 only: compute similarities and emit JSON, skipping HTML/PDF rendering. |
+| `--filter-json PATH` | — | Phase 2: restrict output to the file-A paths listed in a JSON array (pairs with `--metrics-only`). |
+| `--unreadable-log PATH` | — | Write the list of files that could not be read (permission errors) to `PATH`. |
 
 ### Page Annotation Options
 
@@ -291,20 +317,20 @@ diffinite dir_a/ dir_b/ --threshold 80
 
 ## Comment Stripping Support
 
-The `--strip-comments` flag removes comments using a 6-state finite state machine parser:
+The `--strip-comments` flag removes comments using a 6-state finite state machine parser covering 45+ file extensions:
 
 | Extensions | Comment Styles |
 |------------|---------------|
-| `.py` | `# line comments` |
-| `.js`, `.ts`, `.jsx`, `.tsx` | `// line`, `/* block */` |
-| `.java`, `.c`, `.cpp`, `.h`, `.cs`, `.go`, `.rs`, `.kt`, `.scala` | `// line`, `/* block */` |
-| `.html`, `.xml`, `.svg`, `.htm` | `<!-- block -->` |
+| `.py`, `.pyw` | `# line` (docstrings preserved) |
+| `.js`, `.jsx`, `.mjs`, `.ts`, `.tsx` | `// line`, `/* block */`, template literals, regex literals |
+| `.java`, `.kt`, `.kts`, `.scala`, `.c`, `.cc`, `.cpp`, `.h`, `.hpp`, `.cs`, `.go`, `.rs`, `.swift` | `// line`, `/* block */` |
+| `.html`, `.htm`, `.xml`, `.svg` | `<!-- block -->` |
 | `.css`, `.scss`, `.less` | `/* block */` |
-| `.sql` | `-- line`, `/* block */` |
-| `.rb` | `# line` |
-| `.sh`, `.bash`, `.zsh` | `# line` |
+| `.sql`, `.ddl`, `.dml`, `.pks`, `.pkb`, `.plsql`, `.tsql` | `-- line`, `/* block */` |
+| `.php` | `// line`, `# line`, `/* block */` |
+| `.rb` | `# line`, `=begin … =end` block |
+| `.pl`, `.pm`, `.sh`, `.bash`, `.zsh`, `.r`, `.yaml`, `.yml`, `.toml` | `# line` |
 | `.lua` | `-- line`, `--[[ block ]]` |
-| `.r` | `# line` |
 
 > String and triple-quoted literals (including Python docstrings), template literals, and regex literals are deliberately **preserved**, not stripped — they are recognized only so that comment markers appearing inside them (e.g. `//` inside a string) are not mistaken for comments.
 
@@ -325,7 +351,7 @@ diffinite/
 │   ├── evidence.py         # SHA-256 integrity hashing & manifest generation
 │   ├── models.py           # Data classes (DiffResult, DeepMatchResult, etc.)
 │   ├── pdf_gen.py          # PDF/HTML report generation (xhtml2pdf)
-│   └── languages/          # Per-language comment specs (30+ extensions)
+│   └── languages/          # Per-language comment specs (45+ extensions)
 ├── vscode-extension/
 │   ├── src/                # TypeScript extension source
 │   │   ├── extension.ts    # Extension activation & command registration
