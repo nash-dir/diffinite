@@ -96,22 +96,16 @@ class PairScore:
     tokens_min: int      # min token count across the two docs (stratification key)
 
 
-def _build_doc(submission_dir: Path) -> Doc | None:
-    """Concatenate every source file in *submission_dir* into one document and
-    fingerprint it in both modes. Returns None if nothing readable is found."""
-    texts: list[str] = []
-    for f in sorted(submission_dir.rglob("*")):
-        if not f.is_file():
-            continue
-        text = read_file(str(f))
-        if text is None:
-            continue
-        texts.append(strip_comments(text, f.suffix.lower()))
-    if not texts:
+def _file_doc(path: Path) -> Doc | None:
+    """Fingerprint a single source file in both modes. None if unreadable/empty."""
+    text = read_file(str(path))
+    if text is None:
         return None
-    cleaned = "\n".join(texts)
+    cleaned = strip_comments(text, path.suffix.lower())
     raw = {fp.hash_value for fp in extract_fingerprints(cleaned, normalize=False)}
     norm = {fp.hash_value for fp in extract_fingerprints(cleaned, normalize=True)}
+    if not raw and not norm:
+        return None
     return Doc(
         raw_fp=frozenset(raw),
         norm_fp=frozenset(norm),
@@ -119,36 +113,52 @@ def _build_doc(submission_dir: Path) -> Doc | None:
     )
 
 
+def _submission_files(submission_dir: Path) -> list[Doc]:
+    """All fingerprintable files in a submission, as individual documents.
+
+    Per-FILE, deliberately: the production tool does per-file N:M cross-matching
+    and applies the threshold/floor to per-file token counts, so the validation
+    must measure the same unit (the audit flagged that per-submission
+    concatenation measured a different statistic than the runtime enforces)."""
+    docs: list[Doc] = []
+    for f in sorted(submission_dir.rglob("*")):
+        if f.is_file():
+            doc = _file_doc(f)
+            if doc is not None:
+                docs.append(doc)
+    return docs
+
+
 def score_case(case_dir: Path) -> list[PairScore]:
-    """Score one IR-Plag case: original vs every plagiarized/non-plagiarized
-    submission, in both modes."""
+    """Score one IR-Plag case at the FILE-PAIR level (matching runtime): every
+    original file vs every candidate file, in both modes."""
     case = case_dir.name
-    original = _build_doc(case_dir / "original")
-    if original is None:
+    original_files = _submission_files(case_dir / "original")
+    if not original_files:
         return []
 
     scores: list[PairScore] = []
 
-    def _emit(sub: Doc | None, label: str, level: int | None) -> None:
-        if sub is None:
-            return
-        tmin = min(original.tokens, sub.tokens)
-        for mode, a, b in (
-            ("raw", original.raw_fp, sub.raw_fp),
-            ("normalize", original.norm_fp, sub.norm_fp),
-        ):
-            scores.append(PairScore(
-                case=case, mode=mode, label=label, level=level,
-                jaccard=jaccard_similarity(set(a), set(b)), tokens_min=tmin,
-            ))
+    def _emit(sub_dir: Path, label: str, level: int | None) -> None:
+        for cand in _submission_files(sub_dir):
+            for orig in original_files:
+                tmin = min(orig.tokens, cand.tokens)
+                for mode, a, b in (
+                    ("raw", orig.raw_fp, cand.raw_fp),
+                    ("normalize", orig.norm_fp, cand.norm_fp),
+                ):
+                    scores.append(PairScore(
+                        case=case, mode=mode, label=label, level=level,
+                        jaccard=jaccard_similarity(set(a), set(b)), tokens_min=tmin,
+                    ))
 
-    # Negatives: independent solutions to the same assignment.
+    # Negatives: independent solutions to the same assignment (file pairs).
     neg_root = case_dir / "non-plagiarized"
     if neg_root.is_dir():
         for sub_dir in sorted(p for p in neg_root.iterdir() if p.is_dir()):
-            _emit(_build_doc(sub_dir), "neg", None)
+            _emit(sub_dir, "neg", None)
 
-    # Positives: obfuscated copies, grouped by level L1..L6.
+    # Positives: obfuscated copies, grouped by level L1..L6 (file pairs).
     plag_root = case_dir / "plagiarized"
     if plag_root.is_dir():
         for level_dir in sorted(p for p in plag_root.iterdir() if p.is_dir()):
@@ -157,7 +167,7 @@ def score_case(case_dir: Path) -> list[PairScore]:
             except ValueError:
                 continue
             for sub_dir in sorted(p for p in level_dir.iterdir() if p.is_dir()):
-                _emit(_build_doc(sub_dir), "pos", level)
+                _emit(sub_dir, "pos", level)
 
     return scores
 
@@ -194,6 +204,34 @@ def recall(scores: list[PairScore], mode: str, threshold: float,
 def _rate(flagged_total: tuple[int, int]) -> float:
     f, t = flagged_total
     return (f / t * 100) if t else 0.0
+
+
+def wilson_ci(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """Wilson score 95% CI for a proportion, returned as percentages (lo, hi).
+
+    A point estimate like "1 false positive in 105" is not a *known* error rate:
+    its 95% interval is wide. Forensic reports must state the interval, not the
+    point — a single observation's CI can span an order of magnitude.
+    """
+    if n == 0:
+        return (0.0, 0.0)
+    p = k / n
+    denom = 1.0 + z * z / n
+    center = (p + z * z / (2 * n)) / denom
+    half = z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5) / denom
+    return (max(0.0, center - half) * 100, min(1.0, center + half) * 100)
+
+
+def per_case_fp(scores: list[PairScore], mode: str, threshold: float) -> list[float]:
+    """False-positive rate within each case, to expose clustering (the pairs are
+    not i.i.d.: they cluster by assignment, so the pooled CI is optimistic)."""
+    cases = sorted({s.case for s in scores})
+    out: list[float] = []
+    for c in cases:
+        negs = [s for s in scores if s.case == c and s.mode == mode and s.label == "neg"]
+        if negs:
+            out.append(sum(1 for s in negs if s.jaccard * 100 >= threshold) / len(negs) * 100)
+    return out
 
 
 def sweep_rows(scores: list[PairScore]) -> list[dict]:
@@ -300,12 +338,17 @@ def write_md_summary(scores: list[PairScore], path: Path) -> None:
     lines.append("## Headline — false-positive rate at the shipped default "
                  f"(`--threshold-deep {DEFAULT_THRESHOLD:.0f}`)\n")
     for mode in ("raw", "normalize"):
-        fp = _rate(fp_rate(scores, mode, DEFAULT_THRESHOLD))
+        fk, fn = fp_rate(scores, mode, DEFAULT_THRESHOLD)
+        lo, hi = wilson_ci(fk, fn)
         rc = _rate(recall(scores, mode, DEFAULT_THRESHOLD))
         lines.append(
-            f"- **{mode}**: false-positive rate **{fp:.1f}%**, "
+            f"- **{mode}**: false-positive rate **{_rate((fk, fn)):.1f}%** "
+            f"(95% CI [{lo:.1f}%, {hi:.1f}%], {fk}/{fn}), "
             f"recall (all levels) {rc:.1f}% at threshold {DEFAULT_THRESHOLD:.0f}.")
     lines.append("")
+    lines.append("> Measurement unit: **per file pair** (every original file vs every "
+                 "candidate file), matching the runtime's per-file N:M decision and "
+                 "the per-file token floor.\n")
 
     lines.append("### False positives stratified by submission size (normalize)\n")
     lines.append("| Size stratum | FP rate @5 | FP rate @20 | FP rate @50 | Note |")
@@ -381,6 +424,59 @@ def write_md_summary(scores: list[PairScore], path: Path) -> None:
                  "decision. The threshold and the 'inconclusive' floor are "
                  "forensic-defensibility calls for the maintainer to ratify.\n")
 
+    # ── Defensible characterization of the ratified FP ≤ 1% operating point ──
+    _, rec = calibrate(scores, fp_target=1.0)
+    lines.append("## Operating-point characterization (ratified: FP ≤ 1%)\n")
+    if rec is None:
+        lines.append("> No FP ≤ 1% point with ≥50% coverage exists on this corpus.\n")
+    else:
+        t = rec.threshold
+        fk, fn = fp_rate(scores, "normalize", t)
+        lo, hi = wilson_ci(fk, fn)
+        lines.append(
+            f"Threshold **{t}**, token floor **{rec.floor}**. False-positive rate "
+            f"**{_rate((fk, fn)):.2g}%** — but this is **{fk} of {fn}** negatives; "
+            f"the Wilson 95% CI is **[{lo:.2g}%, {hi:.2g}%]**. The point estimate is "
+            "not a *known* 1% rate: a single negative crossing the threshold drives "
+            "the headline, and the interval's upper bound is what an opposing expert "
+            "will cite.\n")
+
+        lines.append("**Recall at this operating point is NOT uniform** — it collapses "
+                     "on the obfuscation `--normalize` exists to catch:\n")
+        lines.append("| Level | Recall @ threshold {} |".format(t))
+        lines.append("|---|---|")
+        for lv in levels:
+            rk, rn = recall(scores, "normalize", t, level=lv)
+            lines.append(f"| L{lv} | {_rate((rk, rn)):.0f}% ({rk}/{rn}) |")
+        lines.append("\n> At this threshold the tool reliably flags only near-verbatim "
+                     "copies; heavily restructured copies fall below threshold and "
+                     "require manual review. Do not cite the pooled recall as uniform "
+                     "sensitivity.\n")
+
+        # Clustering: the pairs are not i.i.d.
+        pcf = per_case_fp(scores, "normalize", t)
+        n_cases = len({s.case for s in scores})
+        lines.append(
+            f"**Clustering:** the {fn} negative pairs derive from only {n_cases} "
+            f"assignments (one reference solution each), so they are not "
+            f"independent; the effective sample size is closer to {n_cases}. Per-case "
+            f"false-positive rate ranges {min(pcf):.0f}%–{max(pcf):.0f}%. The pooled "
+            "CI above therefore *understates* true uncertainty.\n")
+
+        # Size scope.
+        max_tok = max((s.tokens_min for s in scores if s.label == "neg"), default=0)
+        lines.append(
+            f"**Size scope:** every tested file pair has ≤ {max_tok} tokens (no large "
+            "files in this corpus). The operating point is unvalidated on large files; "
+            "the calibration characterizes small-file behavior only.\n")
+
+        # Floor binding.
+        below = sum(1 for s in scores
+                    if s.label == "neg" and s.mode == "normalize" and s.tokens_min < rec.floor)
+        lines.append(
+            f"**Floor binding:** {below} of {fn} negatives fall below the {rec.floor}-token "
+            f"floor. {'The floor actively withholds verdicts on those.' if below else 'The floor excludes no negative here, so the realized FP rate is a pure-threshold result; the floor still suppresses sub-floor *runtime* matches, which this corpus does not exercise.'}\n")
+
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -394,14 +490,24 @@ def main() -> None:
 
     # Machine-readable calibration for WS-B (calibration.py reads this).
     import json
-    calib = {}
+    calib = {"unit": "file-pair"}
     for fp_target in (5.0, 1.0):
         _, rec = calibrate(scores, fp_target=fp_target)
-        calib[f"fp_le_{int(fp_target)}"] = (
-            None if rec is None else
-            {"floor_tokens": rec.floor, "threshold": rec.threshold,
-             "fp_rate": rec.fp_rate, "recall": rec.recall, "coverage": rec.coverage}
-        )
+        if rec is None:
+            calib[f"fp_le_{int(fp_target)}"] = None
+            continue
+        fk, fn = fp_rate(scores, "normalize", rec.threshold)
+        lo, hi = wilson_ci(fk, fn)
+        per_level = {
+            f"L{lv}": round(_rate(recall(scores, "normalize", rec.threshold, level=lv)), 1)
+            for lv in sorted({s.level for s in scores if s.label == "pos" and s.level})
+        }
+        calib[f"fp_le_{int(fp_target)}"] = {
+            "floor_tokens": rec.floor, "threshold": rec.threshold,
+            "fp_rate": rec.fp_rate, "fp_ci95": [round(lo, 2), round(hi, 2)],
+            "fp_observed": [fk, fn], "recall": rec.recall, "recall_by_level": per_level,
+            "coverage": rec.coverage,
+        }
     (OUTPUT_DIR / "calibration.json").write_text(
         json.dumps(calib, indent=2), encoding="utf-8")
 

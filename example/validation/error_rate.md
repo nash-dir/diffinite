@@ -4,8 +4,10 @@ Corpus: Karnalim IR-Plag, 7 cases. Negatives (independent same-domain submission
 
 ## Headline — false-positive rate at the shipped default (`--threshold-deep 5`)
 
-- **raw**: false-positive rate **100.0%**, recall (all levels) 100.0% at threshold 5.
-- **normalize**: false-positive rate **100.0%**, recall (all levels) 100.0% at threshold 5.
+- **raw**: false-positive rate **100.0%** (95% CI [96.5%, 100.0%], 105/105), recall (all levels) 100.0% at threshold 5.
+- **normalize**: false-positive rate **100.0%** (95% CI [96.5%, 100.0%], 105/105), recall (all levels) 100.0% at threshold 5.
+
+> Measurement unit: **per file pair** (every original file vs every candidate file), matching the runtime's per-file N:M decision and the per-file token floor.
 
 ### False positives stratified by submission size (normalize)
 
@@ -154,3 +156,26 @@ The 'both' policy raises the threshold **and** withholds a verdict below a token
 > Recommended (highest recall with ≥50% coverage): **floor=45 tokens, threshold=93** → FP 0.9%, recall 21.7%.
 
 > These are candidate operating points for WS-B, not a decision. The threshold and the 'inconclusive' floor are forensic-defensibility calls for the maintainer to ratify.
+
+## Operating-point characterization (ratified: FP ≤ 1%)
+
+Threshold **93**, token floor **45**. False-positive rate **0.95%** — but this is **1 of 105** negatives; the Wilson 95% CI is **[0.17%, 5.2%]**. The point estimate is not a *known* 1% rate: a single negative crossing the threshold drives the headline, and the interval's upper bound is what an opposing expert will cite.
+
+**Recall at this operating point is NOT uniform** — it collapses on the obfuscation `--normalize` exists to catch:
+
+| Level | Recall @ threshold 93 |
+|---|---|
+| L1 | 65% (39/60) |
+| L2 | 46% (26/56) |
+| L3 | 21% (12/57) |
+| L4 | 0% (0/60) |
+| L5 | 0% (0/59) |
+| L6 | 0% (0/63) |
+
+> At this threshold the tool reliably flags only near-verbatim copies; heavily restructured copies fall below threshold and require manual review. Do not cite the pooled recall as uniform sensitivity.
+
+**Clustering:** the 105 negative pairs derive from only 7 assignments (one reference solution each), so they are not independent; the effective sample size is closer to 7. Per-case false-positive rate ranges 0%–7%. The pooled CI above therefore *understates* true uncertainty.
+
+**Size scope:** every tested file pair has ≤ 212 tokens (no large files in this corpus). The operating point is unvalidated on large files; the calibration characterizes small-file behavior only.
+
+**Floor binding:** 0 of 105 negatives fall below the 45-token floor. The floor excludes no negative here, so the realized FP rate is a pure-threshold result; the floor still suppresses sub-floor *runtime* matches, which this corpus does not exercise.
