@@ -853,7 +853,9 @@ def run_pipeline(
     dir_a_disp = dir_alias_a if dir_alias_a else Path(dir_a).resolve().name
     dir_b_disp = dir_alias_b if dir_alias_b else Path(dir_b).resolve().name
 
-    # Build default metadata if caller didn't provide one
+    # Build default metadata if caller didn't provide one. Must reflect the
+    # actual channel (normalize/lang_aware) or a library run silently omits the
+    # false-positive disclosure while still emitting inconclusive flags.
     if metadata is None:
         metadata = AnalysisMetadata(
             exec_mode=exec_mode,
@@ -862,6 +864,8 @@ def run_pipeline(
             # Record on the 0-100 scale, matching the CLI (--threshold-deep) so
             # the same setting reads identically regardless of entry point.
             threshold=min_jaccard * 100,
+            normalize=normalize,
+            lang_aware=lang_aware,
         )
 
     # Parse ignore file if provided

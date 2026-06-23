@@ -199,15 +199,23 @@ class AnalysisMetadata:
     표시·재현용 기록이며, 실제 필터링은 0–1 내부 값으로 별도 수행된다.
     두 생성 경로(CLI/라이브러리)가 같은 스케일을 쓰도록 통일됨."""
 
-    threshold_provenance: str = "default"
-    """``threshold`` 값의 출처: ``"user"`` (명시 지정), ``"default"`` (raw 기본 5%),
-    ``"normalize-default"`` (normalize 채널 보정 기본값, calibration.py). 보고서가
-    임계값이 어디서 왔는지 명시해 감정 재현성·방어력을 높인다."""
-
     autojunk: bool = True
     """``difflib.SequenceMatcher``의 autojunk 옵션.
     False(``--no-autojunk``)로 설정하면 모든 토큰을 동등 취급하여
     포렌식 정밀 분석에 적합하지만 대형 파일에서 성능이 저하된다."""
+
+    deep_index_truncated: bool = False
+    """Deep 모드의 역 인덱스가 ``--max-index-entries`` 상한에서 잘렸는지 여부.
+    True이면 일부 크로스매치가 누락되어 유사도가 **과소보고**될 수 있으므로,
+    보고서에 경고를 표기해 '완전한 결과'로 오인되지 않게 한다."""
+
+    # NOTE: fields below are appended AFTER the historical fields above so that
+    # positional construction `AnalysisMetadata("deep", 5, 4, 5.0, autojunk, ...)`
+    # keeps its original meaning. Do not insert new fields mid-struct.
+    threshold_provenance: str = "default"
+    """``threshold`` 값의 출처: ``"user"`` (명시 지정), ``"default"`` (raw 기본 5%),
+    ``"normalize-default"`` (normalize 채널 보정 기본값, calibration.py). 보고서가
+    임계값이 어디서 왔는지 명시해 감정 재현성·방어력을 높인다."""
 
     normalize: bool = False
     """``--normalize`` (Type-2 정규화) 사용 여부. True이면 식별자가 평탄화되어
@@ -218,11 +226,6 @@ class AnalysisMetadata:
     """언어 인식 정규화(``--lang-aware``) 사용 여부. True이면 deep 모드 핑거프린트가
     언어별 키워드 인식(Pygments lexer / 레지스트리)으로 생성되어, 기본(언어 무관)
     정규화와 **핑거프린트가 호환되지 않는다** — 보고서에 채널을 명시해 둔다."""
-
-    deep_index_truncated: bool = False
-    """Deep 모드의 역 인덱스가 ``--max-index-entries`` 상한에서 잘렸는지 여부.
-    True이면 일부 크로스매치가 누락되어 유사도가 **과소보고**될 수 있으므로,
-    보고서에 경고를 표기해 '완전한 결과'로 오인되지 않게 한다."""
 
 
 # ──────────────────────────────────────────────────────────────────────
