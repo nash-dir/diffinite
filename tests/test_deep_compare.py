@@ -139,6 +139,20 @@ class TestInconclusiveBand:
         res = self._run(tmp_path, "def f(x):\n    return x + 1\n", False)
         assert res and res[0].matched_files_b[0][3] is False
 
+    def test_inconclusive_boundary_is_pinned_at_the_floor(self, tmp_path):
+        # Pin the exact boundary: floor-1 tokens -> inconclusive, floor tokens ->
+        # conclusive. (Prior tests used 10 vs 300, far from the floor, so a `<`/`<=`
+        # flip or a floor change would have passed silently.)
+        from diffinite.fingerprint import tokenize
+        from diffinite.calibration import INCONCLUSIVE_TOKEN_FLOOR as F
+        below = " ".join(f"v{i}" for i in range(F - 1))   # F-1 raw tokens
+        at = " ".join(f"v{i}" for i in range(F))          # F raw tokens
+        assert len(tokenize(below)) == F - 1 and len(tokenize(at)) == F
+        rb = self._run(tmp_path / "b1", below, True)
+        ra = self._run(tmp_path / "a1", at, True)
+        assert rb[0].matched_files_b[0][3] is True    # F-1 < floor -> inconclusive
+        assert ra[0].matched_files_b[0][3] is False   # F == floor -> conclusive
+
     def test_floor_decision_is_channel_independent(self, tmp_path):
         # The floor is a file-size gate in raw-token units, so --lang-aware (whose
         # Pygments tokenization yields a different count) must reach the SAME

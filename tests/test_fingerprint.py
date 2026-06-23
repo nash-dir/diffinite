@@ -177,22 +177,30 @@ class TestLangAwareNormalization:
         toks = tokenize(self.RUST, normalize=True, ext=".zzz", lang_aware=True)
         assert isinstance(toks, list) and toks
 
-    def test_lang_aware_reduces_false_similarity_of_independent_code(self):
-        # Two independent Rust fns, same forced skeleton, different logic. Under
-        # default normalize their decls flatten together; lang-aware keeps the
-        # keyword scaffold identical but still must not score HIGHER than default.
-        a = self.RUST
-        b = "pub fn mul(x: i32, y: i32) -> i32 {\n    let r = x * y;\n    r\n}\n"
+    def test_lang_aware_channel_changes_fingerprints(self):
+        # The lang-aware channel must actually differ from the default normalize
+        # channel on keyword-heavy code: preserving Rust keywords (fn/pub/i32)
+        # instead of flattening them to ID changes the emitted fingerprints. (A
+        # mere range check would be tautological; this proves the channel bites.)
+        default = {f.hash_value for f in extract_fingerprints(self.RUST, normalize=True)}
+        la = {f.hash_value for f in extract_fingerprints(
+            self.RUST, normalize=True, ext=".rs", lang_aware=True)}
+        assert default != la
 
-        def jac(norm, la):
-            fa = {f.hash_value for f in extract_fingerprints(a, normalize=norm, ext='.rs', lang_aware=la)}
-            fb = {f.hash_value for f in extract_fingerprints(b, normalize=norm, ext='.rs', lang_aware=la)}
-            inter, union = len(fa & fb), len(fa | fb)
-            return inter / union if union else 0.0
+    def test_lang_aware_classifies_literals_and_drops_comments(self):
+        # Exercise the Tier-2 LIT/STR/Comment branches (previously uncovered).
+        src = 'fn f() {\n    let s = "hi";\n    let n = 42;\n}  // tail comment\n'
+        toks = tokenize(src, normalize=True, ext=".rs", lang_aware=True)
+        assert "LIT" in toks            # 42 -> LIT
+        assert "STR" in toks            # "hi" -> STR
+        assert "ID" in toks             # f, s, n -> ID
+        assert "tail" not in toks       # comment dropped
+        assert "fn" in toks and "let" in toks  # keywords preserved
 
-        # Sanity: both runs are deterministic and in range.
-        assert 0.0 <= jac(True, True) <= 1.0
-        assert 0.0 <= jac(True, False) <= 1.0
+    def test_lang_aware_ext_none_falls_back_to_tier1(self):
+        # ext=None -> no lexer -> Tier-1 (registry/all_keywords), still normalized.
+        toks = tokenize("fn foo() { return 0 }", normalize=True, ext=None, lang_aware=True)
+        assert isinstance(toks, list) and "ID" in toks  # foo -> ID via Tier-1
 
 
 class TestLangAwareRobustness:
