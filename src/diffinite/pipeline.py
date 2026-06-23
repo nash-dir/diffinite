@@ -401,6 +401,7 @@ def _generate_json_report(
             "k": metadata.k,
             "w": metadata.w,
             "threshold": metadata.threshold,
+            "threshold_provenance": metadata.threshold_provenance,
             "autojunk": metadata.autojunk,
             "lang_aware": metadata.lang_aware,
             "deep_index_truncated": metadata.deep_index_truncated,

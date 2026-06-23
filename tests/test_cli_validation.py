@@ -38,3 +38,24 @@ def test_valid_boundaries_accepted(tmp_path):
         "--k-gram=1", "--window=1", "--workers=1",
         "--threshold=0", "--threshold-deep=100", "--bates-start=1",
     ])
+
+
+class TestThresholdProvenance:
+    """The deep threshold default must differ by channel: raw keeps 5%, normalize
+    substitutes the ratified calibration default (false-positive <= 1%)."""
+
+    def test_raw_default(self):
+        from diffinite.cli import _resolve_threshold_deep
+        assert _resolve_threshold_deep(None, normalize=False) == (5.0, "default")
+
+    def test_normalize_default_substituted(self):
+        from diffinite.cli import _resolve_threshold_deep
+        from diffinite.calibration import NORMALIZE_DEFAULT_THRESHOLD
+        val, prov = _resolve_threshold_deep(None, normalize=True)
+        assert val == NORMALIZE_DEFAULT_THRESHOLD
+        assert prov == "normalize-default"
+
+    def test_explicit_value_wins_in_both_channels(self):
+        from diffinite.cli import _resolve_threshold_deep
+        assert _resolve_threshold_deep(12.0, normalize=False) == (12.0, "user")
+        assert _resolve_threshold_deep(12.0, normalize=True) == (12.0, "user")

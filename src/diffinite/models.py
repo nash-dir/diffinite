@@ -196,6 +196,11 @@ class AnalysisMetadata:
     표시·재현용 기록이며, 실제 필터링은 0–1 내부 값으로 별도 수행된다.
     두 생성 경로(CLI/라이브러리)가 같은 스케일을 쓰도록 통일됨."""
 
+    threshold_provenance: str = "default"
+    """``threshold`` 값의 출처: ``"user"`` (명시 지정), ``"default"`` (raw 기본 5%),
+    ``"normalize-default"`` (normalize 채널 보정 기본값, calibration.py). 보고서가
+    임계값이 어디서 왔는지 명시해 감정 재현성·방어력을 높인다."""
+
     autojunk: bool = True
     """``difflib.SequenceMatcher``의 autojunk 옵션.
     False(``--no-autojunk``)로 설정하면 모든 토큰을 동등 취급하여
