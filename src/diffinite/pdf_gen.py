@@ -663,7 +663,7 @@ def build_cover_body(
             '<th style="width: 10%;">Shared Hashes</th><th style="width: 10%;">Jaccard</th></tr>\n'
         )
         for dr in deep_results:
-            for b_file, shared, jaccard in dr.matched_files_b:
+            for b_file, shared, jaccard, _inconclusive in dr.matched_files_b:
                 jbadge = _ratio_badge(jaccard)
                 deep_html += (
                     f"<tr>"

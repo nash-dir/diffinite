@@ -354,7 +354,7 @@ def _generate_markdown_report(
         lines.append("| A File | B File(s) | Shared Hashes | Jaccard |")
         lines.append("|--------|-----------|:-------------:|:-------:|")
         for dr in deep_results:
-            for b_file, shared, jaccard in dr.matched_files_b:
+            for b_file, shared, jaccard, _inconclusive in dr.matched_files_b:
                 # 2 decimals of percent reflect the 4-dp Jaccard used for ordering,
                 # so the displayed value and the sort order agree.
                 lines.append(
@@ -436,8 +436,9 @@ def _generate_json_report(
                         "file_b": b_file,
                         "shared_hashes": shared,
                         "jaccard": jaccard,
+                        "inconclusive": inconclusive,
                     }
-                    for b_file, shared, jaccard in dr.matched_files_b
+                    for b_file, shared, jaccard, inconclusive in dr.matched_files_b
                 ],
             })
 

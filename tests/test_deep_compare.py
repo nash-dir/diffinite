@@ -110,3 +110,31 @@ class TestLangAwarePlumbing:
         explicit = run_deep_compare(str(a), str(b), ["m.py"], ["m.py"],
                                     workers=1, normalize=True, lang_aware=False)
         assert base[0].matched_files_b == explicit[0].matched_files_b
+
+
+class TestInconclusiveBand:
+    """WS-B.enforce: under normalize, a pair whose smaller file is below the
+    calibrated token floor is flagged inconclusive (4th tuple element)."""
+
+    def _run(self, tmp_path, code, normalize):
+        from diffinite.deep_compare import run_deep_compare
+        a = tmp_path / "a"; a.mkdir()
+        b = tmp_path / "b"; b.mkdir()
+        (a / "f.py").write_text(code, encoding="utf-8")
+        (b / "f.py").write_text(code, encoding="utf-8")
+        return run_deep_compare(str(a), str(b), ["f.py"], ["f.py"],
+                                workers=1, normalize=normalize)
+
+    def test_small_normalized_pair_is_inconclusive(self, tmp_path):
+        res = self._run(tmp_path, "def f(x):\n    return x + 1\n", True)
+        assert res and res[0].matched_files_b[0][3] is True
+
+    def test_large_normalized_pair_is_conclusive(self, tmp_path):
+        res = self._run(tmp_path, "def f(x):\n    return x + 1\n" * 30, True)
+        assert res and res[0].matched_files_b[0][3] is False
+
+    def test_raw_mode_never_inconclusive(self, tmp_path):
+        # The band is a normalize-precision mitigation; raw mode is unaffected
+        # even for tiny files.
+        res = self._run(tmp_path, "def f(x):\n    return x + 1\n", False)
+        assert res and res[0].matched_files_b[0][3] is False

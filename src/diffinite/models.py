@@ -159,8 +159,11 @@ class DeepMatchResult:
     file_a: str
     """디렉토리 A 기준 상대경로."""
 
-    matched_files_b: list[tuple[str, int, float]] = field(default_factory=list)
-    """매칭된 B-파일 목록. 각 원소: ``(rel_path_b, shared_hash_count, jaccard)``.
+    matched_files_b: list[tuple[str, int, float, bool]] = field(default_factory=list)
+    """매칭된 B-파일 목록. 각 원소:
+    ``(rel_path_b, shared_hash_count, jaccard, inconclusive)``.
+    ``inconclusive`` 는 normalize 모드에서 두 파일 중 작은 쪽 토큰 수가 보정 floor
+    (calibration.INCONCLUSIVE_TOKEN_FLOOR) 미만이라 확정 판정을 보류해야 함을 뜻한다.
     Jaccard 내림차순 정렬."""
 
     fingerprint_count_a: int = 0

@@ -109,7 +109,7 @@ class TestBuildCoverHtml:
         deep = [
             DeepMatchResult(
                 file_a="foo.py",
-                matched_files_b=[("bar.py", 50, 0.8)],
+                matched_files_b=[("bar.py", 50, 0.8, False)],
             ),
         ]
         html = _cover(deep_results=deep)
@@ -120,7 +120,7 @@ class TestBuildCoverHtml:
         deep = [
             DeepMatchResult(
                 file_a="foo.py",
-                matched_files_b=[("bar.py", 50, 0.8)],
+                matched_files_b=[("bar.py", 50, 0.8, False)],
                 fingerprint_count_a=100,
             ),
         ]

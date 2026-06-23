@@ -42,10 +42,12 @@ from pathlib import Path
 from typing import Optional
 
 from diffinite.differ import read_file
+from diffinite.calibration import INCONCLUSIVE_TOKEN_FLOOR
 from diffinite.fingerprint import (
     DEFAULT_K,
     DEFAULT_W,
     extract_fingerprints,
+    tokenize,
 )
 from diffinite.models import DeepMatchResult
 from diffinite.parser import strip_comments
@@ -64,8 +66,10 @@ def _extract_one(args: tuple) -> tuple[str, set[int], int]:
               — tuple 포장은 ``pool.map()`` 인터페이스 제약.
 
     Returns:
-        ``(side, rel_path, hash_set, fingerprint_count)``
-        읽기 실패 시 빈 set / count=0 반환.
+        ``(side, rel_path, hash_set, fingerprint_count, token_count)``
+        읽기 실패 시 빈 set / count=0 / token_count=-1 반환.
+        ``token_count`` 은 normalize 모드에서만 계산한다(판정불가 floor 판정용);
+        그 외에는 -1(미산정)을 돌려준다.
     """
     side, abs_path, rel_path, extension, k, w, normalize, lang_aware = args
 
@@ -73,10 +77,10 @@ def _extract_one(args: tuple) -> tuple[str, set[int], int]:
         text = read_file(abs_path)
     except PermissionError:
         logger.warning("Permission denied during deep compare: %s", rel_path)
-        return side, rel_path, set(), 0
+        return side, rel_path, set(), 0, -1
 
     if text is None:
-        return side, rel_path, set(), 0
+        return side, rel_path, set(), 0, -1
 
     cleaned = strip_comments(text, extension)
     fps = extract_fingerprints(
@@ -84,7 +88,12 @@ def _extract_one(args: tuple) -> tuple[str, set[int], int]:
         ext=extension, lang_aware=lang_aware,
     )
     hash_set = {fp.hash_value for fp in fps}
-    return side, rel_path, hash_set, len(fps)
+    # Token count gates the inconclusive band; only needed under normalize.
+    n_tokens = (
+        len(tokenize(cleaned, normalize=normalize, ext=extension, lang_aware=lang_aware))
+        if normalize else -1
+    )
+    return side, rel_path, hash_set, len(fps), n_tokens
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -193,19 +202,23 @@ def run_deep_compare(
     # Parallel fingerprint extraction
     fp_a: dict[str, set[int]] = {}
     fp_a_counts: dict[str, int] = {}
+    fp_a_tokens: dict[str, int] = {}
     fp_b: dict[str, set[int]] = {}
+    fp_b_tokens: dict[str, int] = {}
 
     all_items = items_a + items_b
     ctx = multiprocessing.get_context("spawn")
     with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
         results = list(pool.map(_extract_one, all_items))
 
-    for side, rel, hset, cnt in results:
+    for side, rel, hset, cnt, ntok in results:
         if side == "A":
             fp_a[rel] = hset
             fp_a_counts[rel] = cnt
+            fp_a_tokens[rel] = ntok
         else:
             fp_b[rel] = hset
+            fp_b_tokens[rel] = ntok
 
     # Build inverted index over B-files
     inv_b, index_truncated = build_inverted_index(fp_b, max_entries=max_index_entries)
@@ -228,11 +241,21 @@ def run_deep_compare(
         if not b_counts:
             continue
 
-        matched_b: list[tuple[str, int, float]] = []
+        tokens_a = fp_a_tokens.get(file_id_a, -1)
+        matched_b: list[tuple[str, int, float, bool]] = []
         for file_id_b, shared in b_counts.items():
             jaccard = _jaccard(hashes_a, fp_b[file_id_b])
             if jaccard >= min_jaccard:
-                matched_b.append((file_id_b, shared, round(jaccard, 4)))
+                # Inconclusive band: under normalize, a pair where the smaller
+                # file is below the calibrated token floor cannot be separated
+                # from independent same-domain code at any useful threshold, so
+                # the score is flagged rather than presented as a confident match.
+                tokens_b = fp_b_tokens.get(file_id_b, -1)
+                smaller = min(tokens_a, tokens_b)
+                inconclusive = (
+                    normalize and smaller >= 0 and smaller < INCONCLUSIVE_TOKEN_FLOOR
+                )
+                matched_b.append((file_id_b, shared, round(jaccard, 4), inconclusive))
 
         # Sort by Jaccard desc, then shared-hash count desc, then file id asc.
         # The full tie-break is seed-independent: without it, equal-Jaccard
