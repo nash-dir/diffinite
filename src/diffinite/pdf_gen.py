@@ -36,7 +36,7 @@ import pkgutil
 import sys
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from pypdf import PdfReader, PdfWriter
 from reportlab.lib.pagesizes import A4, landscape
@@ -44,6 +44,13 @@ from reportlab.pdfgen import canvas
 from xhtml2pdf import pisa
 
 from diffinite.models import DeepMatchResult, DiffResult, FileHashEntry
+
+if TYPE_CHECKING:
+    # build_cover_body's ``metadata`` param is annotated with this. Importing it
+    # only under TYPE_CHECKING keeps the runtime import inside the function (to
+    # avoid a circular import via models) while letting the forward-ref string
+    # resolve under get_type_hints / static analysis.
+    from diffinite.models import AnalysisMetadata
 
 logger = logging.getLogger(__name__)
 

@@ -82,7 +82,11 @@ TOKEN_RE = re.compile(r"[0-9]+(?:\.[0-9]+)?|\w+|[^\s]")
 # Phase 3 전략: 기존 키워드 세트를 그대로 유지하여 **기존 포렌식 보고서와의
 # 핑거프린트 호환성**을 보장한다. languages 레지스트리의 per-language 키워드로
 # 전환하면 해시값이 달라져 기존 보고서를 재현할 수 없게 되므로 신중해야 한다.
-from diffinite.languages import all_keywords as _all_keywords  # noqa: E402
+# Reserved for the opt-in language-aware normalization channel (per-language
+# keyword sets from the registry). Intentionally unused today: switching the
+# default normalize path off ``_COMMON_KEYWORDS`` would change emitted hashes and
+# break reproducibility of existing forensic reports (see note above).
+from diffinite.languages import all_keywords as _all_keywords  # noqa: E402,F401
 
 _COMMON_KEYWORDS = frozenset({
     # 제어 흐름

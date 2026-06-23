@@ -31,6 +31,7 @@ import os
 import shutil
 import zipfile
 from pathlib import Path
+from typing import Optional
 
 from diffinite.models import FileHashEntry
 from diffinite import __version__
