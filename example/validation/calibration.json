@@ -1,0 +1,16 @@
+{
+  "fp_le_5": {
+    "floor_tokens": 74,
+    "threshold": 78,
+    "fp_rate": 4.65,
+    "recall": 34.9,
+    "coverage": 0.819
+  },
+  "fp_le_1": {
+    "floor_tokens": 45,
+    "threshold": 93,
+    "fp_rate": 0.95,
+    "recall": 21.69,
+    "coverage": 1.0
+  }
+}

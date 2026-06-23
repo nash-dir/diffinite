@@ -214,6 +214,67 @@ def sweep_rows(scores: list[PairScore]) -> list[dict]:
     return rows
 
 
+@dataclass(frozen=True)
+class CalibrationPoint:
+    """One (token-floor, threshold) operating point on the calibration frontier."""
+
+    floor: int           # withhold a verdict below this token count (inconclusive)
+    threshold: int       # min Jaccard*100 to flag, among files at/above the floor
+    fp_rate: float       # false-positive rate on negatives at/above the floor
+    recall: float        # recall on positives at/above the floor
+    coverage: float      # fraction of negatives that clear the floor (are judged)
+
+
+def calibrate(scores: list[PairScore], *, fp_target: float = 5.0,
+              mode: str = "normalize",
+              min_coverage: float = 0.5) -> tuple[list[CalibrationPoint], CalibrationPoint | None]:
+    """Derive the (floor, threshold) frontier for a false-positive target.
+
+    The 'both' policy (raise threshold **and** add an inconclusive floor) is
+    synergistic: excluding the files below the floor — where precision is
+    unsalvageable at any useful threshold — lets the threshold for the *remaining*
+    (larger) files come down while still meeting *fp_target*. This sweeps every
+    candidate floor and, for each, finds the lowest threshold meeting the target
+    on the files that clear it, recording the recall and coverage there.
+
+    Returns ``(frontier, recommended)``. The recommendation is a transparent
+    rule — highest recall among points that still judge at least *min_coverage*
+    of the negatives — but the final pick is the maintainer's (forensic call).
+    """
+    floors = sorted({s.tokens_min for s in scores}) + [1 << 30]
+    total_neg = sum(1 for s in scores if s.mode == mode and s.label == "neg")
+    frontier: list[CalibrationPoint] = []
+
+    for floor in floors:
+        negs = [s for s in scores if s.mode == mode and s.label == "neg"
+                and s.tokens_min >= floor]
+        pos = [s for s in scores if s.mode == mode and s.label == "pos"
+               and s.tokens_min >= floor]
+        if not negs:
+            continue
+        coverage = len(negs) / total_neg if total_neg else 0.0
+        chosen_t = None
+        for t in range(0, 101):
+            fp = sum(1 for s in negs if s.jaccard * 100 >= t) / len(negs) * 100
+            if fp <= fp_target:
+                chosen_t = t
+                break
+        if chosen_t is None:
+            continue
+        fp_at = sum(1 for s in negs if s.jaccard * 100 >= chosen_t) / len(negs) * 100
+        rc = (sum(1 for s in pos if s.jaccard * 100 >= chosen_t) / len(pos) * 100
+              if pos else 0.0)
+        frontier.append(CalibrationPoint(
+            floor=floor if floor != (1 << 30) else -1,
+            threshold=chosen_t, fp_rate=round(fp_at, 2),
+            recall=round(rc, 2), coverage=round(coverage, 3),
+        ))
+
+    eligible = [p for p in frontier if p.coverage >= min_coverage and p.floor != -1]
+    recommended = max(eligible, key=lambda p: p.recall) if eligible else None
+    return frontier, recommended
+
+
 def write_csv(rows: list[dict], path: Path) -> None:
     import csv
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -291,9 +352,34 @@ def write_md_summary(scores: list[PairScore], path: Path) -> None:
             rc = _rate(recall(scores, "normalize", chosen))
             lines.append(f"| ≤{target:.0f}% | {chosen} | {rc:.1f}% |")
     lines.append("")
+
+    lines.append("### Joint (floor, threshold) calibration frontier — normalize\n")
+    lines.append("The 'both' policy raises the threshold **and** withholds a "
+                 "verdict below a token floor. Excluding sub-floor files (precision "
+                 "unsalvageable there) lets the threshold for the rest come down "
+                 "while still meeting the false-positive target.\n")
+    for fp_target in (5.0, 1.0):
+        frontier, rec = calibrate(scores, fp_target=fp_target)
+        lines.append(f"**Target FP ≤ {fp_target:.0f}%**\n")
+        lines.append("| Token floor | Threshold | FP rate | Recall (≥floor) | Coverage |")
+        lines.append("|---|---|---|---|---|")
+        for p in frontier:
+            if p.floor == -1:
+                continue
+            star = "  ⟵ recommended" if rec and p.floor == rec.floor and \
+                p.threshold == rec.threshold else ""
+            lines.append(f"| {p.floor} | {p.threshold} | {p.fp_rate:.1f}% | "
+                         f"{p.recall:.1f}% | {p.coverage*100:.0f}%{star} |")
+        if rec:
+            lines.append(f"\n> Recommended (highest recall with ≥50% coverage): "
+                         f"**floor={rec.floor} tokens, threshold={rec.threshold}** "
+                         f"→ FP {rec.fp_rate:.1f}%, recall {rec.recall:.1f}%.\n")
+        else:
+            lines.append("\n> No point meets the target with ≥50% coverage.\n")
+
     lines.append("> These are candidate operating points for WS-B, not a "
-                 "decision. The threshold and any size-based 'inconclusive' "
-                 "floor are forensic-defensibility calls for the maintainer.\n")
+                 "decision. The threshold and the 'inconclusive' floor are "
+                 "forensic-defensibility calls for the maintainer to ratify.\n")
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -305,6 +391,20 @@ def main() -> None:
         raise SystemExit(f"No scores produced — is {CORPUS_ROOT} present?")
     write_csv(sweep_rows(scores), OUTPUT_DIR / "pr_curve.csv")
     write_md_summary(scores, OUTPUT_DIR / "error_rate.md")
+
+    # Machine-readable calibration for WS-B (calibration.py reads this).
+    import json
+    calib = {}
+    for fp_target in (5.0, 1.0):
+        _, rec = calibrate(scores, fp_target=fp_target)
+        calib[f"fp_le_{int(fp_target)}"] = (
+            None if rec is None else
+            {"floor_tokens": rec.floor, "threshold": rec.threshold,
+             "fp_rate": rec.fp_rate, "recall": rec.recall, "coverage": rec.coverage}
+        )
+    (OUTPUT_DIR / "calibration.json").write_text(
+        json.dumps(calib, indent=2), encoding="utf-8")
+
     fp5 = _rate(fp_rate(scores, "normalize", DEFAULT_THRESHOLD))
     fp5_raw = _rate(fp_rate(scores, "raw", DEFAULT_THRESHOLD))
     print(f"Wrote {OUTPUT_DIR / 'pr_curve.csv'} and error_rate.md")

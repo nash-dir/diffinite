@@ -45,6 +45,7 @@ example/benchmark/*
 example/validation/*
 !example/validation/*.md
 !example/validation/*.csv
+!example/validation/*.json
 # Generated CLI report outputs left in example/ root
 # (timestamped, e.g. left_right_20260622_2035.{csv,html,md,pdf,json};
 #  *.sig and manifest.sha256.json are already covered by global rules above)

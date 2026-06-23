@@ -55,3 +55,24 @@ def test_sweep_rows_shape(scores):
     rows = er.sweep_rows(scores)
     assert len(rows) == 2 * 101  # two modes x thresholds 0..100
     assert {"mode", "threshold", "fp_rate", "recall_all"} <= set(rows[0].keys())
+
+
+def test_calibrate_frontier_invariants(scores):
+    # A single small case may admit no FP<=5% point, but the invariants must hold
+    # for whatever frontier is produced.
+    frontier, rec = er.calibrate(scores, fp_target=5.0)
+    assert isinstance(frontier, list)
+    assert all(p.fp_rate <= 5.0 + 1e-9 for p in frontier)  # met by construction
+    covs = [p.coverage for p in frontier]
+    assert covs == sorted(covs, reverse=True)  # coverage falls as floor rises
+    if rec is not None:
+        assert rec.fp_rate <= 5.0 + 1e-9
+        assert rec.coverage >= 0.5
+        assert rec.floor > 0
+
+
+def test_calibrate_lenient_target_is_reachable(scores):
+    # At a forgiving FP target some operating point always exists.
+    frontier, _ = er.calibrate(scores, fp_target=50.0)
+    assert frontier
+    assert all(p.fp_rate <= 50.0 + 1e-9 for p in frontier)
