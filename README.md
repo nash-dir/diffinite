@@ -213,8 +213,9 @@ Korean, Japanese, and Chinese text is rendered correctly in PDF output. By defau
 |--------|:-------:|-------------|
 | `--k-gram N` | `5` | K-gram size for Winnowing. Larger K = fewer but more specific fingerprints. (Schleimer 2003, §4.2) |
 | `--window N` | `4` | Winnowing window size. Guarantees detection of any shared sequence ≥ `K+W−1` = 8 tokens. |
-| `--threshold-deep N` | `5` | Minimum Jaccard similarity (percent, on a 0–100 scale) to include in results. Below 5% is considered noise. |
-| `--normalize` | off | Normalize identifiers → `ID`, literals → `LIT` before fingerprinting. Improves Type-2 clone detection (renamed variables). |
+| `--threshold-deep N` | `5` raw / `93` normalize | Minimum Jaccard similarity (percent, 0–100) to include in results. The default differs by channel: raw uses 5; `--normalize` uses **93**, calibrated for a false-positive rate ≤ 1% (see [Normalize precision](#normalize-precision--false-positive-rate) below). Pass a value to override. |
+| `--normalize` | off | Normalize identifiers → `ID`, literals → `LIT` before fingerprinting. Improves Type-2 clone detection (renamed variables) but **raises the false-positive rate on independent code** — see [Normalize precision](#normalize-precision--false-positive-rate). Matches below a 45-token floor are reported as *inconclusive*, and every normalize report discloses its measured false-positive rate. |
+| `--lang-aware` | off | With `--normalize`, use language-aware normalization (Pygments lexer, falling back to per-language keyword sets) so keywords like Rust `fn`/`pub` or Go `func` are preserved instead of flattened to `ID`. Opt-in; produces fingerprints incompatible with the default channel. No effect without `--normalize`. |
 | `--workers N` | `4` | Number of parallel worker processes for diff rendering and fingerprint extraction. |
 
 ### Forensic Options
@@ -306,7 +307,7 @@ diffinite dir_a/ dir_b/ \
 # Larger K-gram = fewer false positives, may miss short matches
 diffinite dir_a/ dir_b/ --k-gram 7 --window 5
 
-# Lower Jaccard threshold = show weaker matches (0–100 scale; default 5)
+# Lower Jaccard threshold = show weaker matches (0–100 scale; raw default 5, 93 under --normalize)
 diffinite dir_a/ dir_b/ --threshold-deep 2
 
 # Stricter file name matching
@@ -438,6 +439,24 @@ diffinite example/plagiarism/case-01/original example/plagiarism/case-01/plagiar
 | `T1.java` | `L6/05/HelloWorld.java` | 15.4% |
 
 **Observation**: Jaccard decreases as the plagiarism level increases (L1→L6). Verbatim and lightly-edited copies (L1–L3) score 100%. Heavily restructured copies (L5, L6) still show 15–38% shared fingerprints — well above the negative control baseline.
+
+### Normalize precision — false-positive rate
+
+The negative control above runs **without** `--normalize`, while the IR-Plag run uses it — so neither shows what `--normalize` does to *independent* code. That cell matters: flattening every identifier to `ID` makes the language-forced skeleton of small, standard code (a textbook `for`-loop) identical regardless of author, so independent work and renamed copies can collapse to the **same** Jaccard.
+
+It is measured, symmetrically, by the validation harness ([`tests/validation/error_rate.py`](tests/validation/error_rate.py); regenerate with `python -m tests.validation.error_rate`). On the IR-Plag corpus — where `non-plagiarized/` submissions are independent answers to the *same* assignment, so any similarity is a false positive — across 105 independent pairs and 355 labelled copies:
+
+| Channel | False-positive rate @ threshold 5 | Recall @ threshold 5 |
+|---------|:-:|:-:|
+| raw | 100% (tiny files) | 100% |
+| normalize | **100%** | 100% |
+
+The shipped `--threshold-deep 5` is meaningless under `--normalize`: the false-positive rate is 100%. Two mitigations ship as a result (see [`example/validation/error_rate.md`](example/validation/error_rate.md) for the full precision/recall curves and [`calibration.json`](example/validation/calibration.json) for the operating point):
+
+1. **Calibrated threshold** — under `--normalize`, the default threshold is raised to **93** (false-positive ≤ 1%; recall ~22%). The trade-off is real and disclosed, not hidden.
+2. **Inconclusive band** — a normalize match whose smaller file is below a **45-token floor** is reported as *inconclusive* rather than a confident finding: at that size, precision is unsalvageable at any useful threshold.
+
+Every `--normalize` report discloses its measured false-positive rate on its cover. For non-JVM/Python/JS languages, `--lang-aware` reduces the collapse by preserving language keywords (e.g. Rust `fn`/`pub`) instead of flattening them to `ID`.
 
 ### 4. AOSP Framework — Same Codebase, Minor Edits
 
