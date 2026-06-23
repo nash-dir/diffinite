@@ -43,6 +43,7 @@ from reportlab.lib.pagesizes import A4, landscape
 from reportlab.pdfgen import canvas
 from xhtml2pdf import pisa
 
+from diffinite.calibration import normalize_disclosure
 from diffinite.models import DeepMatchResult, DiffResult, FileHashEntry
 
 if TYPE_CHECKING:
@@ -594,6 +595,15 @@ def build_cover_body(
                if metadata.lang_aware else '')
             + '\n</div>\n'
         )
+        # Normalize false-positive disclosure — the PDF is the primary forensic
+        # deliverable, so it must carry the error rate, not just HTML/MD.
+        if metadata.normalize and metadata.exec_mode == "deep":
+            meta_html += (
+                '<p class="meta" style="margin-top:-10px;">&#8505; '
+                + html.escape(normalize_disclosure(
+                    metadata.threshold, metadata.threshold_provenance))
+                + '</p>\n'
+            )
 
     summary_rows = ""
     for idx, r in enumerate(results, 1):

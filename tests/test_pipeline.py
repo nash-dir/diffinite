@@ -380,7 +380,7 @@ class TestNormalizeDisclosure:
         from diffinite.calibration import NORMALIZE_FP_RATE_PCT
         out = _build_metadata_banner_md(self._meta(True))
         assert "false-positive" in out.lower()
-        assert f"{NORMALIZE_FP_RATE_PCT:.1f}%" in out
+        assert f"{NORMALIZE_FP_RATE_PCT:.2g}%" in out
 
     def test_md_banner_silent_without_normalize(self):
         from diffinite.pipeline import _build_metadata_banner_md

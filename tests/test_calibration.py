@@ -16,7 +16,7 @@ def test_constants_in_sane_ranges():
 
 def test_disclosure_cites_measured_fp_at_shipped_point():
     s = normalize_disclosure(NORMALIZE_DEFAULT_THRESHOLD, "normalize-default")
-    assert f"{NORMALIZE_FP_RATE_PCT:.1f}%" in s          # the measured rate
+    assert f"{NORMALIZE_FP_RATE_PCT:.2g}%" in s          # the measured rate, exact
     assert "inconclusive" in s.lower()
     assert str(INCONCLUSIVE_TOKEN_FLOOR) in s
 

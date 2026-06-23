@@ -61,10 +61,10 @@ def normalize_disclosure(threshold: float, provenance: str) -> str:
             base + " At the shipped operating point (threshold "
             f"{NORMALIZE_DEFAULT_THRESHOLD:.0f}, calibrated for false-positive "
             f"≤ 1%), the measured false-positive rate is "
-            f"{NORMALIZE_FP_RATE_PCT:.1f}% on the IR-Plag corpus."
+            f"{NORMALIZE_FP_RATE_PCT:.2g}% on the IR-Plag corpus."
         )
     return (
         base + f" Threshold {threshold:.0f} was set manually; the calibrated "
-        f"false-positive figure ({NORMALIZE_FP_RATE_PCT:.1f}% at threshold "
+        f"false-positive figure ({NORMALIZE_FP_RATE_PCT:.2g}% at threshold "
         f"{NORMALIZE_DEFAULT_THRESHOLD:.0f}) does not apply at this threshold."
     )

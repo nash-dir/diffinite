@@ -83,6 +83,28 @@ class TestBuildCoverHtml:
         assert "autojunk=" in html
         assert "off" in html  # autojunk=False rendered
 
+    def _cover_with_meta(self, *, normalize, exec_mode):
+        from diffinite.models import AnalysisMetadata
+        from diffinite.calibration import NORMALIZE_DEFAULT_THRESHOLD
+        meta = AnalysisMetadata(
+            exec_mode=exec_mode, k=5, w=4, threshold=NORMALIZE_DEFAULT_THRESHOLD,
+            threshold_provenance="normalize-default", normalize=normalize,
+        )
+        return build_cover_body(
+            _make_results(), unmatched_a=[], unmatched_b=[],
+            dir_a="a", dir_b="b", by_word=False, strip_comments=False, metadata=meta,
+        )
+
+    def test_pdf_cover_discloses_fp_under_normalize_deep(self):
+        # The PDF is the primary forensic deliverable; it must carry the FP rate.
+        html = self._cover_with_meta(normalize=True, exec_mode="deep")
+        assert "false-positive" in html.lower()
+
+    def test_pdf_cover_no_disclosure_in_simple_mode(self):
+        # normalize is a no-op without deep fingerprinting, so no disclosure.
+        html = self._cover_with_meta(normalize=True, exec_mode="simple")
+        assert "false-positive" not in html.lower()
+
     def test_contains_additions_deletions(self):
         html = _cover()
         assert "+10" in html

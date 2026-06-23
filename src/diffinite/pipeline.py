@@ -232,7 +232,7 @@ def _build_metadata_banner_md(meta: AnalysisMetadata) -> str:
     if meta.lang_aware:
         lines.append("| **Fingerprint channel** | `language-aware (Pygments/registry)` |")
     lines.append("")
-    if meta.normalize:
+    if meta.normalize and meta.exec_mode == "deep":
         lines.append("> ℹ **Normalize false-positive disclosure:** "
                      + normalize_disclosure(meta.threshold, meta.threshold_provenance)
                      + "\n")
@@ -264,7 +264,7 @@ def _build_metadata_banner_html(meta: AnalysisMetadata) -> str:
             + html_mod.escape(
                 normalize_disclosure(meta.threshold, meta.threshold_provenance))
             + "</span>"
-            if meta.normalize else ""
+            if (meta.normalize and meta.exec_mode == "deep") else ""
         )
         + (
             '<br><span style="color:#b00020;font-weight:bold;">'
