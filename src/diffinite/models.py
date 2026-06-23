@@ -159,8 +159,11 @@ class DeepMatchResult:
     file_a: str
     """디렉토리 A 기준 상대경로."""
 
-    matched_files_b: list[tuple[str, int, float]] = field(default_factory=list)
-    """매칭된 B-파일 목록. 각 원소: ``(rel_path_b, shared_hash_count, jaccard)``.
+    matched_files_b: list[tuple[str, int, float, bool]] = field(default_factory=list)
+    """매칭된 B-파일 목록. 각 원소:
+    ``(rel_path_b, shared_hash_count, jaccard, inconclusive)``.
+    ``inconclusive`` 는 normalize 모드에서 두 파일 중 작은 쪽 토큰 수가 보정 floor
+    (calibration.INCONCLUSIVE_TOKEN_FLOOR) 미만이라 확정 판정을 보류해야 함을 뜻한다.
     Jaccard 내림차순 정렬."""
 
     fingerprint_count_a: int = 0
@@ -205,6 +208,24 @@ class AnalysisMetadata:
     """Deep 모드의 역 인덱스가 ``--max-index-entries`` 상한에서 잘렸는지 여부.
     True이면 일부 크로스매치가 누락되어 유사도가 **과소보고**될 수 있으므로,
     보고서에 경고를 표기해 '완전한 결과'로 오인되지 않게 한다."""
+
+    # NOTE: fields below are appended AFTER the historical fields above so that
+    # positional construction `AnalysisMetadata("deep", 5, 4, 5.0, autojunk, ...)`
+    # keeps its original meaning. Do not insert new fields mid-struct.
+    threshold_provenance: str = "default"
+    """``threshold`` 값의 출처: ``"user"`` (명시 지정), ``"default"`` (raw 기본 5%),
+    ``"normalize-default"`` (normalize 채널 보정 기본값, calibration.py). 보고서가
+    임계값이 어디서 왔는지 명시해 감정 재현성·방어력을 높인다."""
+
+    normalize: bool = False
+    """``--normalize`` (Type-2 정규화) 사용 여부. True이면 식별자가 평탄화되어
+    위양성률 특성이 달라지므로(calibration.py), 보고서가 채널·임계값·측정 오류율을
+    공시할 수 있도록 기록한다."""
+
+    lang_aware: bool = False
+    """언어 인식 정규화(``--lang-aware``) 사용 여부. True이면 deep 모드 핑거프린트가
+    언어별 키워드 인식(Pygments lexer / 레지스트리)으로 생성되어, 기본(언어 무관)
+    정규화와 **핑거프린트가 호환되지 않는다** — 보고서에 채널을 명시해 둔다."""
 
 
 # ──────────────────────────────────────────────────────────────────────

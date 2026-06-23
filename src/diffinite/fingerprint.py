@@ -24,10 +24,13 @@ Call graph:
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Sequence
 
 from diffinite.models import FingerprintEntry
+
+logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────────────────────────────
 # 핵심 상수
@@ -82,7 +85,14 @@ TOKEN_RE = re.compile(r"[0-9]+(?:\.[0-9]+)?|\w+|[^\s]")
 # Phase 3 전략: 기존 키워드 세트를 그대로 유지하여 **기존 포렌식 보고서와의
 # 핑거프린트 호환성**을 보장한다. languages 레지스트리의 per-language 키워드로
 # 전환하면 해시값이 달라져 기존 보고서를 재현할 수 없게 되므로 신중해야 한다.
-from diffinite.languages import all_keywords as _all_keywords  # noqa: E402
+# Per-language keyword data, used only by the opt-in language-aware channel
+# (``lang_aware=True``). The DEFAULT normalize path keeps ``_COMMON_KEYWORDS``
+# untouched so existing forensic-report fingerprints remain reproducible (see
+# note above); switching the default off it would change emitted hashes.
+from diffinite.languages import (  # noqa: E402
+    all_keywords as _all_keywords,
+    get_spec as _get_spec,
+)
 
 _COMMON_KEYWORDS = frozenset({
     # 제어 흐름
@@ -109,11 +119,104 @@ _COMMON_KEYWORDS = frozenset({
 # ──────────────────────────────────────────────────────────────────────
 # 토크나이징
 # ──────────────────────────────────────────────────────────────────────
-def tokenize(source: str, *, normalize: bool = False) -> list[str]:
+def _normalize_with_keywords(
+    raw_tokens: list[str], keywords: frozenset[str]
+) -> list[str]:
+    """정규식 토큰열을 주어진 키워드 세트로 Type-2 정규화한다.
+
+    식별자→``ID``, 숫자→``LIT``, 문자열 구분자→``STR``, 키워드/연산자는 유지.
+    ``keywords`` 만 바꿔 끼우면 기본(언어 무관) 정규화와 언어 인식 Tier-1 정규화를
+    같은 코드로 처리할 수 있다.
+    """
+    result: list[str] = []
+    for tok in raw_tokens:
+        if tok in keywords:
+            result.append(tok)           # 키워드 — 유지
+        elif tok[0].isalpha() or tok[0] == '_':
+            result.append("ID")          # 식별자 → ID
+        elif tok[0].isdigit():
+            result.append("LIT")         # 숫자 → LIT
+        elif tok in ('"', "'", '`'):
+            result.append("STR")         # 문자열 구분자 → STR
+        else:
+            result.append(tok)           # 연산자/구두점 — 유지
+    return result
+
+
+def _lang_keywords(ext: str | None) -> frozenset[str]:
+    """언어 인식 Tier-1 키워드 세트.
+
+    확장자에 등록된 ``LangSpec.keywords`` 를 쓰고, 없으면 전 언어 키워드 합집합
+    (``all_keywords()``)으로 폴백한다 — 미지 확장자에 대한 최선의 추정.
+    """
+    spec = _get_spec(ext) if ext else None
+    return spec.keywords if spec is not None else _all_keywords()
+
+
+def _normalize_lang_aware(source: str, ext: str | None) -> list[str] | None:
+    """언어 인식 Tier-2 정규화: Pygments lexer 토큰 타입으로 분류한다.
+
+    ``Keyword*``(``i32``·``pub``·``fn``·``func``·``fun`` 등 타입/선언 키워드 포함)는
+    원문 보존, ``Name*``→``ID``, ``Number``→``LIT``, ``String``→``STR``, 주석은 폐기.
+    이로써 함수 선언이 식별자와 구분되어, 비-JVM/Python/JS 언어의 위양성을 줄인다.
+
+    ``ext`` 가 없거나, Pygments lexer를 찾지 못하거나, 렉싱 중 어떤 예외라도 나면
+    ``None`` 을 반환하여 호출쪽이 Tier-1(레지스트리 키워드)로 폴백하게 한다 —
+    포렌식 실행이 파일 하나의 렉서 오류로 중단되지 않도록.
+    """
+    if not ext:
+        return None
+    try:
+        from pygments.lexers import get_lexer_for_filename
+        from pygments.token import Token
+    except ImportError:
+        return None
+    try:
+        lexer = get_lexer_for_filename("a" + ext)
+    except Exception:  # noqa: BLE001 — no lexer for this ext: expected, silent
+        return None                          # → Tier-1 (registry keywords)
+
+    out: list[str] = []
+    try:
+        for tok_type, val in lexer.get_tokens(source):
+            s = val.strip()
+            if not s:
+                continue                     # 공백/개행
+            if tok_type in Token.Comment:
+                continue                     # 주석 폐기 (입력이 미정제여도 안전)
+            if tok_type in Token.Keyword:
+                out.append(s)                # 키워드(타입·선언 포함) — 유지
+            elif tok_type in Token.Name:
+                out.append("ID")             # 식별자/함수명 → ID
+            elif tok_type in Token.Literal.Number:
+                out.append("LIT")            # 숫자 리터럴 → LIT
+            elif tok_type in Token.Literal.String:
+                out.append("STR")            # 문자열 리터럴 → STR
+            else:
+                out.append(s)                # 연산자/구두점/기타 — 유지
+    except Exception:  # noqa: BLE001 — lexer EXISTS but failed mid-stream
+        # This file falls back to Tier-1 while its same-extension siblings may use
+        # Tier-2 — a different token alphabet, risking a silent false negative. A
+        # forensic run must not abort, but the inconsistency must be observable.
+        logger.warning(
+            "lang-aware lexing failed for extension %r; this file uses the Tier-1 "
+            "fallback (different token alphabet than lexed files)", ext)
+        return None
+    return out
+
+
+def tokenize(
+    source: str,
+    *,
+    normalize: bool = False,
+    ext: str | None = None,
+    lang_aware: bool = False,
+) -> list[str]:
     """소스코드를 토큰 시퀀스로 분할한다.
 
     ``normalize=False`` (기본):
-        원문 토큰 그대로 반환. raw_winnowing 채널에 사용.
+        원문 토큰 그대로 반환. raw_winnowing 채널에 사용. ``lang_aware`` 는 무시된다
+        (원문 토큰은 본래 언어 무관).
 
     ``normalize=True``:
         Type-2 클론 탐지용 정규화:
@@ -121,6 +224,12 @@ def tokenize(source: str, *, normalize: bool = False) -> list[str]:
         - 숫자 리터럴 → ``"LIT"``
         - 문자열 **구분자**(따옴표) → ``"STR"``
         - 키워드/연산자 → 원문 보존
+
+    ``lang_aware=True`` (``normalize`` 와 함께일 때만 의미 있음):
+        하드코딩된 ``_COMMON_KEYWORDS`` 대신 **언어별** 키워드 인식을 쓴다.
+        Tier-2(Pygments lexer)를 우선 시도하고, 해당 ``ext`` 의 lexer가 없으면
+        Tier-1(레지스트리 ``LangSpec.keywords``)로 폴백한다. **opt-in 전용**이며
+        기본 경로의 핑거프린트(기존 보고서 재현성)는 바뀌지 않는다.
 
     주의:
         문자열 **내용**은 정규화하지 않는다 — 따옴표만 ``STR``로 바뀌고 그 사이
@@ -134,19 +243,13 @@ def tokenize(source: str, *, normalize: bool = False) -> list[str]:
     if not normalize:
         return raw_tokens
 
-    result: list[str] = []
-    for tok in raw_tokens:
-        if tok in _COMMON_KEYWORDS:
-            result.append(tok)           # 키워드 — 유지
-        elif tok[0].isalpha() or tok[0] == '_':
-            result.append("ID")          # 식별자 → ID
-        elif tok[0].isdigit():
-            result.append("LIT")         # 숫자 → LIT
-        elif tok in ('"', "'", '`'):
-            result.append("STR")         # 문자열 구분자 → STR
-        else:
-            result.append(tok)           # 연산자/구두점 — 유지
-    return result
+    if lang_aware:
+        tier2 = _normalize_lang_aware(source, ext)
+        if tier2 is not None:
+            return tier2
+        return _normalize_with_keywords(raw_tokens, _lang_keywords(ext))
+
+    return _normalize_with_keywords(raw_tokens, _COMMON_KEYWORDS)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -241,6 +344,8 @@ def extract_fingerprints(
     w: int = DEFAULT_W,
     *,
     normalize: bool = False,
+    ext: str | None = None,
+    lang_aware: bool = False,
 ) -> list[FingerprintEntry]:
     """소스코드에서 핑거프린트를 추출하는 통합 API.
 
@@ -251,6 +356,10 @@ def extract_fingerprints(
         k: K-gram 크기 (>= 1).
         w: Winnowing 윈도우 크기 (>= 1).
         normalize: True이면 Type-2 클론 탐지용 토큰 정규화 적용.
+        ext: 파일 확장자(예: ``".rs"``). ``lang_aware`` 정규화의 lexer/키워드
+            선택에 사용. ``lang_aware=False`` 이면 무시된다.
+        lang_aware: True이면 언어 인식 정규화(Tier-2 Pygments → Tier-1 레지스트리
+            폴백)를 적용한다. **opt-in**: 기본 경로의 핑거프린트는 불변.
 
     Raises:
         ValueError: ``k`` 또는 ``w`` 가 1 미만일 때. (k=0은 모듈러 역원으로 인해
@@ -262,6 +371,6 @@ def extract_fingerprints(
     if w < 1:
         raise ValueError(f"winnowing window must be >= 1, got {w}")
 
-    tokens = tokenize(source, normalize=normalize)
+    tokens = tokenize(source, normalize=normalize, ext=ext, lang_aware=lang_aware)
     hashes = rolling_hash(tokens, k)
     return winnow(hashes, w)

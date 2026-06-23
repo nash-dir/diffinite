@@ -136,3 +136,106 @@ class TestFingerprintGuards:
     def test_w_below_one_raises(self):
         with pytest.raises(ValueError):
             extract_fingerprints("a b c d e f", k=5, w=0)
+
+
+class TestLangAwareNormalization:
+    """Opt-in language-aware normalization (WS-C). Tier-2 (Pygments) preserves
+    per-language keywords that the JVM/Python/JS-centric default set drops; Tier-1
+    (registry keywords) is the fallback when no lexer exists."""
+
+    RUST = "pub fn add(a: i32, b: i32) -> i32 {\n    let total = a + b;\n    total\n}\n"
+
+    def test_default_normalize_drops_rust_keywords(self):
+        # `fn`/`pub`/`let` are not in _COMMON_KEYWORDS, so the default normalize
+        # path flattens them to ID -- the language-bias the review flagged.
+        toks = tokenize(self.RUST, normalize=True)
+        assert "fn" not in toks and "pub" not in toks
+        assert "ID" in toks
+
+    def test_lang_aware_preserves_rust_keywords(self):
+        toks = tokenize(self.RUST, normalize=True, ext=".rs", lang_aware=True)
+        # Declaration/type keywords survive; the function name collapses to ID.
+        assert "fn" in toks and "pub" in toks
+        assert "i32" in toks            # Keyword.Type preserved
+        assert "ID" in toks             # `add`, `a`, `b`, `total` -> ID
+
+    def test_lang_aware_changes_fingerprints_only_when_normalized(self):
+        # With normalize=False, lang_aware is a documented no-op (raw tokens).
+        raw = tokenize(self.RUST, normalize=False, ext=".rs", lang_aware=True)
+        assert raw == tokenize(self.RUST, normalize=False)
+
+    def test_default_path_unchanged_compatibility(self):
+        # The crucial backward-compat guarantee: lang_aware=False (the default)
+        # must emit byte-identical fingerprints to the historical behavior.
+        src = "def foo(x):\n    return x + 1\n"
+        before = extract_fingerprints(src, normalize=True)
+        after = extract_fingerprints(src, normalize=True, lang_aware=False)
+        assert before == after
+
+    def test_unknown_extension_falls_back_gracefully(self):
+        # No Pygments lexer for a bogus extension -> Tier-1 fallback, no crash.
+        toks = tokenize(self.RUST, normalize=True, ext=".zzz", lang_aware=True)
+        assert isinstance(toks, list) and toks
+
+    def test_lang_aware_channel_changes_fingerprints(self):
+        # The lang-aware channel must actually differ from the default normalize
+        # channel on keyword-heavy code: preserving Rust keywords (fn/pub/i32)
+        # instead of flattening them to ID changes the emitted fingerprints. (A
+        # mere range check would be tautological; this proves the channel bites.)
+        default = {f.hash_value for f in extract_fingerprints(self.RUST, normalize=True)}
+        la = {f.hash_value for f in extract_fingerprints(
+            self.RUST, normalize=True, ext=".rs", lang_aware=True)}
+        assert default != la
+
+    def test_lang_aware_classifies_literals_and_drops_comments(self):
+        # Exercise the Tier-2 LIT/STR/Comment branches (previously uncovered).
+        src = 'fn f() {\n    let s = "hi";\n    let n = 42;\n}  // tail comment\n'
+        toks = tokenize(src, normalize=True, ext=".rs", lang_aware=True)
+        assert "LIT" in toks            # 42 -> LIT
+        assert "STR" in toks            # "hi" -> STR
+        assert "ID" in toks             # f, s, n -> ID
+        assert "tail" not in toks       # comment dropped
+        assert "fn" in toks and "let" in toks  # keywords preserved
+
+    def test_lang_aware_ext_none_falls_back_to_tier1(self):
+        # ext=None -> no lexer -> Tier-1 (registry/all_keywords), still normalized.
+        toks = tokenize("fn foo() { return 0 }", normalize=True, ext=None, lang_aware=True)
+        assert isinstance(toks, list) and "ID" in toks  # foo -> ID via Tier-1
+
+
+class TestLangAwareRobustness:
+    """Self-review fixes: lexer failures must degrade to Tier-1, and the floor
+    token count must be channel-independent."""
+
+    def test_lexer_failure_falls_back_to_tier1(self, monkeypatch):
+        # Force any Pygments lexing to raise; lang-aware must not propagate it.
+        import diffinite.fingerprint as fp
+
+        def boom(*a, **k):
+            raise RuntimeError("lexer exploded")
+
+        # Patch the lazily-imported lookup so _normalize_lang_aware returns None.
+        import pygments.lexers as pl
+        monkeypatch.setattr(pl, "get_lexer_for_filename", boom)
+        toks = fp.tokenize("pub fn f() {}", normalize=True, ext=".rs", lang_aware=True)
+        # Falls back to Tier-1 (registry keywords) — still a normalized list.
+        assert isinstance(toks, list) and toks
+        assert "ID" in toks
+
+
+def test_lexer_tokenize_failure_warns_and_falls_back(monkeypatch, caplog):
+    """Audit B4: a lexer that EXISTS but fails mid-stream must log (the file then
+    uses a different token alphabet than its lexed siblings) and fall back."""
+    import diffinite.fingerprint as fp
+
+    class _BadLexer:
+        def get_tokens(self, src):
+            raise RuntimeError("boom")
+            yield  # pragma: no cover
+
+    import pygments.lexers as pl
+    monkeypatch.setattr(pl, "get_lexer_for_filename", lambda name: _BadLexer())
+    with caplog.at_level("WARNING"):
+        toks = fp.tokenize("pub fn f() {}", normalize=True, ext=".rs", lang_aware=True)
+    assert "ID" in toks  # Tier-1 fallback engaged
+    assert any("lang-aware lexing failed" in r.getMessage() for r in caplog.records)

@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.13.0] — 2026-06-23
+
+### Added
+
+- **Measured normalize false-positive rate.** `--normalize` (identifier flattening) collapses small, standard code onto identical fingerprints, so independent work and renamed copies can score the same. A validation harness (`tests/validation/error_rate.py`, run via `python -m tests.validation.error_rate`) now measures precision/recall per file pair on the Karnalim IR-Plag corpus and commits the evidence under `example/validation/`. Every `--normalize` report discloses its measured false-positive rate — with the Wilson confidence interval, the per-level recall (near-verbatim only), and the small-file scope — so a flagged match is not read as a known copy verdict.
+- **Calibrated normalize operating point.** Under `--normalize`, `--threshold-deep` now defaults to **93** (calibrated for false-positive ≤ 1%) instead of 5, and matches whose smaller file is below a 45-token floor are reported as **inconclusive** rather than confident findings. The raw (non-normalize) default stays 5.
+- **`--lang-aware`** (opt-in): language-aware normalization via Pygments lexers (falling back to per-language keyword sets) so keywords like Rust `fn`/`pub` or Go `func` are preserved instead of flattened to `ID`, reducing false positives on non-JVM/Python/JS languages.
+- **Unicode/i18n example** (`example/unicode`) and end-to-end coverage for non-ASCII filenames, CJK/Cyrillic/Arabic content, and emoji.
+
+### Changed
+
+- The "Content Match" headline is relabelled **"Line match (difflib)"** across all report formats, and the difflib `autojunk` state is now shown in every Analysis Configuration banner — the figure is a line-level difflib ratio, not semantic similarity.
+- A deep-compare file-size cap (`--max-file-size`) now also bounds fingerprint extraction, so an untrusted large/pathological file cannot hang a run.
+
+### Fixed
+
+- Resolved dormant type-hint/import issues, an `AnalysisMetadata` field-order hazard, and a library entry point that omitted the normalize disclosure.
+
 ## [0.12.2] — 2026-06-22
 
 ### Fixed

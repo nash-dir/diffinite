@@ -40,6 +40,7 @@ import re
 import tempfile
 from pathlib import Path, PurePosixPath
 
+from diffinite.calibration import normalize_disclosure
 from diffinite.collector import collect_files, match_files, FUZZY_THRESHOLD
 from diffinite.deep_compare import run_deep_compare
 from diffinite.differ import compute_diff, generate_html_diff, read_file
@@ -226,8 +227,15 @@ def _build_metadata_banner_md(meta: AnalysisMetadata) -> str:
         f"| **K-gram (K)** | `{meta.k}` |",
         f"| **Window (W)** | `{meta.w}` |",
         f"| **Threshold (min Jaccard)** | `{meta.threshold:.1f}%` |",
-        "",
+        f"| **Line diff autojunk** | `{'on' if meta.autojunk else 'off'}` |",
     ]
+    if meta.lang_aware:
+        lines.append("| **Fingerprint channel** | `language-aware (Pygments/registry)` |")
+    lines.append("")
+    if meta.normalize and meta.exec_mode == "deep":
+        lines.append("> ℹ **Normalize false-positive disclosure:** "
+                     + normalize_disclosure(meta.threshold, meta.threshold_provenance)
+                     + "\n")
     if meta.deep_index_truncated:
         lines.append(
             "> ⚠ **Incomplete results:** the Deep Compare inverted index hit the "
@@ -248,7 +256,16 @@ def _build_metadata_banner_html(meta: AnalysisMetadata) -> str:
         "<strong>📋 Analysis Configuration</strong><br>\n"
         f"<strong>Mode:</strong> {html_mod.escape(meta.exec_mode)} &nbsp;|&nbsp; "
         f"<strong>K=</strong>{meta.k}, <strong>W=</strong>{meta.w}, "
-        f"<strong>min Jaccard=</strong>{meta.threshold:.1f}%"
+        f"<strong>min Jaccard=</strong>{meta.threshold:.1f}% &nbsp;|&nbsp; "
+        f"<strong>autojunk=</strong>{'on' if meta.autojunk else 'off'}"
+        + (" &nbsp;|&nbsp; <strong>lang-aware=</strong>on" if meta.lang_aware else "")
+        + (
+            '<br><span style="color:#555;">ℹ '
+            + html_mod.escape(
+                normalize_disclosure(meta.threshold, meta.threshold_provenance))
+            + "</span>"
+            if (meta.normalize and meta.exec_mode == "deep") else ""
+        )
         + (
             '<br><span style="color:#b00020;font-weight:bold;">'
             "⚠ Incomplete results: Deep Compare index truncated at "
@@ -312,8 +329,8 @@ def _generate_markdown_report(
 
     # Summary table
     lines.append("## Summary\n")
-    lines.append("| # | File A | File B | Name Sim. | Content Match | +Added | −Deleted |")
-    lines.append("|---|--------|--------|:---------:|:-------------:|:------:|:--------:|")
+    lines.append("| # | File A | File B | Name Sim. | Line match (difflib) | +Added | −Deleted |")
+    lines.append("|---|--------|--------|:---------:|:--------------------:|:------:|:--------:|")
     for idx, r in enumerate(results, 1):
         if r.binary:
             status = "✓ Match" if r.hash_match else "✗ Mismatch"
@@ -348,14 +365,24 @@ def _generate_markdown_report(
         lines.append("\n## Deep Compare — N:M Cross-Match Results\n")
         lines.append("| A File | B File(s) | Shared Hashes | Jaccard |")
         lines.append("|--------|-----------|:-------------:|:-------:|")
+        any_inconclusive = False
         for dr in deep_results:
-            for b_file, shared, jaccard in dr.matched_files_b:
+            for b_file, shared, jaccard, inconclusive in dr.matched_files_b:
                 # 2 decimals of percent reflect the 4-dp Jaccard used for ordering,
                 # so the displayed value and the sort order agree.
+                pct = f"{jaccard*100:.2f}%"
+                if inconclusive:
+                    any_inconclusive = True
+                    pct += " _(inconclusive)_"
                 lines.append(
                     f"| `{_md_escape(dr.file_a)}` | `{_md_escape(b_file)}` "
-                    f"| {shared} | {jaccard*100:.2f}% |"
+                    f"| {shared} | {pct} |"
                 )
+        if any_inconclusive:
+            lines.append("\n> ℹ **Inconclusive** matches fall below the calibrated "
+                         "token floor: under normalize, files this small cannot be "
+                         "distinguished from independent same-domain code, so the "
+                         "score is not a confident finding.\n")
 
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -396,7 +423,10 @@ def _generate_json_report(
             "k": metadata.k,
             "w": metadata.w,
             "threshold": metadata.threshold,
+            "threshold_provenance": metadata.threshold_provenance,
             "autojunk": metadata.autojunk,
+            "normalize": metadata.normalize,
+            "lang_aware": metadata.lang_aware,
             "deep_index_truncated": metadata.deep_index_truncated,
         }
 
@@ -429,8 +459,9 @@ def _generate_json_report(
                         "file_b": b_file,
                         "shared_hashes": shared,
                         "jaccard": jaccard,
+                        "inconclusive": inconclusive,
                     }
-                    for b_file, shared, jaccard in dr.matched_files_b
+                    for b_file, shared, jaccard, inconclusive in dr.matched_files_b
                 ],
             })
 
@@ -500,7 +531,7 @@ def _generate_html_report(
             diff_sections.append(
                 f'<h2>{idx}. {html_mod.escape(r.match.rel_path_a)} &harr; '
                 f'{html_mod.escape(r.match.rel_path_b)}</h2>\n'
-                f'<p>Content match: {_ratio_badge(r.ratio)} &nbsp; '
+                f'<p>Line-level match (difflib): {_ratio_badge(r.ratio)} &nbsp; '
                 f'<span style="color:green">+{r.additions} {unit}(s)</span> &nbsp; '
                 f'<span style="color:red">-{r.deletions} {unit}(s)</span></p>\n'
                 f'{r.html_diff}\n'
@@ -583,7 +614,7 @@ def _generate_individual_html(
             body = (
                 f'<h2>{html_mod.escape(r.match.rel_path_a)} &harr; '
                 f'{html_mod.escape(r.match.rel_path_b)}</h2>\n'
-                f'<p>Content match: {_ratio_badge(r.ratio)} &nbsp; '
+                f'<p>Line-level match (difflib): {_ratio_badge(r.ratio)} &nbsp; '
                 f'<span style="color:green">+{r.additions} {unit}(s)</span> &nbsp; '
                 f'<span style="color:red">-{r.deletions} {unit}(s)</span></p>\n'
                 f'{r.html_diff}\n'
@@ -710,7 +741,7 @@ a:hover {{ text-decoration: underline; }}
 <thead>
 <tr>
 <th>#</th><th>File A (→ Click to View)</th><th>File B</th>
-<th>Name Sim.</th><th>Content Match</th><th>Added</th><th>Deleted</th>
+<th>Name Sim.</th><th>Line match (difflib)</th><th>Added</th><th>Deleted</th>
 </tr>
 </thead>
 <tbody>
@@ -752,6 +783,7 @@ def run_pipeline(
     window_size: int = DEFAULT_W,
     min_jaccard: float = 0.05,
     normalize: bool = False,
+    lang_aware: bool = False,
     metadata: AnalysisMetadata | None = None,
     # Multi-format output
     report_pdf: str | None = None,
@@ -821,7 +853,9 @@ def run_pipeline(
     dir_a_disp = dir_alias_a if dir_alias_a else Path(dir_a).resolve().name
     dir_b_disp = dir_alias_b if dir_alias_b else Path(dir_b).resolve().name
 
-    # Build default metadata if caller didn't provide one
+    # Build default metadata if caller didn't provide one. Must reflect the
+    # actual channel (normalize/lang_aware) or a library run silently omits the
+    # false-positive disclosure while still emitting inconclusive flags.
     if metadata is None:
         metadata = AnalysisMetadata(
             exec_mode=exec_mode,
@@ -830,6 +864,8 @@ def run_pipeline(
             # Record on the 0-100 scale, matching the CLI (--threshold-deep) so
             # the same setting reads identically regardless of entry point.
             threshold=min_jaccard * 100,
+            normalize=normalize,
+            lang_aware=lang_aware,
         )
 
     # Parse ignore file if provided
@@ -982,8 +1018,9 @@ def run_pipeline(
             dir_a, dir_b, files_a, files_b,
             k=kgram_size, w=window_size,
             workers=workers, min_jaccard=min_jaccard,
-            normalize=normalize,
+            normalize=normalize, lang_aware=lang_aware,
             max_index_entries=max_index_entries,
+            max_file_size_mb=max_file_size_mb,
             status=deep_status,
         )
         # Surface index truncation so a capped run is not read as complete.
@@ -1325,11 +1362,11 @@ def _generate_pdf_report(
                 with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
                     writer = csv.writer(f)
                     col_header = "Bates Range" if show_bates_number else "Page Range"
-                    # "Name Sim." = fuzzy filename similarity; "Content Match" = difflib
-                    # content ratio. Keeping them in separate, explicitly-labelled columns
-                    # prevents reading a 100% filename match as identical file content.
+                    # "Name Sim." = fuzzy filename similarity; "Line match (difflib)" =
+                    # difflib line-level ratio. Keeping them in separate, explicitly-labelled
+                    # columns prevents reading a 100% filename match as identical file content.
                     writer.writerow(
-                        ["Index", "File A", "File B", "Name Sim. (%)", "Content Match (%)", col_header]
+                        ["Index", "File A", "File B", "Name Sim. (%)", "Line match (difflib, %)", col_header]
                     )
 
                     for row_idx, row in enumerate(exhibit_data, 1):

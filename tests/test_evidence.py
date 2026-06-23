@@ -1,8 +1,22 @@
 """Tests for the evidence module (Jaccard similarity)."""
 
+import typing
+
 import pytest
 
-from diffinite.evidence import jaccard_similarity
+from diffinite.evidence import jaccard_similarity, write_manifest
+
+
+class TestTypeHints:
+    def test_write_manifest_type_hints_resolve(self):
+        """Optional must be importable so get_type_hints() does not raise.
+
+        write_manifest annotates root_label_a/b with Optional[str]; under
+        ``from __future__ import annotations`` the NameError stays dormant until
+        something resolves the hints. This locks in the import fix.
+        """
+        hints = typing.get_type_hints(write_manifest)
+        assert hints["root_label_a"] == typing.Optional[str]
 
 
 class TestJaccardSimilarity:

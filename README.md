@@ -213,8 +213,9 @@ Korean, Japanese, and Chinese text is rendered correctly in PDF output. By defau
 |--------|:-------:|-------------|
 | `--k-gram N` | `5` | K-gram size for Winnowing. Larger K = fewer but more specific fingerprints. (Schleimer 2003, §4.2) |
 | `--window N` | `4` | Winnowing window size. Guarantees detection of any shared sequence ≥ `K+W−1` = 8 tokens. |
-| `--threshold-deep N` | `5` | Minimum Jaccard similarity (percent, on a 0–100 scale) to include in results. Below 5% is considered noise. |
-| `--normalize` | off | Normalize identifiers → `ID`, literals → `LIT` before fingerprinting. Improves Type-2 clone detection (renamed variables). |
+| `--threshold-deep N` | `5` raw / `93` normalize | Minimum Jaccard similarity (percent, 0–100) to include in results. The default differs by channel: raw uses 5; `--normalize` uses **93**, calibrated for a false-positive rate ≤ 1% (see [Normalize precision](#normalize-precision--false-positive-rate) below). Pass a value to override. |
+| `--normalize` | off | Normalize identifiers → `ID`, literals → `LIT` before fingerprinting. Improves Type-2 clone detection (renamed variables) but **raises the false-positive rate on independent code** — see [Normalize precision](#normalize-precision--false-positive-rate). Matches below a 45-token floor are reported as *inconclusive*, and every normalize report discloses its measured false-positive rate. |
+| `--lang-aware` | off | With `--normalize`, use language-aware normalization (Pygments lexer, falling back to per-language keyword sets) so keywords like Rust `fn`/`pub` or Go `func` are preserved instead of flattened to `ID`. Opt-in; produces fingerprints incompatible with the default channel. No effect without `--normalize`. |
 | `--workers N` | `4` | Number of parallel worker processes for diff rendering and fingerprint extraction. |
 
 ### Forensic Options
@@ -306,7 +307,7 @@ diffinite dir_a/ dir_b/ \
 # Larger K-gram = fewer false positives, may miss short matches
 diffinite dir_a/ dir_b/ --k-gram 7 --window 5
 
-# Lower Jaccard threshold = show weaker matches (0–100 scale; default 5)
+# Lower Jaccard threshold = show weaker matches (0–100 scale; raw default 5, 93 under --normalize)
 diffinite dir_a/ dir_b/ --threshold-deep 2
 
 # Stricter file name matching
@@ -439,6 +440,30 @@ diffinite example/plagiarism/case-01/original example/plagiarism/case-01/plagiar
 
 **Observation**: Jaccard decreases as the plagiarism level increases (L1→L6). Verbatim and lightly-edited copies (L1–L3) score 100%. Heavily restructured copies (L5, L6) still show 15–38% shared fingerprints — well above the negative control baseline.
 
+### Normalize precision — false-positive rate
+
+The negative control above runs **without** `--normalize`, while the IR-Plag run uses it — so neither shows what `--normalize` does to *independent* code. That cell matters: flattening every identifier to `ID` makes the language-forced skeleton of small, standard code (a textbook `for`-loop) identical regardless of author, so independent work and renamed copies can collapse to the **same** Jaccard.
+
+It is measured, symmetrically, by the validation harness ([`tests/validation/error_rate.py`](tests/validation/error_rate.py); regenerate with `python -m tests.validation.error_rate`). The harness scores **per file pair** — every original file vs every candidate file — matching the runtime's per-file N:M decision and per-file token floor. On the IR-Plag corpus, where `non-plagiarized/` submissions are independent answers to the *same* assignment (any similarity is a false positive):
+
+| Channel | False-positive rate @ threshold 5 | Recall @ threshold 5 |
+|---------|:-:|:-:|
+| raw | 100% (tiny files) | 100% |
+| normalize | **100%** | 100% |
+
+The shipped `--threshold-deep 5` is meaningless under `--normalize`: the false-positive rate is 100%. Two mitigations ship as a result (see [`example/validation/error_rate.md`](example/validation/error_rate.md) for the full curves and the operating-point characterization, and [`calibration.json`](example/validation/calibration.json) for the machine-readable numbers):
+
+1. **Calibrated threshold** — under `--normalize`, the default threshold is raised to **93**, the operating point for false-positive ≤ 1%.
+2. **Inconclusive band** — a normalize match whose smaller file is below a **45-token floor** is reported as *inconclusive*: at that size, precision is unsalvageable at any useful threshold.
+
+**What the operating point honestly is** (the calibration's own caveats, disclosed on every normalize report and in `error_rate.md`):
+
+- The false-positive rate is **0.95%, but that is 1 of 105 file pairs** — Wilson 95% CI **[0.17%, 5.2%]**. It is not a *known* 1% rate; the upper bound exceeds 5%.
+- **Recall is not uniform.** At threshold 93: L1 65%, L2 46%, L3 21%, **L4–L6 0%**. The threshold reliably flags only near-verbatim copies; heavily restructured copies fall below it and need manual review. The pooled "~22%" should not be read as uniform sensitivity.
+- The 105 negatives derive from only **7 assignments** (not i.i.d.), and nothing **> 212 tokens** was tested — the operating point is unvalidated on large files. At FP ≤ 1% the 45-token floor is non-binding on this corpus (it gates sub-floor matches at runtime, which this corpus does not exercise).
+
+For non-JVM/Python/JS languages, `--lang-aware` reduces the collapse by preserving language keywords (e.g. Rust `fn`/`pub`) instead of flattening them to `ID`.
+
 ### 4. AOSP Framework — Same Codebase, Minor Edits
 
 **Why this dataset**: Two versions of Android's `Handler`/`Looper`/`Message` framework. Small evolutionary changes between versions.
@@ -459,6 +484,18 @@ diffinite example/aosp/left example/aosp/right \
 | `Message.java` | 96.0% | 96.3% |
 
 **Observation**: High Match scores correctly reflect that these are minor revisions of the same codebase — and the scores stay high whether comments are included (the default) or stripped, showing the measurement is robust to that choice. The sample report image at the top of this README uses this dataset with comments included.
+
+### 5. Unicode / i18n — Non-ASCII Source
+
+**Why this dataset**: A small hand-authored A/B pair exercising non-ASCII **filenames** (`계산기.py`, `日本語.java`), CJK / Cyrillic / Arabic identifiers and comments, RTL strings, and emoji — end to end through the report pipeline.
+
+```bash
+diffinite example/unicode/left example/unicode/right \
+    --mode deep --normalize --pdf-lang ko \
+    --report-pdf uni.pdf --report-html uni.html --report-md uni.md
+```
+
+**What it verifies**: the Unicode-aware tokenizer treats a CJK/Cyrillic identifier as a single token (so non-ASCII fingerprint density matches ASCII); comment-stripping handles non-ASCII; non-ASCII filenames render in every format; and the PDF embeds CJK glyphs (`--pdf-lang ko` selects a Korean font). Covered by `tests/test_unicode_reports.py`.
 
 ---
 

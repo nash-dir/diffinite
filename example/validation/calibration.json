@@ -1,0 +1,49 @@
+{
+  "unit": "file-pair",
+  "fp_le_5": {
+    "floor_tokens": 74,
+    "threshold": 78,
+    "fp_rate": 4.65,
+    "fp_ci95": [
+      1.49,
+      9.39
+    ],
+    "fp_observed": [
+      4,
+      105
+    ],
+    "recall": 34.9,
+    "recall_by_level": {
+      "L1": 90.0,
+      "L2": 73.2,
+      "L3": 38.6,
+      "L4": 3.3,
+      "L5": 0.0,
+      "L6": 0.0
+    },
+    "coverage": 0.819
+  },
+  "fp_le_1": {
+    "floor_tokens": 45,
+    "threshold": 93,
+    "fp_rate": 0.95,
+    "fp_ci95": [
+      0.17,
+      5.2
+    ],
+    "fp_observed": [
+      1,
+      105
+    ],
+    "recall": 21.69,
+    "recall_by_level": {
+      "L1": 65.0,
+      "L2": 46.4,
+      "L3": 21.1,
+      "L4": 0.0,
+      "L5": 0.0,
+      "L6": 0.0
+    },
+    "coverage": 1.0
+  }
+}

@@ -63,6 +63,48 @@ class TestBuildCoverHtml:
         html = _cover()
         assert "95" in html  # ratio 0.95 → 95%
 
+    def test_content_match_relabelled_to_difflib(self):
+        """The headline column must name difflib so the line-level ratio is not
+        misread as semantic similarity (forensic clarity)."""
+        html = _cover()
+        assert "Line match (difflib)" in html
+        assert "Content Match" not in html
+
+    def test_metadata_banner_surfaces_autojunk(self):
+        from diffinite.models import AnalysisMetadata
+        meta = AnalysisMetadata(
+            exec_mode="deep", k=5, w=4, threshold=5.0, autojunk=False,
+        )
+        html = build_cover_body(
+            _make_results(), unmatched_a=[], unmatched_b=[],
+            dir_a="a", dir_b="b", by_word=False, strip_comments=False,
+            metadata=meta,
+        )
+        assert "autojunk=" in html
+        assert "off" in html  # autojunk=False rendered
+
+    def _cover_with_meta(self, *, normalize, exec_mode):
+        from diffinite.models import AnalysisMetadata
+        from diffinite.calibration import NORMALIZE_DEFAULT_THRESHOLD
+        meta = AnalysisMetadata(
+            exec_mode=exec_mode, k=5, w=4, threshold=NORMALIZE_DEFAULT_THRESHOLD,
+            threshold_provenance="normalize-default", normalize=normalize,
+        )
+        return build_cover_body(
+            _make_results(), unmatched_a=[], unmatched_b=[],
+            dir_a="a", dir_b="b", by_word=False, strip_comments=False, metadata=meta,
+        )
+
+    def test_pdf_cover_discloses_fp_under_normalize_deep(self):
+        # The PDF is the primary forensic deliverable; it must carry the FP rate.
+        html = self._cover_with_meta(normalize=True, exec_mode="deep")
+        assert "false-positive" in html.lower()
+
+    def test_pdf_cover_no_disclosure_in_simple_mode(self):
+        # normalize is a no-op without deep fingerprinting, so no disclosure.
+        html = self._cover_with_meta(normalize=True, exec_mode="simple")
+        assert "false-positive" not in html.lower()
+
     def test_contains_additions_deletions(self):
         html = _cover()
         assert "+10" in html
@@ -89,7 +131,7 @@ class TestBuildCoverHtml:
         deep = [
             DeepMatchResult(
                 file_a="foo.py",
-                matched_files_b=[("bar.py", 50, 0.8)],
+                matched_files_b=[("bar.py", 50, 0.8, False)],
             ),
         ]
         html = _cover(deep_results=deep)
@@ -100,13 +142,33 @@ class TestBuildCoverHtml:
         deep = [
             DeepMatchResult(
                 file_a="foo.py",
-                matched_files_b=[("bar.py", 50, 0.8)],
+                matched_files_b=[("bar.py", 50, 0.8, False)],
                 fingerprint_count_a=100,
             ),
         ]
         html = _cover(deep_results=deep)
         assert "foo." in html
         assert "bar." in html
+
+    def test_inconclusive_match_is_flagged(self):
+        deep = [
+            DeepMatchResult(
+                file_a="foo.py",
+                matched_files_b=[("bar.py", 50, 0.99, True)],  # inconclusive
+            ),
+        ]
+        html = _cover(deep_results=deep)
+        assert "inconclusive" in html.lower()
+
+    def test_conclusive_match_not_flagged(self):
+        deep = [
+            DeepMatchResult(
+                file_a="foo.py",
+                matched_files_b=[("bar.py", 50, 0.99, False)],
+            ),
+        ]
+        html = _cover(deep_results=deep)
+        assert "inconclusive" not in html.lower()
         assert "50" in html  # shared hashes
 
 

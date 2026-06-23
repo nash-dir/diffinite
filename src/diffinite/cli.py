@@ -17,6 +17,7 @@ import argparse
 import logging
 import sys
 
+from diffinite.calibration import NORMALIZE_DEFAULT_THRESHOLD
 from diffinite.collector import FUZZY_THRESHOLD
 from diffinite.fingerprint import DEFAULT_K, DEFAULT_W
 from diffinite.models import AnalysisMetadata
@@ -26,6 +27,25 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
+
+
+def _resolve_threshold_deep(
+    threshold_deep: float | None, normalize: bool
+) -> tuple[float, str]:
+    """Resolve the deep Jaccard threshold and record its provenance.
+
+    The raw and normalize channels have different false-positive profiles, so a
+    normalize run left at the raw-calibrated 5% has a measured ~100% false-positive
+    rate on independent code. When the user did not pass --threshold-deep, the
+    normalize channel substitutes the ratified normalize default; otherwise the
+    explicit value wins. Returns ``(value_0_100, provenance)`` where provenance is
+    one of ``"user" | "default" | "normalize-default"``.
+    """
+    if threshold_deep is not None:
+        return threshold_deep, "user"
+    if normalize:
+        return NORMALIZE_DEFAULT_THRESHOLD, "normalize-default"
+    return 5.0, "default"
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -392,11 +412,12 @@ def main(argv: list[str] | None = None) -> None:
     deep_group.add_argument(
         "--threshold-deep",
         type=float,
-        default=5,
+        default=None,
         dest="threshold_deep",
         help=(
-            "Minimum Jaccard similarity 0–100 to report (default: 5). "
-            "Below 5%% is considered noise."
+            "Minimum Jaccard similarity 0–100 to report. Default: 5 (raw), or "
+            f"{NORMALIZE_DEFAULT_THRESHOLD:.0f} when --normalize is set (calibrated "
+            "for false-positive ≤ 1%%; see calibration.py). Pass a value to override."
         ),
     )
     deep_group.add_argument(
@@ -406,6 +427,19 @@ def main(argv: list[str] | None = None) -> None:
         help=(
             "Normalize identifiers to ID and literals to LIT before "
             "fingerprinting (improves Type-2 clone detection)"
+        ),
+    )
+    deep_group.add_argument(
+        "--lang-aware",
+        action="store_true",
+        default=False,
+        dest="lang_aware",
+        help=(
+            "With --normalize, use language-aware normalization (Pygments lexer, "
+            "falling back to per-language keyword sets) so keywords like Rust fn/pub "
+            "or Go func are preserved instead of flattened to ID. Opt-in: produces "
+            "fingerprints incompatible with the default channel. No effect without "
+            "--normalize."
         ),
     )
 
@@ -457,6 +491,10 @@ def main(argv: list[str] | None = None) -> None:
 
     args = parser.parse_args(argv)
 
+    # ── Resolve the deep threshold default by channel ────────────────
+    args.threshold_deep, threshold_provenance = _resolve_threshold_deep(
+        args.threshold_deep, args.normalize)
+
     # ── Validate numeric ranges at the boundary ──────────────────────
     # Degenerate values must fail loudly here, not crash mid-run after the
     # rendering phase (--workers/--window) or silently fabricate forensic
@@ -485,7 +523,10 @@ def main(argv: list[str] | None = None) -> None:
         k=args.k_gram,
         w=args.window,
         threshold=args.threshold_deep,  # 0-100 scale in metadata
+        threshold_provenance=threshold_provenance,
         autojunk=not args.no_autojunk,
+        normalize=args.normalize,
+        lang_aware=args.lang_aware,
     )
 
     # Resolve encoding
@@ -516,6 +557,7 @@ def main(argv: list[str] | None = None) -> None:
         window_size=args.window,
         min_jaccard=min_jaccard_internal,
         normalize=args.normalize,
+        lang_aware=args.lang_aware,
         metadata=metadata,
         # Forensic options
         autojunk=not args.no_autojunk,

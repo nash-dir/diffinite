@@ -36,14 +36,22 @@ import pkgutil
 import sys
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from pypdf import PdfReader, PdfWriter
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.pdfgen import canvas
 from xhtml2pdf import pisa
 
+from diffinite.calibration import normalize_disclosure
 from diffinite.models import DeepMatchResult, DiffResult, FileHashEntry
+
+if TYPE_CHECKING:
+    # build_cover_body's ``metadata`` param is annotated with this. Importing it
+    # only under TYPE_CHECKING keeps the runtime import inside the function (to
+    # avoid a circular import via models) while letting the forward-ref string
+    # resolve under get_type_hints / static analysis.
+    from diffinite.models import AnalysisMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -581,9 +589,21 @@ def build_cover_body(
             '<strong>&#128203; Analysis Configuration</strong><br>\n'
             f'<strong>Mode:</strong> {html.escape(metadata.exec_mode)} &nbsp;|&nbsp; '
             f'<strong>K=</strong>{metadata.k}, <strong>W=</strong>{metadata.w}, '
-            f'<strong>T=</strong>{metadata.threshold:.2f}'
+            f'<strong>T=</strong>{metadata.threshold:.2f} &nbsp;|&nbsp; '
+            f'<strong>autojunk=</strong>{"on" if metadata.autojunk else "off"}'
+            + (' &nbsp;|&nbsp; <strong>lang-aware=</strong>on'
+               if metadata.lang_aware else '')
             + '\n</div>\n'
         )
+        # Normalize false-positive disclosure — the PDF is the primary forensic
+        # deliverable, so it must carry the error rate, not just HTML/MD.
+        if metadata.normalize and metadata.exec_mode == "deep":
+            meta_html += (
+                '<p class="meta" style="margin-top:-10px;">&#8505; '
+                + html.escape(normalize_disclosure(
+                    metadata.threshold, metadata.threshold_provenance))
+                + '</p>\n'
+            )
 
     summary_rows = ""
     for idx, r in enumerate(results, 1):
@@ -652,9 +672,14 @@ def build_cover_body(
             '<tr><th style="width: 40%;">A File</th><th style="width: 40%;">B File(s)</th>'
             '<th style="width: 10%;">Shared Hashes</th><th style="width: 10%;">Jaccard</th></tr>\n'
         )
+        any_inconclusive = False
         for dr in deep_results:
-            for b_file, shared, jaccard in dr.matched_files_b:
+            for b_file, shared, jaccard, inconclusive in dr.matched_files_b:
                 jbadge = _ratio_badge(jaccard)
+                if inconclusive:
+                    any_inconclusive = True
+                    jbadge += (' <span class="badge badge-mid" '
+                               'title="below token floor">inconclusive</span>')
                 deep_html += (
                     f"<tr>"
                     f"<td>{_break_path(html.escape(dr.file_a))}</td>"
@@ -664,6 +689,13 @@ def build_cover_body(
                     f"</tr>\n"
                 )
         deep_html += "</table>\n"
+        if any_inconclusive:
+            deep_html += (
+                '<p class="meta">&#8505; <strong>Inconclusive</strong> matches fall '
+                'below the calibrated token floor: under normalize, files this small '
+                'cannot be distinguished from independent same-domain code, so the '
+                'score is not a confident finding.</p>\n'
+            )
 
     body = f"""\
 <h1>Diffinite &mdash; Source Code Diff Report</h1>
@@ -681,7 +713,7 @@ def build_cover_body(
 <table class="summary">
 <tr>
   <th style="width: 4%;">#</th><th style="width: 34%;">File A</th><th style="width: 34%;">File B</th><th style="width: 8%;">Name Sim.</th>
-  <th style="width: 10%;">Content Match</th><th style="width: 5%;">Added</th><th style="width: 5%;">Deleted</th>
+  <th style="width: 10%;">Line match (difflib)</th><th style="width: 5%;">Added</th><th style="width: 5%;">Deleted</th>
 </tr>
 {summary_rows}
 </table>
@@ -721,7 +753,7 @@ def build_diff_page_html(
         body = (
             f"<h2>{index}. {html.escape(r.match.rel_path_a)} &harr; "
             f"{html.escape(r.match.rel_path_b)}</h2>\n"
-            f"<p>Content match: {_ratio_badge(r.ratio)} &nbsp; "
+            f"<p>Line-level match (difflib): {_ratio_badge(r.ratio)} &nbsp; "
             f"<span style='color:green'>+{r.additions} {unit}(s)</span> &nbsp; "
             f"<span style='color:red'>-{r.deletions} {unit}(s)</span></p>\n"
             f"{r.html_diff}\n"

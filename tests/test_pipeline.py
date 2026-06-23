@@ -341,3 +341,78 @@ class TestPipelineAuditFeatures:
             else:
                 os.chmod(f_a, 0o644)
                 os.chmod(f_b, 0o644)
+
+
+class TestMetadataBannerAutojunk:
+    """The difflib autojunk state must be visible in MD/HTML config banners,
+    not only recorded in the JSON config (forensic transparency)."""
+
+    def _meta(self, autojunk):
+        from diffinite.models import AnalysisMetadata
+        return AnalysisMetadata(
+            exec_mode="simple", k=5, w=4, threshold=5.0, autojunk=autojunk,
+        )
+
+    def test_md_banner_shows_autojunk(self):
+        from diffinite.pipeline import _build_metadata_banner_md
+        assert "autojunk" in _build_metadata_banner_md(self._meta(True)).lower()
+        assert "off" in _build_metadata_banner_md(self._meta(False)).lower()
+
+    def test_html_banner_shows_autojunk(self):
+        from diffinite.pipeline import _build_metadata_banner_html
+        assert "autojunk=" in _build_metadata_banner_html(self._meta(True))
+        assert "off" in _build_metadata_banner_html(self._meta(False))
+
+
+class TestNormalizeDisclosure:
+    """A normalize report must disclose its false-positive rate (Daubert)."""
+
+    def _meta(self, normalize, provenance="normalize-default"):
+        from diffinite.models import AnalysisMetadata
+        from diffinite.calibration import NORMALIZE_DEFAULT_THRESHOLD
+        return AnalysisMetadata(
+            exec_mode="deep", k=5, w=4, threshold=NORMALIZE_DEFAULT_THRESHOLD,
+            threshold_provenance=provenance, normalize=normalize,
+        )
+
+    def test_md_banner_discloses_when_normalize(self):
+        from diffinite.pipeline import _build_metadata_banner_md
+        from diffinite.calibration import NORMALIZE_FP_RATE_PCT
+        out = _build_metadata_banner_md(self._meta(True))
+        assert "false-positive" in out.lower()
+        assert f"{NORMALIZE_FP_RATE_PCT:.2g}%" in out
+
+    def test_md_banner_silent_without_normalize(self):
+        from diffinite.pipeline import _build_metadata_banner_md
+        assert "false-positive" not in _build_metadata_banner_md(self._meta(False)).lower()
+
+    def test_html_banner_discloses_when_normalize(self):
+        from diffinite.pipeline import _build_metadata_banner_html
+        assert "false-positive" in _build_metadata_banner_html(self._meta(True)).lower()
+
+
+class TestMetadataCompatAndLibraryDisclosure:
+    """Audit B1/B2: metadata field-order compat + library-path disclosure."""
+
+    def test_positional_construction_preserved(self):
+        # Historical layout (exec_mode, k, w, threshold, autojunk, deep_index_truncated)
+        # must still hold — new fields are appended after, not inserted mid-struct.
+        from diffinite.models import AnalysisMetadata
+        m = AnalysisMetadata("deep", 5, 4, 5.0, False)
+        assert m.autojunk is False                 # 5th positional is autojunk
+        assert m.threshold_provenance == "default"  # appended fields keep defaults
+        assert m.normalize is False and m.lang_aware is False
+
+    def test_library_run_discloses_fp_without_explicit_metadata(self, tmp_path):
+        # run_pipeline(normalize=True) with no metadata must still disclose the FP
+        # rate (the default-metadata branch now records normalize=True).
+        from diffinite.pipeline import run_pipeline
+        a = tmp_path / "a"; a.mkdir()
+        b = tmp_path / "b"; b.mkdir()
+        code = "def total(xs):\n    s = 0\n    for x in xs:\n        s += x\n    return s\n"
+        (a / "m.py").write_text(code, encoding="utf-8")
+        (b / "m.py").write_text(code, encoding="utf-8")
+        md = tmp_path / "r.md"
+        run_pipeline(str(a), str(b), strip_comments=True, exec_mode="deep",
+                     normalize=True, report_md=str(md), min_jaccard=0.05)
+        assert "false-positive" in md.read_text(encoding="utf-8").lower()
