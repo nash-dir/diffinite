@@ -116,14 +116,14 @@ class TestInconclusiveBand:
     """WS-B.enforce: under normalize, a pair whose smaller file is below the
     calibrated token floor is flagged inconclusive (4th tuple element)."""
 
-    def _run(self, tmp_path, code, normalize):
+    def _run(self, tmp_path, code, normalize, *, lang_aware=False, ext="py"):
         from diffinite.deep_compare import run_deep_compare
-        a = tmp_path / "a"; a.mkdir()
-        b = tmp_path / "b"; b.mkdir()
-        (a / "f.py").write_text(code, encoding="utf-8")
-        (b / "f.py").write_text(code, encoding="utf-8")
-        return run_deep_compare(str(a), str(b), ["f.py"], ["f.py"],
-                                workers=1, normalize=normalize)
+        a = tmp_path / "a"; a.mkdir(parents=True)
+        b = tmp_path / "b"; b.mkdir(parents=True)
+        (a / f"f.{ext}").write_text(code, encoding="utf-8")
+        (b / f"f.{ext}").write_text(code, encoding="utf-8")
+        return run_deep_compare(str(a), str(b), [f"f.{ext}"], [f"f.{ext}"],
+                                workers=1, normalize=normalize, lang_aware=lang_aware)
 
     def test_small_normalized_pair_is_inconclusive(self, tmp_path):
         res = self._run(tmp_path, "def f(x):\n    return x + 1\n", True)
@@ -138,3 +138,12 @@ class TestInconclusiveBand:
         # even for tiny files.
         res = self._run(tmp_path, "def f(x):\n    return x + 1\n", False)
         assert res and res[0].matched_files_b[0][3] is False
+
+    def test_floor_decision_is_channel_independent(self, tmp_path):
+        # The floor is a file-size gate in raw-token units, so --lang-aware (whose
+        # Pygments tokenization yields a different count) must reach the SAME
+        # inconclusive verdict as plain normalize for the same file.
+        rust = "pub fn add(a: i32, b: i32) -> i32 { let t = a + b; t }\n"
+        plain = self._run(tmp_path / "p", rust, True, ext="rs")
+        la = self._run(tmp_path / "l", rust, True, lang_aware=True, ext="rs")
+        assert plain[0].matched_files_b[0][3] == la[0].matched_files_b[0][3]

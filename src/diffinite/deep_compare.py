@@ -89,10 +89,11 @@ def _extract_one(args: tuple) -> tuple[str, set[int], int]:
     )
     hash_set = {fp.hash_value for fp in fps}
     # Token count gates the inconclusive band; only needed under normalize.
-    n_tokens = (
-        len(tokenize(cleaned, normalize=normalize, ext=extension, lang_aware=lang_aware))
-        if normalize else -1
-    )
+    # Use the RAW token count as a channel-independent file-size proxy: the floor
+    # (calibration.INCONCLUSIVE_TOKEN_FLOOR) was calibrated in raw-token units, and
+    # --lang-aware's Pygments tokenization yields a different count, so deriving the
+    # count from the active channel would shift the floor decision off-calibration.
+    n_tokens = len(tokenize(cleaned)) if normalize else -1
     return side, rel_path, hash_set, len(fps), n_tokens
 
 

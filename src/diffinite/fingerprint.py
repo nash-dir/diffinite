@@ -157,39 +157,40 @@ def _normalize_lang_aware(source: str, ext: str | None) -> list[str] | None:
     원문 보존, ``Name*``→``ID``, ``Number``→``LIT``, ``String``→``STR``, 주석은 폐기.
     이로써 함수 선언이 식별자와 구분되어, 비-JVM/Python/JS 언어의 위양성을 줄인다.
 
-    Pygments lexer를 ``ext`` 로 찾지 못하거나 ``ext`` 가 없으면 ``None`` 을 반환하여
-    호출쪽이 Tier-1(레지스트리 키워드)로 폴백하게 한다.
+    ``ext`` 가 없거나, Pygments lexer를 찾지 못하거나, 렉싱 중 어떤 예외라도 나면
+    ``None`` 을 반환하여 호출쪽이 Tier-1(레지스트리 키워드)로 폴백하게 한다 —
+    포렌식 실행이 파일 하나의 렉서 오류로 중단되지 않도록.
     """
     if not ext:
         return None
     try:
         from pygments.lexers import get_lexer_for_filename
         from pygments.token import Token
-        from pygments.util import ClassNotFound
     except ImportError:
         return None
+    out: list[str] = []
     try:
         lexer = get_lexer_for_filename("a" + ext)
-    except ClassNotFound:
+        for tok_type, val in lexer.get_tokens(source):
+            s = val.strip()
+            if not s:
+                continue                     # 공백/개행
+            if tok_type in Token.Comment:
+                continue                     # 주석 폐기 (입력이 미정제여도 안전)
+            if tok_type in Token.Keyword:
+                out.append(s)                # 키워드(타입·선언 포함) — 유지
+            elif tok_type in Token.Name:
+                out.append("ID")             # 식별자/함수명 → ID
+            elif tok_type in Token.Literal.Number:
+                out.append("LIT")            # 숫자 리터럴 → LIT
+            elif tok_type in Token.Literal.String:
+                out.append("STR")            # 문자열 리터럴 → STR
+            else:
+                out.append(s)                # 연산자/구두점/기타 — 유지
+    except Exception:  # noqa: BLE001 — any lexer failure falls back to Tier-1
+        # A forensic run must not abort because one file confuses the lexer;
+        # returning None lets tokenize() fall back to the registry keyword set.
         return None
-
-    out: list[str] = []
-    for tok_type, val in lexer.get_tokens(source):
-        s = val.strip()
-        if not s:
-            continue                     # 공백/개행
-        if tok_type in Token.Comment:
-            continue                     # 주석 폐기 (입력이 미정제여도 안전)
-        if tok_type in Token.Keyword:
-            out.append(s)                # 키워드(타입·선언 포함) — 유지
-        elif tok_type in Token.Name:
-            out.append("ID")             # 식별자/함수명 → ID
-        elif tok_type in Token.Literal.Number:
-            out.append("LIT")            # 숫자 리터럴 → LIT
-        elif tok_type in Token.Literal.String:
-            out.append("STR")            # 문자열 리터럴 → STR
-        else:
-            out.append(s)                # 연산자/구두점/기타 — 유지
     return out
 
 

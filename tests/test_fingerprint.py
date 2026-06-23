@@ -193,3 +193,23 @@ class TestLangAwareNormalization:
         # Sanity: both runs are deterministic and in range.
         assert 0.0 <= jac(True, True) <= 1.0
         assert 0.0 <= jac(True, False) <= 1.0
+
+
+class TestLangAwareRobustness:
+    """Self-review fixes: lexer failures must degrade to Tier-1, and the floor
+    token count must be channel-independent."""
+
+    def test_lexer_failure_falls_back_to_tier1(self, monkeypatch):
+        # Force any Pygments lexing to raise; lang-aware must not propagate it.
+        import diffinite.fingerprint as fp
+
+        def boom(*a, **k):
+            raise RuntimeError("lexer exploded")
+
+        # Patch the lazily-imported lookup so _normalize_lang_aware returns None.
+        import pygments.lexers as pl
+        monkeypatch.setattr(pl, "get_lexer_for_filename", boom)
+        toks = fp.tokenize("pub fn f() {}", normalize=True, ext=".rs", lang_aware=True)
+        # Falls back to Tier-1 (registry keywords) — still a normalized list.
+        assert isinstance(toks, list) and toks
+        assert "ID" in toks
