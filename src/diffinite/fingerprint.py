@@ -24,10 +24,13 @@ Call graph:
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Sequence
 
 from diffinite.models import FingerprintEntry
+
+logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────────────────────────────
 # 핵심 상수
@@ -168,9 +171,13 @@ def _normalize_lang_aware(source: str, ext: str | None) -> list[str] | None:
         from pygments.token import Token
     except ImportError:
         return None
-    out: list[str] = []
     try:
         lexer = get_lexer_for_filename("a" + ext)
+    except Exception:  # noqa: BLE001 — no lexer for this ext: expected, silent
+        return None                          # → Tier-1 (registry keywords)
+
+    out: list[str] = []
+    try:
         for tok_type, val in lexer.get_tokens(source):
             s = val.strip()
             if not s:
@@ -187,9 +194,13 @@ def _normalize_lang_aware(source: str, ext: str | None) -> list[str] | None:
                 out.append("STR")            # 문자열 리터럴 → STR
             else:
                 out.append(s)                # 연산자/구두점/기타 — 유지
-    except Exception:  # noqa: BLE001 — any lexer failure falls back to Tier-1
-        # A forensic run must not abort because one file confuses the lexer;
-        # returning None lets tokenize() fall back to the registry keyword set.
+    except Exception:  # noqa: BLE001 — lexer EXISTS but failed mid-stream
+        # This file falls back to Tier-1 while its same-extension siblings may use
+        # Tier-2 — a different token alphabet, risking a silent false negative. A
+        # forensic run must not abort, but the inconsistency must be observable.
+        logger.warning(
+            "lang-aware lexing failed for extension %r; this file uses the Tier-1 "
+            "fallback (different token alphabet than lexed files)", ext)
         return None
     return out
 

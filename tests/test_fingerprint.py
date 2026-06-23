@@ -213,3 +213,21 @@ class TestLangAwareRobustness:
         # Falls back to Tier-1 (registry keywords) — still a normalized list.
         assert isinstance(toks, list) and toks
         assert "ID" in toks
+
+
+def test_lexer_tokenize_failure_warns_and_falls_back(monkeypatch, caplog):
+    """Audit B4: a lexer that EXISTS but fails mid-stream must log (the file then
+    uses a different token alphabet than its lexed siblings) and fall back."""
+    import diffinite.fingerprint as fp
+
+    class _BadLexer:
+        def get_tokens(self, src):
+            raise RuntimeError("boom")
+            yield  # pragma: no cover
+
+    import pygments.lexers as pl
+    monkeypatch.setattr(pl, "get_lexer_for_filename", lambda name: _BadLexer())
+    with caplog.at_level("WARNING"):
+        toks = fp.tokenize("pub fn f() {}", normalize=True, ext=".rs", lang_aware=True)
+    assert "ID" in toks  # Tier-1 fallback engaged
+    assert any("lang-aware lexing failed" in r.getMessage() for r in caplog.records)

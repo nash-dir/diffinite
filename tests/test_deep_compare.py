@@ -147,3 +147,31 @@ class TestInconclusiveBand:
         plain = self._run(tmp_path / "p", rust, True, ext="rs")
         la = self._run(tmp_path / "l", rust, True, lang_aware=True, ext="rs")
         assert plain[0].matched_files_b[0][3] == la[0].matched_files_b[0][3]
+
+
+class TestSizeCap:
+    """Audit B3: oversized files are skipped from deep compare (both channels),
+    so an untrusted large/pathological file can't hang the run."""
+
+    def test_oversized_file_skipped(self, tmp_path):
+        from diffinite.deep_compare import run_deep_compare
+        a = tmp_path / "a"; a.mkdir()
+        b = tmp_path / "b"; b.mkdir()
+        big = "def f(x):\n    return x + 1\n" * 200  # ~5 KB
+        (a / "f.py").write_text(big, encoding="utf-8")
+        (b / "f.py").write_text(big, encoding="utf-8")
+        # 1 KB cap -> both files exceed it -> skipped -> no fingerprints -> no match
+        res = run_deep_compare(str(a), str(b), ["f.py"], ["f.py"],
+                               workers=1, max_file_size_mb=0.001)
+        assert res == []
+
+    def test_under_cap_still_matches(self, tmp_path):
+        from diffinite.deep_compare import run_deep_compare
+        a = tmp_path / "a"; a.mkdir()
+        b = tmp_path / "b"; b.mkdir()
+        code = "def f(x):\n    return x + 1\n" * 5
+        (a / "f.py").write_text(code, encoding="utf-8")
+        (b / "f.py").write_text(code, encoding="utf-8")
+        res = run_deep_compare(str(a), str(b), ["f.py"], ["f.py"],
+                               workers=1, max_file_size_mb=10.0)
+        assert res and res[0].matched_files_b

@@ -1020,6 +1020,7 @@ def run_pipeline(
             workers=workers, min_jaccard=min_jaccard,
             normalize=normalize, lang_aware=lang_aware,
             max_index_entries=max_index_entries,
+            max_file_size_mb=max_file_size_mb,
             status=deep_status,
         )
         # Surface index truncation so a capped run is not read as complete.

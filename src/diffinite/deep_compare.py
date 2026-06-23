@@ -62,16 +62,30 @@ def _extract_one(args: tuple) -> tuple[str, set[int], int]:
     """단일 파일의 핑거프린트를 추출한다.
 
     Args:
-        args: ``(side, abs_path, rel_path, extension, k, w, normalize, lang_aware)``
-              — tuple 포장은 ``pool.map()`` 인터페이스 제약.
+        args: ``(side, abs_path, rel_path, extension, k, w, normalize, lang_aware,
+                 max_bytes)`` — tuple 포장은 ``pool.map()`` 인터페이스 제약.
 
     Returns:
         ``(side, rel_path, hash_set, fingerprint_count, token_count)``
-        읽기 실패 시 빈 set / count=0 / token_count=-1 반환.
+        읽기 실패 / 크기 초과 시 빈 set / count=0 / token_count=-1 반환.
         ``token_count`` 은 normalize 모드에서만 계산한다(판정불가 floor 판정용);
         그 외에는 -1(미산정)을 돌려준다.
     """
-    side, abs_path, rel_path, extension, k, w, normalize, lang_aware = args
+    side, abs_path, rel_path, extension, k, w, normalize, lang_aware, max_bytes = args
+
+    # Size cap: skip oversized files entirely (both channels) so an untrusted
+    # large/pathological file can't hang the run — especially under --lang-aware,
+    # where Pygments lexing is expensive. Skipping (vs Tier-1 downgrade) also keeps
+    # the lang-aware tier consistent across same-extension files.
+    if max_bytes:
+        try:
+            if Path(abs_path).stat().st_size > max_bytes:
+                logger.warning(
+                    "Skipping oversized file in deep compare (> %d bytes): %s",
+                    max_bytes, rel_path)
+                return side, rel_path, set(), 0, -1
+        except OSError:
+            pass
 
     try:
         text = read_file(abs_path)
@@ -155,6 +169,7 @@ def run_deep_compare(
     normalize: bool = False,
     lang_aware: bool = False,
     max_index_entries: int = 10_000_000,
+    max_file_size_mb: float = 10.0,
     status: Optional[dict] = None,
 ) -> list[DeepMatchResult]:
     """Execute N:M cross-matching between two directories.
@@ -188,12 +203,13 @@ def run_deep_compare(
     root_b = Path(dir_b).resolve()
 
     # Prepare work items
+    max_bytes = int(max_file_size_mb * 1024 * 1024) if max_file_size_mb else 0
     items_a = [
-        ("A", str(root_a / f), f, Path(f).suffix.lower(), k, w, normalize, lang_aware)
+        ("A", str(root_a / f), f, Path(f).suffix.lower(), k, w, normalize, lang_aware, max_bytes)
         for f in files_a
     ]
     items_b = [
-        ("B", str(root_b / f), f, Path(f).suffix.lower(), k, w, normalize, lang_aware)
+        ("B", str(root_b / f), f, Path(f).suffix.lower(), k, w, normalize, lang_aware, max_bytes)
         for f in files_b
     ]
 
