@@ -76,7 +76,7 @@ Summary table for each matched file pair:
 |--------|-------------|
 | **File A / File B** | Matched file paths |
 | **Name Sim.** | Fuzzy filename similarity score (0–100) |
-| **Content Match** | `SequenceMatcher.ratio()` — proportion of matching content (`1.0` = identical) |
+| **Line match (difflib)** | `SequenceMatcher.ratio()` — proportion of matching lines (`1.0` = identical) |
 | **Added / Deleted** | Lines added to or deleted from File A to produce File B |
 
 ### Diff Pages
@@ -98,7 +98,8 @@ N:M cross-matching table (deep mode):
 | **File A** | Source file from directory A |
 | **Matched Files (B)** | All B-files sharing fingerprints above the Jaccard threshold |
 | **Shared Hashes** | Count of Winnowing fingerprints the file pair has in common |
-| **Jaccard** | `|A∩B| / |A∪B|` — fraction of shared Winnowing fingerprints |
+| **Jaccard** | `\|A∩B\| / \|A∪B\|` — fraction of shared Winnowing fingerprints |
+| **Inconclusive** | Shown when Normalize is on and the smaller file is below 45 tokens — precision is unsalvageable at that size |
 
 ---
 
@@ -135,7 +136,7 @@ All options are configurable through the built-in GUI panel:
 | **Mode** | `deep` | `simple` = 1:1 only. `deep` = 1:1 + N:M cross-matching |
 | **Strip Comments** | off | Remove comments before comparison |
 | **By Word** | off | Compare by word instead of by line |
-| **Normalize** | off | Normalize identifiers/literals for Type-2 clone detection |
+| **Normalize** | off | Normalize identifiers → `ID`, literals → `LIT` before fingerprinting (Type-2 clone detection). When enabled, the deep threshold defaults to **93** (calibrated for FP ≤ 1%). Matches below a 45-token floor are marked *inconclusive*. |
 | **Collapse Identical** | off | Fold unchanged blocks (3 context lines) |
 | **Detect Moved Blocks** | off | Highlight moved code in purple/blue instead of plain delete/add |
 | **No Autojunk** | off | Disable autojunk heuristic for more precise forensic analysis |
@@ -145,7 +146,7 @@ All options are configurable through the built-in GUI panel:
 | **Threshold** | `60` | Fuzzy file-name matching threshold (0–100) |
 | **K-gram** | `5` | Winnowing K-gram size (Schleimer 2003 §4.2) |
 | **Window** | `4` | Winnowing window size. Detection guarantee: sequences ≥ K+W−1 tokens |
-| **Threshold (Deep)** | `5` | Minimum Jaccard similarity (0–100 scale) to include in results |
+| **Threshold (Deep)** | `5` / `93` | Minimum Jaccard similarity (0–100) to include in results. Default is `5` (raw channel) or **`93`** when Normalize is enabled (calibrated operating point). |
 | **Bates Preset** | — | Select a saved preset to auto-fill prefix/suffix/start |
 | **Bates Prefix** | (empty) | Prefix for Bates numbering (e.g. `PLAINTIFF-`) |
 | **Bates Suffix** | (empty) | Suffix for Bates numbering (e.g. `-CONFIDENTIAL`) |

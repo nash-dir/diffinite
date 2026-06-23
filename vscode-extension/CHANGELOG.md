@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.13.1] — 2026-06-23
+
+### Docs
+
+- Extension README: updated Normalize option description to document the calibrated threshold (93) and 45-token inconclusive band; corrected "Content Match" → "Line match (difflib)" in the Cover Page table; added Inconclusive column to the Deep Compare table; corrected Threshold (Deep) default to reflect channel-dependent behaviour.
+
 ## [0.13.0] — 2026-06-23
 
 ### Added
