@@ -59,3 +59,25 @@ class TestThresholdProvenance:
         from diffinite.cli import _resolve_threshold_deep
         assert _resolve_threshold_deep(12.0, normalize=False) == (12.0, "user")
         assert _resolve_threshold_deep(12.0, normalize=True) == (12.0, "user")
+
+
+def test_help_is_ascii_safe_on_legacy_console():
+    """Mirrors the VSIX bundle smoke test (`diffinite --help`): console output
+    must not raise UnicodeEncodeError when stdout is a legacy code page (cp1252)
+    that lacks characters like U+2264 (<=) or U+2713 (checkmark in logs)."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    env = dict(os.environ)
+    env["PYTHONIOENCODING"] = "cp1252"   # simulate a Windows cp1252 console
+    env.pop("PYTHONUTF8", None)          # ...and do NOT let UTF-8 mode mask it
+    src = str(Path(__file__).resolve().parent.parent / "src")
+    env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
+
+    r = subprocess.run(
+        [sys.executable, "-m", "diffinite", "--help"],
+        env=env, capture_output=True,
+    )
+    assert r.returncode == 0, r.stderr.decode("utf-8", "replace")

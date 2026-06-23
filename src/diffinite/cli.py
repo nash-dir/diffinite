@@ -50,6 +50,17 @@ def _resolve_threshold_deep(
 
 def main(argv: list[str] | None = None) -> None:
     """Parse arguments and run the pipeline."""
+    # Console output must never crash on non-ASCII. Report content is written to
+    # UTF-8 files separately; this guards stdout/stderr — argparse --help, progress
+    # logs (which include glyphs like ✓), error messages — on legacy Windows code
+    # pages (e.g. cp1252) where such characters are unencodable. errors="replace"
+    # degrades to '?' rather than raising UnicodeEncodeError.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass  # captured/replaced streams (e.g. pytest) lack reconfigure
+
     parser = argparse.ArgumentParser(
         prog="diffinite",
         description=(
@@ -415,9 +426,9 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         dest="threshold_deep",
         help=(
-            "Minimum Jaccard similarity 0–100 to report. Default: 5 (raw), or "
+            "Minimum Jaccard similarity 0-100 to report. Default: 5 (raw), or "
             f"{NORMALIZE_DEFAULT_THRESHOLD:.0f} when --normalize is set (calibrated "
-            "for false-positive ≤ 1%%; see calibration.py). Pass a value to override."
+            "for false-positive <= 1%%; see calibration.py). Pass a value to override."
         ),
     )
     deep_group.add_argument(
