@@ -485,6 +485,18 @@ diffinite example/aosp/left example/aosp/right \
 
 **Observation**: High Match scores correctly reflect that these are minor revisions of the same codebase — and the scores stay high whether comments are included (the default) or stripped, showing the measurement is robust to that choice. The sample report image at the top of this README uses this dataset with comments included.
 
+### 5. Unicode / i18n — Non-ASCII Source
+
+**Why this dataset**: A small hand-authored A/B pair exercising non-ASCII **filenames** (`계산기.py`, `日本語.java`), CJK / Cyrillic / Arabic identifiers and comments, RTL strings, and emoji — end to end through the report pipeline.
+
+```bash
+diffinite example/unicode/left example/unicode/right \
+    --mode deep --normalize --pdf-lang ko \
+    --report-pdf uni.pdf --report-html uni.html --report-md uni.md
+```
+
+**What it verifies**: the Unicode-aware tokenizer treats a CJK/Cyrillic identifier as a single token (so non-ASCII fingerprint density matches ASCII); comment-stripping handles non-ASCII; non-ASCII filenames render in every format; and the PDF embeds CJK glyphs (`--pdf-lang ko` selects a Korean font). Covered by `tests/test_unicode_reports.py`.
+
 ---
 
 ## Winnowing Algorithm

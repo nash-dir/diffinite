@@ -46,6 +46,11 @@ example/validation/*
 !example/validation/*.md
 !example/validation/*.csv
 !example/validation/*.json
+# Unicode/i18n fixture — a small hand-authored A/B pair (committed source, not
+# downloaded data) exercising non-ASCII filenames, CJK/Cyrillic/Arabic content,
+# and emoji through the full report pipeline.
+!example/unicode/
+!example/unicode/**
 # Generated CLI report outputs left in example/ root
 # (timestamped, e.g. left_right_20260622_2035.{csv,html,md,pdf,json};
 #  *.sig and manifest.sha256.json are already covered by global rules above)
