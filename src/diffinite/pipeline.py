@@ -226,6 +226,7 @@ def _build_metadata_banner_md(meta: AnalysisMetadata) -> str:
         f"| **K-gram (K)** | `{meta.k}` |",
         f"| **Window (W)** | `{meta.w}` |",
         f"| **Threshold (min Jaccard)** | `{meta.threshold:.1f}%` |",
+        f"| **Line diff autojunk** | `{'on' if meta.autojunk else 'off'}` |",
         "",
     ]
     if meta.deep_index_truncated:
@@ -248,7 +249,8 @@ def _build_metadata_banner_html(meta: AnalysisMetadata) -> str:
         "<strong>📋 Analysis Configuration</strong><br>\n"
         f"<strong>Mode:</strong> {html_mod.escape(meta.exec_mode)} &nbsp;|&nbsp; "
         f"<strong>K=</strong>{meta.k}, <strong>W=</strong>{meta.w}, "
-        f"<strong>min Jaccard=</strong>{meta.threshold:.1f}%"
+        f"<strong>min Jaccard=</strong>{meta.threshold:.1f}% &nbsp;|&nbsp; "
+        f"<strong>autojunk=</strong>{'on' if meta.autojunk else 'off'}"
         + (
             '<br><span style="color:#b00020;font-weight:bold;">'
             "⚠ Incomplete results: Deep Compare index truncated at "
@@ -312,8 +314,8 @@ def _generate_markdown_report(
 
     # Summary table
     lines.append("## Summary\n")
-    lines.append("| # | File A | File B | Name Sim. | Content Match | +Added | −Deleted |")
-    lines.append("|---|--------|--------|:---------:|:-------------:|:------:|:--------:|")
+    lines.append("| # | File A | File B | Name Sim. | Line match (difflib) | +Added | −Deleted |")
+    lines.append("|---|--------|--------|:---------:|:--------------------:|:------:|:--------:|")
     for idx, r in enumerate(results, 1):
         if r.binary:
             status = "✓ Match" if r.hash_match else "✗ Mismatch"
@@ -500,7 +502,7 @@ def _generate_html_report(
             diff_sections.append(
                 f'<h2>{idx}. {html_mod.escape(r.match.rel_path_a)} &harr; '
                 f'{html_mod.escape(r.match.rel_path_b)}</h2>\n'
-                f'<p>Content match: {_ratio_badge(r.ratio)} &nbsp; '
+                f'<p>Line-level match (difflib): {_ratio_badge(r.ratio)} &nbsp; '
                 f'<span style="color:green">+{r.additions} {unit}(s)</span> &nbsp; '
                 f'<span style="color:red">-{r.deletions} {unit}(s)</span></p>\n'
                 f'{r.html_diff}\n'
@@ -583,7 +585,7 @@ def _generate_individual_html(
             body = (
                 f'<h2>{html_mod.escape(r.match.rel_path_a)} &harr; '
                 f'{html_mod.escape(r.match.rel_path_b)}</h2>\n'
-                f'<p>Content match: {_ratio_badge(r.ratio)} &nbsp; '
+                f'<p>Line-level match (difflib): {_ratio_badge(r.ratio)} &nbsp; '
                 f'<span style="color:green">+{r.additions} {unit}(s)</span> &nbsp; '
                 f'<span style="color:red">-{r.deletions} {unit}(s)</span></p>\n'
                 f'{r.html_diff}\n'
@@ -710,7 +712,7 @@ a:hover {{ text-decoration: underline; }}
 <thead>
 <tr>
 <th>#</th><th>File A (→ Click to View)</th><th>File B</th>
-<th>Name Sim.</th><th>Content Match</th><th>Added</th><th>Deleted</th>
+<th>Name Sim.</th><th>Line match (difflib)</th><th>Added</th><th>Deleted</th>
 </tr>
 </thead>
 <tbody>
@@ -1325,11 +1327,11 @@ def _generate_pdf_report(
                 with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
                     writer = csv.writer(f)
                     col_header = "Bates Range" if show_bates_number else "Page Range"
-                    # "Name Sim." = fuzzy filename similarity; "Content Match" = difflib
-                    # content ratio. Keeping them in separate, explicitly-labelled columns
-                    # prevents reading a 100% filename match as identical file content.
+                    # "Name Sim." = fuzzy filename similarity; "Line match (difflib)" =
+                    # difflib line-level ratio. Keeping them in separate, explicitly-labelled
+                    # columns prevents reading a 100% filename match as identical file content.
                     writer.writerow(
-                        ["Index", "File A", "File B", "Name Sim. (%)", "Content Match (%)", col_header]
+                        ["Index", "File A", "File B", "Name Sim. (%)", "Line match (difflib, %)", col_header]
                     )
 
                     for row_idx, row in enumerate(exhibit_data, 1):

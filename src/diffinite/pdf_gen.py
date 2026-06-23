@@ -588,7 +588,8 @@ def build_cover_body(
             '<strong>&#128203; Analysis Configuration</strong><br>\n'
             f'<strong>Mode:</strong> {html.escape(metadata.exec_mode)} &nbsp;|&nbsp; '
             f'<strong>K=</strong>{metadata.k}, <strong>W=</strong>{metadata.w}, '
-            f'<strong>T=</strong>{metadata.threshold:.2f}'
+            f'<strong>T=</strong>{metadata.threshold:.2f} &nbsp;|&nbsp; '
+            f'<strong>autojunk=</strong>{"on" if metadata.autojunk else "off"}'
             + '\n</div>\n'
         )
 
@@ -688,7 +689,7 @@ def build_cover_body(
 <table class="summary">
 <tr>
   <th style="width: 4%;">#</th><th style="width: 34%;">File A</th><th style="width: 34%;">File B</th><th style="width: 8%;">Name Sim.</th>
-  <th style="width: 10%;">Content Match</th><th style="width: 5%;">Added</th><th style="width: 5%;">Deleted</th>
+  <th style="width: 10%;">Line match (difflib)</th><th style="width: 5%;">Added</th><th style="width: 5%;">Deleted</th>
 </tr>
 {summary_rows}
 </table>
@@ -728,7 +729,7 @@ def build_diff_page_html(
         body = (
             f"<h2>{index}. {html.escape(r.match.rel_path_a)} &harr; "
             f"{html.escape(r.match.rel_path_b)}</h2>\n"
-            f"<p>Content match: {_ratio_badge(r.ratio)} &nbsp; "
+            f"<p>Line-level match (difflib): {_ratio_badge(r.ratio)} &nbsp; "
             f"<span style='color:green'>+{r.additions} {unit}(s)</span> &nbsp; "
             f"<span style='color:red'>-{r.deletions} {unit}(s)</span></p>\n"
             f"{r.html_diff}\n"

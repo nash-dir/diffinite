@@ -341,3 +341,24 @@ class TestPipelineAuditFeatures:
             else:
                 os.chmod(f_a, 0o644)
                 os.chmod(f_b, 0o644)
+
+
+class TestMetadataBannerAutojunk:
+    """The difflib autojunk state must be visible in MD/HTML config banners,
+    not only recorded in the JSON config (forensic transparency)."""
+
+    def _meta(self, autojunk):
+        from diffinite.models import AnalysisMetadata
+        return AnalysisMetadata(
+            exec_mode="simple", k=5, w=4, threshold=5.0, autojunk=autojunk,
+        )
+
+    def test_md_banner_shows_autojunk(self):
+        from diffinite.pipeline import _build_metadata_banner_md
+        assert "autojunk" in _build_metadata_banner_md(self._meta(True)).lower()
+        assert "off" in _build_metadata_banner_md(self._meta(False)).lower()
+
+    def test_html_banner_shows_autojunk(self):
+        from diffinite.pipeline import _build_metadata_banner_html
+        assert "autojunk=" in _build_metadata_banner_html(self._meta(True))
+        assert "off" in _build_metadata_banner_html(self._meta(False))

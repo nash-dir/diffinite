@@ -63,6 +63,26 @@ class TestBuildCoverHtml:
         html = _cover()
         assert "95" in html  # ratio 0.95 → 95%
 
+    def test_content_match_relabelled_to_difflib(self):
+        """The headline column must name difflib so the line-level ratio is not
+        misread as semantic similarity (forensic clarity)."""
+        html = _cover()
+        assert "Line match (difflib)" in html
+        assert "Content Match" not in html
+
+    def test_metadata_banner_surfaces_autojunk(self):
+        from diffinite.models import AnalysisMetadata
+        meta = AnalysisMetadata(
+            exec_mode="deep", k=5, w=4, threshold=5.0, autojunk=False,
+        )
+        html = build_cover_body(
+            _make_results(), unmatched_a=[], unmatched_b=[],
+            dir_a="a", dir_b="b", by_word=False, strip_comments=False,
+            metadata=meta,
+        )
+        assert "autojunk=" in html
+        assert "off" in html  # autojunk=False rendered
+
     def test_contains_additions_deletions(self):
         html = _cover()
         assert "+10" in html
