@@ -362,3 +362,30 @@ class TestMetadataBannerAutojunk:
         from diffinite.pipeline import _build_metadata_banner_html
         assert "autojunk=" in _build_metadata_banner_html(self._meta(True))
         assert "off" in _build_metadata_banner_html(self._meta(False))
+
+
+class TestNormalizeDisclosure:
+    """A normalize report must disclose its false-positive rate (Daubert)."""
+
+    def _meta(self, normalize, provenance="normalize-default"):
+        from diffinite.models import AnalysisMetadata
+        from diffinite.calibration import NORMALIZE_DEFAULT_THRESHOLD
+        return AnalysisMetadata(
+            exec_mode="deep", k=5, w=4, threshold=NORMALIZE_DEFAULT_THRESHOLD,
+            threshold_provenance=provenance, normalize=normalize,
+        )
+
+    def test_md_banner_discloses_when_normalize(self):
+        from diffinite.pipeline import _build_metadata_banner_md
+        from diffinite.calibration import NORMALIZE_FP_RATE_PCT
+        out = _build_metadata_banner_md(self._meta(True))
+        assert "false-positive" in out.lower()
+        assert f"{NORMALIZE_FP_RATE_PCT:.1f}%" in out
+
+    def test_md_banner_silent_without_normalize(self):
+        from diffinite.pipeline import _build_metadata_banner_md
+        assert "false-positive" not in _build_metadata_banner_md(self._meta(False)).lower()
+
+    def test_html_banner_discloses_when_normalize(self):
+        from diffinite.pipeline import _build_metadata_banner_html
+        assert "false-positive" in _build_metadata_banner_html(self._meta(True)).lower()

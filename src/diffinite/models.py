@@ -209,6 +209,11 @@ class AnalysisMetadata:
     False(``--no-autojunk``)로 설정하면 모든 토큰을 동등 취급하여
     포렌식 정밀 분석에 적합하지만 대형 파일에서 성능이 저하된다."""
 
+    normalize: bool = False
+    """``--normalize`` (Type-2 정규화) 사용 여부. True이면 식별자가 평탄화되어
+    위양성률 특성이 달라지므로(calibration.py), 보고서가 채널·임계값·측정 오류율을
+    공시할 수 있도록 기록한다."""
+
     lang_aware: bool = False
     """언어 인식 정규화(``--lang-aware``) 사용 여부. True이면 deep 모드 핑거프린트가
     언어별 키워드 인식(Pygments lexer / 레지스트리)으로 생성되어, 기본(언어 무관)

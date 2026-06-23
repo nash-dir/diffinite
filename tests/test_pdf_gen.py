@@ -127,6 +127,26 @@ class TestBuildCoverHtml:
         html = _cover(deep_results=deep)
         assert "foo." in html
         assert "bar." in html
+
+    def test_inconclusive_match_is_flagged(self):
+        deep = [
+            DeepMatchResult(
+                file_a="foo.py",
+                matched_files_b=[("bar.py", 50, 0.99, True)],  # inconclusive
+            ),
+        ]
+        html = _cover(deep_results=deep)
+        assert "inconclusive" in html.lower()
+
+    def test_conclusive_match_not_flagged(self):
+        deep = [
+            DeepMatchResult(
+                file_a="foo.py",
+                matched_files_b=[("bar.py", 50, 0.99, False)],
+            ),
+        ]
+        html = _cover(deep_results=deep)
+        assert "inconclusive" not in html.lower()
         assert "50" in html  # shared hashes
 
 

@@ -662,9 +662,14 @@ def build_cover_body(
             '<tr><th style="width: 40%;">A File</th><th style="width: 40%;">B File(s)</th>'
             '<th style="width: 10%;">Shared Hashes</th><th style="width: 10%;">Jaccard</th></tr>\n'
         )
+        any_inconclusive = False
         for dr in deep_results:
-            for b_file, shared, jaccard, _inconclusive in dr.matched_files_b:
+            for b_file, shared, jaccard, inconclusive in dr.matched_files_b:
                 jbadge = _ratio_badge(jaccard)
+                if inconclusive:
+                    any_inconclusive = True
+                    jbadge += (' <span class="badge badge-mid" '
+                               'title="below token floor">inconclusive</span>')
                 deep_html += (
                     f"<tr>"
                     f"<td>{_break_path(html.escape(dr.file_a))}</td>"
@@ -674,6 +679,13 @@ def build_cover_body(
                     f"</tr>\n"
                 )
         deep_html += "</table>\n"
+        if any_inconclusive:
+            deep_html += (
+                '<p class="meta">&#8505; <strong>Inconclusive</strong> matches fall '
+                'below the calibrated token floor: under normalize, files this small '
+                'cannot be distinguished from independent same-domain code, so the '
+                'score is not a confident finding.</p>\n'
+            )
 
     body = f"""\
 <h1>Diffinite &mdash; Source Code Diff Report</h1>

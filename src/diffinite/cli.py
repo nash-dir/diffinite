@@ -525,6 +525,7 @@ def main(argv: list[str] | None = None) -> None:
         threshold=args.threshold_deep,  # 0-100 scale in metadata
         threshold_provenance=threshold_provenance,
         autojunk=not args.no_autojunk,
+        normalize=args.normalize,
         lang_aware=args.lang_aware,
     )
 

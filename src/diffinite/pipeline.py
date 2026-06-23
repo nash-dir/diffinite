@@ -40,6 +40,7 @@ import re
 import tempfile
 from pathlib import Path, PurePosixPath
 
+from diffinite.calibration import normalize_disclosure
 from diffinite.collector import collect_files, match_files, FUZZY_THRESHOLD
 from diffinite.deep_compare import run_deep_compare
 from diffinite.differ import compute_diff, generate_html_diff, read_file
@@ -231,6 +232,10 @@ def _build_metadata_banner_md(meta: AnalysisMetadata) -> str:
     if meta.lang_aware:
         lines.append("| **Fingerprint channel** | `language-aware (Pygments/registry)` |")
     lines.append("")
+    if meta.normalize:
+        lines.append("> ℹ **Normalize false-positive disclosure:** "
+                     + normalize_disclosure(meta.threshold, meta.threshold_provenance)
+                     + "\n")
     if meta.deep_index_truncated:
         lines.append(
             "> ⚠ **Incomplete results:** the Deep Compare inverted index hit the "
@@ -254,6 +259,13 @@ def _build_metadata_banner_html(meta: AnalysisMetadata) -> str:
         f"<strong>min Jaccard=</strong>{meta.threshold:.1f}% &nbsp;|&nbsp; "
         f"<strong>autojunk=</strong>{'on' if meta.autojunk else 'off'}"
         + (" &nbsp;|&nbsp; <strong>lang-aware=</strong>on" if meta.lang_aware else "")
+        + (
+            '<br><span style="color:#555;">ℹ '
+            + html_mod.escape(
+                normalize_disclosure(meta.threshold, meta.threshold_provenance))
+            + "</span>"
+            if meta.normalize else ""
+        )
         + (
             '<br><span style="color:#b00020;font-weight:bold;">'
             "⚠ Incomplete results: Deep Compare index truncated at "
@@ -353,14 +365,24 @@ def _generate_markdown_report(
         lines.append("\n## Deep Compare — N:M Cross-Match Results\n")
         lines.append("| A File | B File(s) | Shared Hashes | Jaccard |")
         lines.append("|--------|-----------|:-------------:|:-------:|")
+        any_inconclusive = False
         for dr in deep_results:
-            for b_file, shared, jaccard, _inconclusive in dr.matched_files_b:
+            for b_file, shared, jaccard, inconclusive in dr.matched_files_b:
                 # 2 decimals of percent reflect the 4-dp Jaccard used for ordering,
                 # so the displayed value and the sort order agree.
+                pct = f"{jaccard*100:.2f}%"
+                if inconclusive:
+                    any_inconclusive = True
+                    pct += " _(inconclusive)_"
                 lines.append(
                     f"| `{_md_escape(dr.file_a)}` | `{_md_escape(b_file)}` "
-                    f"| {shared} | {jaccard*100:.2f}% |"
+                    f"| {shared} | {pct} |"
                 )
+        if any_inconclusive:
+            lines.append("\n> ℹ **Inconclusive** matches fall below the calibrated "
+                         "token floor: under normalize, files this small cannot be "
+                         "distinguished from independent same-domain code, so the "
+                         "score is not a confident finding.\n")
 
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -403,6 +425,7 @@ def _generate_json_report(
             "threshold": metadata.threshold,
             "threshold_provenance": metadata.threshold_provenance,
             "autojunk": metadata.autojunk,
+            "normalize": metadata.normalize,
             "lang_aware": metadata.lang_aware,
             "deep_index_truncated": metadata.deep_index_truncated,
         }
