@@ -39,6 +39,12 @@ example/*/
 !example/benchmark/
 example/benchmark/*
 !example/benchmark/*.md
+# Validation evidence (WS-A error-rate artifacts) — track the reports, not the
+# corpus. These are reproducible via: python -m tests.validation.error_rate
+!example/validation/
+example/validation/*
+!example/validation/*.md
+!example/validation/*.csv
 # Generated CLI report outputs left in example/ root
 # (timestamped, e.g. left_right_20260622_2035.{csv,html,md,pdf,json};
 #  *.sig and manifest.sha256.json are already covered by global rules above)
