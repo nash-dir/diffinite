@@ -227,8 +227,10 @@ def _build_metadata_banner_md(meta: AnalysisMetadata) -> str:
         f"| **Window (W)** | `{meta.w}` |",
         f"| **Threshold (min Jaccard)** | `{meta.threshold:.1f}%` |",
         f"| **Line diff autojunk** | `{'on' if meta.autojunk else 'off'}` |",
-        "",
     ]
+    if meta.lang_aware:
+        lines.append("| **Fingerprint channel** | `language-aware (Pygments/registry)` |")
+    lines.append("")
     if meta.deep_index_truncated:
         lines.append(
             "> ⚠ **Incomplete results:** the Deep Compare inverted index hit the "
@@ -251,6 +253,7 @@ def _build_metadata_banner_html(meta: AnalysisMetadata) -> str:
         f"<strong>K=</strong>{meta.k}, <strong>W=</strong>{meta.w}, "
         f"<strong>min Jaccard=</strong>{meta.threshold:.1f}% &nbsp;|&nbsp; "
         f"<strong>autojunk=</strong>{'on' if meta.autojunk else 'off'}"
+        + (" &nbsp;|&nbsp; <strong>lang-aware=</strong>on" if meta.lang_aware else "")
         + (
             '<br><span style="color:#b00020;font-weight:bold;">'
             "⚠ Incomplete results: Deep Compare index truncated at "
@@ -399,6 +402,7 @@ def _generate_json_report(
             "w": metadata.w,
             "threshold": metadata.threshold,
             "autojunk": metadata.autojunk,
+            "lang_aware": metadata.lang_aware,
             "deep_index_truncated": metadata.deep_index_truncated,
         }
 
@@ -754,6 +758,7 @@ def run_pipeline(
     window_size: int = DEFAULT_W,
     min_jaccard: float = 0.05,
     normalize: bool = False,
+    lang_aware: bool = False,
     metadata: AnalysisMetadata | None = None,
     # Multi-format output
     report_pdf: str | None = None,
@@ -984,7 +989,7 @@ def run_pipeline(
             dir_a, dir_b, files_a, files_b,
             k=kgram_size, w=window_size,
             workers=workers, min_jaccard=min_jaccard,
-            normalize=normalize,
+            normalize=normalize, lang_aware=lang_aware,
             max_index_entries=max_index_entries,
             status=deep_status,
         )

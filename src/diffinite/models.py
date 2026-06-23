@@ -201,6 +201,11 @@ class AnalysisMetadata:
     False(``--no-autojunk``)로 설정하면 모든 토큰을 동등 취급하여
     포렌식 정밀 분석에 적합하지만 대형 파일에서 성능이 저하된다."""
 
+    lang_aware: bool = False
+    """언어 인식 정규화(``--lang-aware``) 사용 여부. True이면 deep 모드 핑거프린트가
+    언어별 키워드 인식(Pygments lexer / 레지스트리)으로 생성되어, 기본(언어 무관)
+    정규화와 **핑거프린트가 호환되지 않는다** — 보고서에 채널을 명시해 둔다."""
+
     deep_index_truncated: bool = False
     """Deep 모드의 역 인덱스가 ``--max-index-entries`` 상한에서 잘렸는지 여부.
     True이면 일부 크로스매치가 누락되어 유사도가 **과소보고**될 수 있으므로,

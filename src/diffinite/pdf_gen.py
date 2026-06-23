@@ -590,6 +590,8 @@ def build_cover_body(
             f'<strong>K=</strong>{metadata.k}, <strong>W=</strong>{metadata.w}, '
             f'<strong>T=</strong>{metadata.threshold:.2f} &nbsp;|&nbsp; '
             f'<strong>autojunk=</strong>{"on" if metadata.autojunk else "off"}'
+            + (' &nbsp;|&nbsp; <strong>lang-aware=</strong>on'
+               if metadata.lang_aware else '')
             + '\n</div>\n'
         )
 

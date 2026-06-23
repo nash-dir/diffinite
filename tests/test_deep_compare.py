@@ -76,3 +76,37 @@ class TestDeterministicOrdering:
         assert results
         matched = results[0].matched_files_b
         assert [m[0] for m in matched] == sorted(m[0] for m in matched)
+
+
+class TestLangAwarePlumbing:
+    """WS-C.2: --lang-aware must thread through run_deep_compare end to end and
+    leave the default (language-agnostic) channel byte-identical."""
+
+    def test_lang_aware_runs_and_matches_rust(self, tmp_path):
+        from diffinite.deep_compare import run_deep_compare
+        a = tmp_path / "a"; a.mkdir()
+        b = tmp_path / "b"; b.mkdir()
+        rust = ("pub fn add(a: i32, b: i32) -> i32 {\n"
+                "    let total = a + b;\n    total\n}\n") * 3
+        (a / "lib.rs").write_text(rust, encoding="utf-8")
+        (b / "lib.rs").write_text(rust, encoding="utf-8")
+
+        res = run_deep_compare(str(a), str(b), ["lib.rs"], ["lib.rs"],
+                               workers=1, normalize=True, lang_aware=True)
+        assert res and res[0].matched_files_b
+        # Identical inputs -> Jaccard 1.0 regardless of channel.
+        assert res[0].matched_files_b[0][2] == 1.0
+
+    def test_default_channel_unaffected(self, tmp_path):
+        from diffinite.deep_compare import run_deep_compare
+        a = tmp_path / "a"; a.mkdir()
+        b = tmp_path / "b"; b.mkdir()
+        code = "def f(x):\n    return x + 1\n" * 5
+        (a / "m.py").write_text(code, encoding="utf-8")
+        (b / "m.py").write_text(code, encoding="utf-8")
+
+        base = run_deep_compare(str(a), str(b), ["m.py"], ["m.py"],
+                                workers=1, normalize=True)
+        explicit = run_deep_compare(str(a), str(b), ["m.py"], ["m.py"],
+                                    workers=1, normalize=True, lang_aware=False)
+        assert base[0].matched_files_b == explicit[0].matched_files_b

@@ -60,15 +60,15 @@ def _extract_one(args: tuple) -> tuple[str, set[int], int]:
     """단일 파일의 핑거프린트를 추출한다.
 
     Args:
-        args: ``(side, abs_path, rel_path, extension, k, w, normalize)``
+        args: ``(side, abs_path, rel_path, extension, k, w, normalize, lang_aware)``
               — tuple 포장은 ``pool.map()`` 인터페이스 제약.
 
     Returns:
         ``(side, rel_path, hash_set, fingerprint_count)``
         읽기 실패 시 빈 set / count=0 반환.
     """
-    side, abs_path, rel_path, extension, k, w, normalize = args
-    
+    side, abs_path, rel_path, extension, k, w, normalize, lang_aware = args
+
     try:
         text = read_file(abs_path)
     except PermissionError:
@@ -81,6 +81,7 @@ def _extract_one(args: tuple) -> tuple[str, set[int], int]:
     cleaned = strip_comments(text, extension)
     fps = extract_fingerprints(
         cleaned, k=k, w=w, normalize=normalize,
+        ext=extension, lang_aware=lang_aware,
     )
     hash_set = {fp.hash_value for fp in fps}
     return side, rel_path, hash_set, len(fps)
@@ -142,6 +143,7 @@ def run_deep_compare(
     workers: int = 4,
     min_jaccard: float = 0.05,
     normalize: bool = False,
+    lang_aware: bool = False,
     max_index_entries: int = 10_000_000,
     status: Optional[dict] = None,
 ) -> list[DeepMatchResult]:
@@ -160,6 +162,9 @@ def run_deep_compare(
         workers: Number of parallel worker processes.
         min_jaccard: Minimum Jaccard similarity to include in results.
         normalize: If *True*, normalise tokens before fingerprinting.
+        lang_aware: If *True* (with *normalize*), use the language-aware
+            normalization channel (Pygments lexer / registry keywords) instead
+            of the language-agnostic default keyword set.
         status: Optional dict; if given, ``status["index_truncated"]`` is set
             to whether the inverted index hit ``max_index_entries`` (so the
             caller can flag an incomplete report).
@@ -174,11 +179,11 @@ def run_deep_compare(
 
     # Prepare work items
     items_a = [
-        ("A", str(root_a / f), f, Path(f).suffix.lower(), k, w, normalize)
+        ("A", str(root_a / f), f, Path(f).suffix.lower(), k, w, normalize, lang_aware)
         for f in files_a
     ]
     items_b = [
-        ("B", str(root_b / f), f, Path(f).suffix.lower(), k, w, normalize)
+        ("B", str(root_b / f), f, Path(f).suffix.lower(), k, w, normalize, lang_aware)
         for f in files_b
     ]
 

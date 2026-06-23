@@ -408,6 +408,19 @@ def main(argv: list[str] | None = None) -> None:
             "fingerprinting (improves Type-2 clone detection)"
         ),
     )
+    deep_group.add_argument(
+        "--lang-aware",
+        action="store_true",
+        default=False,
+        dest="lang_aware",
+        help=(
+            "With --normalize, use language-aware normalization (Pygments lexer, "
+            "falling back to per-language keyword sets) so keywords like Rust fn/pub "
+            "or Go func are preserved instead of flattened to ID. Opt-in: produces "
+            "fingerprints incompatible with the default channel. No effect without "
+            "--normalize."
+        ),
+    )
 
     # ── Forensic options ──────────────────────────────────────────────
     forensic_group = parser.add_argument_group(
@@ -486,6 +499,7 @@ def main(argv: list[str] | None = None) -> None:
         w=args.window,
         threshold=args.threshold_deep,  # 0-100 scale in metadata
         autojunk=not args.no_autojunk,
+        lang_aware=args.lang_aware,
     )
 
     # Resolve encoding
@@ -516,6 +530,7 @@ def main(argv: list[str] | None = None) -> None:
         window_size=args.window,
         min_jaccard=min_jaccard_internal,
         normalize=args.normalize,
+        lang_aware=args.lang_aware,
         metadata=metadata,
         # Forensic options
         autojunk=not args.no_autojunk,
