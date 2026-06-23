@@ -444,19 +444,25 @@ diffinite example/plagiarism/case-01/original example/plagiarism/case-01/plagiar
 
 The negative control above runs **without** `--normalize`, while the IR-Plag run uses it — so neither shows what `--normalize` does to *independent* code. That cell matters: flattening every identifier to `ID` makes the language-forced skeleton of small, standard code (a textbook `for`-loop) identical regardless of author, so independent work and renamed copies can collapse to the **same** Jaccard.
 
-It is measured, symmetrically, by the validation harness ([`tests/validation/error_rate.py`](tests/validation/error_rate.py); regenerate with `python -m tests.validation.error_rate`). On the IR-Plag corpus — where `non-plagiarized/` submissions are independent answers to the *same* assignment, so any similarity is a false positive — across 105 independent pairs and 355 labelled copies:
+It is measured, symmetrically, by the validation harness ([`tests/validation/error_rate.py`](tests/validation/error_rate.py); regenerate with `python -m tests.validation.error_rate`). The harness scores **per file pair** — every original file vs every candidate file — matching the runtime's per-file N:M decision and per-file token floor. On the IR-Plag corpus, where `non-plagiarized/` submissions are independent answers to the *same* assignment (any similarity is a false positive):
 
 | Channel | False-positive rate @ threshold 5 | Recall @ threshold 5 |
 |---------|:-:|:-:|
 | raw | 100% (tiny files) | 100% |
 | normalize | **100%** | 100% |
 
-The shipped `--threshold-deep 5` is meaningless under `--normalize`: the false-positive rate is 100%. Two mitigations ship as a result (see [`example/validation/error_rate.md`](example/validation/error_rate.md) for the full precision/recall curves and [`calibration.json`](example/validation/calibration.json) for the operating point):
+The shipped `--threshold-deep 5` is meaningless under `--normalize`: the false-positive rate is 100%. Two mitigations ship as a result (see [`example/validation/error_rate.md`](example/validation/error_rate.md) for the full curves and the operating-point characterization, and [`calibration.json`](example/validation/calibration.json) for the machine-readable numbers):
 
-1. **Calibrated threshold** — under `--normalize`, the default threshold is raised to **93** (false-positive ≤ 1%; recall ~22%). The trade-off is real and disclosed, not hidden.
-2. **Inconclusive band** — a normalize match whose smaller file is below a **45-token floor** is reported as *inconclusive* rather than a confident finding: at that size, precision is unsalvageable at any useful threshold.
+1. **Calibrated threshold** — under `--normalize`, the default threshold is raised to **93**, the operating point for false-positive ≤ 1%.
+2. **Inconclusive band** — a normalize match whose smaller file is below a **45-token floor** is reported as *inconclusive*: at that size, precision is unsalvageable at any useful threshold.
 
-Every `--normalize` report discloses its measured false-positive rate on its cover. For non-JVM/Python/JS languages, `--lang-aware` reduces the collapse by preserving language keywords (e.g. Rust `fn`/`pub`) instead of flattening them to `ID`.
+**What the operating point honestly is** (the calibration's own caveats, disclosed on every normalize report and in `error_rate.md`):
+
+- The false-positive rate is **0.95%, but that is 1 of 105 file pairs** — Wilson 95% CI **[0.17%, 5.2%]**. It is not a *known* 1% rate; the upper bound exceeds 5%.
+- **Recall is not uniform.** At threshold 93: L1 65%, L2 46%, L3 21%, **L4–L6 0%**. The threshold reliably flags only near-verbatim copies; heavily restructured copies fall below it and need manual review. The pooled "~22%" should not be read as uniform sensitivity.
+- The 105 negatives derive from only **7 assignments** (not i.i.d.), and nothing **> 212 tokens** was tested — the operating point is unvalidated on large files. At FP ≤ 1% the 45-token floor is non-binding on this corpus (it gates sub-floor matches at runtime, which this corpus does not exercise).
+
+For non-JVM/Python/JS languages, `--lang-aware` reduces the collapse by preserving language keywords (e.g. Rust `fn`/`pub`) instead of flattening them to `ID`.
 
 ### 4. AOSP Framework — Same Codebase, Minor Edits
 
