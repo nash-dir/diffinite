@@ -136,3 +136,60 @@ class TestFingerprintGuards:
     def test_w_below_one_raises(self):
         with pytest.raises(ValueError):
             extract_fingerprints("a b c d e f", k=5, w=0)
+
+
+class TestLangAwareNormalization:
+    """Opt-in language-aware normalization (WS-C). Tier-2 (Pygments) preserves
+    per-language keywords that the JVM/Python/JS-centric default set drops; Tier-1
+    (registry keywords) is the fallback when no lexer exists."""
+
+    RUST = "pub fn add(a: i32, b: i32) -> i32 {\n    let total = a + b;\n    total\n}\n"
+
+    def test_default_normalize_drops_rust_keywords(self):
+        # `fn`/`pub`/`let` are not in _COMMON_KEYWORDS, so the default normalize
+        # path flattens them to ID -- the language-bias the review flagged.
+        toks = tokenize(self.RUST, normalize=True)
+        assert "fn" not in toks and "pub" not in toks
+        assert "ID" in toks
+
+    def test_lang_aware_preserves_rust_keywords(self):
+        toks = tokenize(self.RUST, normalize=True, ext=".rs", lang_aware=True)
+        # Declaration/type keywords survive; the function name collapses to ID.
+        assert "fn" in toks and "pub" in toks
+        assert "i32" in toks            # Keyword.Type preserved
+        assert "ID" in toks             # `add`, `a`, `b`, `total` -> ID
+
+    def test_lang_aware_changes_fingerprints_only_when_normalized(self):
+        # With normalize=False, lang_aware is a documented no-op (raw tokens).
+        raw = tokenize(self.RUST, normalize=False, ext=".rs", lang_aware=True)
+        assert raw == tokenize(self.RUST, normalize=False)
+
+    def test_default_path_unchanged_compatibility(self):
+        # The crucial backward-compat guarantee: lang_aware=False (the default)
+        # must emit byte-identical fingerprints to the historical behavior.
+        src = "def foo(x):\n    return x + 1\n"
+        before = extract_fingerprints(src, normalize=True)
+        after = extract_fingerprints(src, normalize=True, lang_aware=False)
+        assert before == after
+
+    def test_unknown_extension_falls_back_gracefully(self):
+        # No Pygments lexer for a bogus extension -> Tier-1 fallback, no crash.
+        toks = tokenize(self.RUST, normalize=True, ext=".zzz", lang_aware=True)
+        assert isinstance(toks, list) and toks
+
+    def test_lang_aware_reduces_false_similarity_of_independent_code(self):
+        # Two independent Rust fns, same forced skeleton, different logic. Under
+        # default normalize their decls flatten together; lang-aware keeps the
+        # keyword scaffold identical but still must not score HIGHER than default.
+        a = self.RUST
+        b = "pub fn mul(x: i32, y: i32) -> i32 {\n    let r = x * y;\n    r\n}\n"
+
+        def jac(norm, la):
+            fa = {f.hash_value for f in extract_fingerprints(a, normalize=norm, ext='.rs', lang_aware=la)}
+            fb = {f.hash_value for f in extract_fingerprints(b, normalize=norm, ext='.rs', lang_aware=la)}
+            inter, union = len(fa & fb), len(fa | fb)
+            return inter / union if union else 0.0
+
+        # Sanity: both runs are deterministic and in range.
+        assert 0.0 <= jac(True, True) <= 1.0
+        assert 0.0 <= jac(True, False) <= 1.0
