@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import shutil
 import sys
 import urllib.request
@@ -101,14 +102,37 @@ DATASETS: dict[str, dict] = {
         },
     },
 
-    # 4. IR-Plag plagiarism dataset (case-01)
+    # 4. IR-Plag plagiarism dataset (Karnalim et al. 2019, Apache-2.0) — all 7 cases.
+    # This is the calibration corpus behind example/validation/calibration.json, so
+    # it is pinned to an exact upstream commit and verified by SHA-256: anyone
+    # (including an opposing expert) can re-derive the published error rate from
+    # byte-identical inputs. Upstream ships the dataset as a zip inside the repo zip.
     "plagiarism": {
-        "description": "IR-Plag dataset case-01 (labeled plagiarism levels L1-L6)",
-        "zip": "https://github.com/oscarkarnalim/sourcecodeplagiarismdataset/archive/refs/heads/master.zip",
-        "zip_subdir": "sourcecodeplagiarismdataset-master/IR-Plag-Dataset/case-01",
+        "description": "IR-Plag dataset, cases 01-07 (labeled plagiarism levels L1-L6), pinned",
+        "zip": "https://github.com/oscarkarnalim/sourcecodeplagiarismdataset/archive/"
+               "f07e95120680b25f78659ed63cd6130fd05b2df8.zip",
+        "zip_sha256": "288efbe08cc60837ae6509e49fd0285e7d22cb9b6e4dd6740d86229969fe9b8d",
+        "inner_zip": "sourcecodeplagiarismdataset-f07e95120680b25f78659ed63cd6130fd05b2df8/"
+                     "IR-Plag-Dataset.zip",
+        "inner_zip_sha256": "1b96b320fd05d164b3a7ee17d8cc36992b728d3be099dc7ec39ddb7fae2ec4a4",
+        "zip_subdir": "IR-Plag-Dataset",
+        "expected_files": 467,
     },
 
-    # 5. SQLite amalgamation (two adjacent versions)
+    # 5. SOCO 2014 training set (PAN@FIRE 2014, Zenodo record 7433031) — the
+    # independent corpus used by tests/validation/holdout.py. Pinned by SHA-256
+    # (the Zenodo record lists MD5 d07c9f553410c63ce6695c5f5754a874 for the same file).
+    "soco14": {
+        "description": "SOCO 2014 training set (259 Java + 79 C files, expert re-use labels), pinned",
+        "zip": "https://zenodo.org/api/records/7433031/files/"
+               "fire14-source-code-training-dataset.zip/content",
+        "zip_sha256": "879f8ef1dd94817153f58932416b964e0388a73f2a782460299652eeb116f4c9",
+        "zip_subdir": "fire14-source-code-training-dataset",
+        "extract_to": "fire14-source-code-training-dataset",
+        "expected_files": 340,
+    },
+
+    # 6. SQLite amalgamation (two adjacent versions)
     "sqlite": {
         "description": "SQLite amalgamation 3.45.0 vs 3.46.0",
         "zips": {
@@ -139,6 +163,17 @@ def _download_file(url: str, dest: Path) -> bool:
         return False
 
 
+def _verify_sha256(data: bytes, expected: str | None, label: str) -> bool:
+    """Check a pinned SHA-256; datasets without a pin are accepted as-is."""
+    if expected is None:
+        return True
+    actual = hashlib.sha256(data).hexdigest()
+    if actual != expected:
+        print(f"  FAIL: {label} SHA-256 {actual} != pinned {expected}")
+        return False
+    return True
+
+
 def _safe_extract_zip(zip_path: Path, dest: Path, subdir: str = "") -> int:
     """Extract zip with path-traversal protection. Returns file count."""
     count = 0
@@ -164,12 +199,27 @@ def _safe_extract_zip(zip_path: Path, dest: Path, subdir: str = "") -> int:
     return count
 
 
+def _pinned_layout_ok(target: Path, expected: int) -> bool:
+    """A pinned dataset counts as present only if the full file set is there."""
+    return target.is_dir() and sum(1 for p in target.rglob("*") if p.is_file()) == expected
+
+
 def download_dataset(name: str, config: dict, *, force: bool = False) -> bool:
     """Download a single dataset."""
     dest = EXAMPLE_DIR / name
+    # Pinned datasets extract into dest/<extract_to> (or dest itself).
+    target = dest / config["extract_to"] if "extract_to" in config else dest
+    expected = config.get("expected_files")
 
-    # Check if already exists
-    if dest.exists() and any(dest.rglob("*.java") if name != "sqlite" else dest.rglob("*.c")) and not force:
+    # Check if already exists. For a pinned dataset an older or partial layout
+    # (e.g. a case-01-only IR-Plag download) is replaced, not silently reused.
+    if expected is not None:
+        if _pinned_layout_ok(target, expected) and not force:
+            print(f"[{name}] Already present ({expected} files) — skipping (use --clean to re-download)")
+            return True
+        if target.exists():
+            shutil.rmtree(target)
+    elif dest.exists() and any(dest.rglob("*.java") if name != "sqlite" else dest.rglob("*.c")) and not force:
         print(f"[{name}] Already exists — skipping (use --clean to re-download)")
         return True
 
@@ -190,16 +240,31 @@ def download_dataset(name: str, config: dict, *, force: bool = False) -> bool:
                 ok = False
         return ok
 
-    # Case 2: Single zip with subdir extraction
+    # Case 2: Single zip with subdir extraction (optionally hash-pinned / nested)
     if "zip" in config:
         dest.mkdir(parents=True, exist_ok=True)
         zip_path = dest / "_download.zip"
         if not _download_file(config["zip"], zip_path):
             return False
-        subdir = config.get("zip_subdir", "")
-        count = _safe_extract_zip(zip_path, dest, subdir)
-        zip_path.unlink(missing_ok=True)
+        try:
+            if not _verify_sha256(zip_path.read_bytes(), config.get("zip_sha256"), "archive"):
+                return False
+            if "inner_zip" in config:
+                with zipfile.ZipFile(zip_path) as outer:
+                    inner = outer.read(config["inner_zip"])
+                if not _verify_sha256(inner, config.get("inner_zip_sha256"), "inner archive"):
+                    return False
+                zip_path.write_bytes(inner)
+            subdir = config.get("zip_subdir", "")
+            target.mkdir(parents=True, exist_ok=True)
+            count = _safe_extract_zip(zip_path, target, subdir)
+        finally:
+            zip_path.unlink(missing_ok=True)
         print(f"  Extracted {count} files")
+        if expected is not None and count != expected:
+            print(f"  FAIL: expected {expected} files, extracted {count}; removing partial copy")
+            shutil.rmtree(target, ignore_errors=True)
+            return False
         return count > 0
 
     # Case 3: Multiple zips (sqlite)
@@ -254,8 +319,8 @@ def main() -> int:
     print(f"Done: {ok} OK, {fail} FAIL")
 
     if ok > 0:
-        print(f"\nRun benchmarks:")
-        print(f"  diffinite example/Case-Oracle/AOSP_Google example/Case-Oracle/OpenJDK_Oracle --no-comments -o report.pdf")
+        print("\nRun benchmarks:")
+        print("  diffinite example/Case-Oracle/AOSP_Google example/Case-Oracle/OpenJDK_Oracle --no-comments -o report.pdf")
 
     return 1 if fail else 0
 
