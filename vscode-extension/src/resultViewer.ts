@@ -8,9 +8,14 @@
  *   (4) Keyboard shortcuts: J (next), K (prev)
  */
 import * as vscode from "vscode";
+import * as path from "path";
 import { getPdfFont, getPdfLang } from "./config";
 import { DiffiniteReport, DiffiniteOptions, runExport } from "./runner";
+import { buildReportViewModel } from "./analysisModel";
+import { RunGate } from "./runGate";
 import { escHtml, getNonce } from "./webviewUtils";
+
+const exportRunGate = new RunGate();
 
 /**
  * Show the analysis results in a Webview panel.
@@ -18,7 +23,8 @@ import { escHtml, getNonce } from "./webviewUtils";
 export function showResults(
   context: vscode.ExtensionContext,
   report: DiffiniteReport,
-  options: DiffiniteOptions
+  options: DiffiniteOptions,
+  sourceDirs: { dirA: string; dirB: string }
 ): void {
   const panel = vscode.window.createWebviewPanel(
     "diffiniteResults",
@@ -34,54 +40,80 @@ export function showResults(
     async (msg: { command: string; format?: string }) => {
       if (msg.command === "export" && (msg.format === "pdf" || msg.format === "html" || msg.format === "md")) {
         const format = msg.format;
-        const filters: Record<string, string[]> = {
-          pdf: { "PDF": ["pdf"] },
-          html: { "HTML": ["html"] },
-          md: { "Markdown": ["md"] },
-        }[format] as unknown as Record<string, string[]>;
+        if (!exportRunGate.tryEnter()) {
+          void panel.webview.postMessage({ command: "exportComplete" });
+          void vscode.window.showWarningMessage(
+            "Diffinite: Another report export is already running. Wait for it to finish or cancel it.",
+          );
+          return;
+        }
 
-        const basenameA = report.dir_a.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "A";
-        const basenameB = report.dir_b.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "B";
-        const now = new Date();
-        const timestamp = `${now.getFullYear()}${(now.getMonth() + 1).toString().padStart(2, '0')}${now.getDate().toString().padStart(2, '0')}_${now.getHours().toString().padStart(2, '0')}${now.getMinutes().toString().padStart(2, '0')}`;
-        const defaultFilename = `${basenameA}_${basenameB}_${timestamp}.${format}`;
+        let completedExport: { openUri: vscode.Uri; splitMode: boolean } | undefined;
+        try {
+          const filters: Record<string, string[]> = {
+            pdf: { "PDF": ["pdf"] },
+            html: { "HTML": ["html"] },
+            md: { "Markdown": ["md"] },
+          }[format] as unknown as Record<string, string[]>;
 
-        const uri = await vscode.window.showSaveDialog({
-          defaultUri: vscode.Uri.file(defaultFilename),
-          filters,
-        });
+          const basenameA = report.dir_a.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "A";
+          const basenameB = report.dir_b.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "B";
+          const now = new Date();
+          const timestamp = `${now.getFullYear()}${(now.getMonth() + 1).toString().padStart(2, '0')}${now.getDate().toString().padStart(2, '0')}_${now.getHours().toString().padStart(2, '0')}${now.getMinutes().toString().padStart(2, '0')}`;
+          const defaultFilename = `${basenameA}_${basenameB}_${timestamp}.${format}`;
 
-        if (uri) {
-          try {
+          const uri = await vscode.window.showSaveDialog({
+            defaultUri: vscode.Uri.file(defaultFilename),
+            filters,
+          });
+          if (!uri) { return; }
+
             await vscode.window.withProgress(
               {
                 location: vscode.ProgressLocation.Notification,
                 title: "Diffinite",
-                cancellable: false,
+                cancellable: true,
               },
-              async (progress) => {
-                // Read latest PDF font config right before exporting
+              async (progress, token) => {
+                // Read latest PDF font config right before exporting without
+                // mutating the analysis options retained by this result panel.
+                const exportOptions = { ...options };
                 if (format === "pdf") {
-                  options.pdfFont = getPdfFont();
-                  options.pdfLang = getPdfLang();
+                  exportOptions.pdfFont = getPdfFont();
+                  exportOptions.pdfLang = getPdfLang();
                 }
                 await runExport(
-                  report.dir_a, report.dir_b,
-                  options, format, uri.fsPath, progress
+                  sourceDirs.dirA, sourceDirs.dirB,
+                  exportOptions, format, uri.fsPath, progress, token
                 );
               }
             );
-            // Show success message outside withProgress so spinner closes immediately
-            const action = await vscode.window.showInformationMessage(
-              `${format.toUpperCase()} report saved.`,
-              "Open File"
-            );
-            if (action === "Open File") {
-              vscode.env.openExternal(uri);
-            }
-          } catch (err: unknown) {
-            const msg = err instanceof Error ? err.message : String(err);
-            vscode.window.showErrorMessage(`Export failed: ${msg}`);
+          const splitMode = options.noMerge && (format === "pdf" || format === "html");
+          completedExport = {
+            splitMode,
+            openUri: splitMode
+              ? vscode.Uri.file(path.join(
+                path.dirname(uri.fsPath),
+                `${path.parse(uri.fsPath).name}_files`,
+                format === "pdf" ? "000_cover.pdf" : "index.html",
+              ))
+              : uri,
+          };
+        } catch (err: unknown) {
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          void vscode.window.showErrorMessage(`Export failed: ${errorMessage}`);
+        } finally {
+          exportRunGate.leave();
+          void panel.webview.postMessage({ command: "exportComplete" });
+        }
+
+        if (completedExport) {
+          const action = await vscode.window.showInformationMessage(
+            `${format.toUpperCase()} ${completedExport.splitMode ? "split " : ""}report saved.`,
+            "Open Report"
+          );
+          if (action === "Open Report") {
+            void vscode.env.openExternal(completedExport.openUri);
           }
         }
       }
@@ -99,6 +131,12 @@ function buildResultHtml(report: DiffiniteReport): string {
   const meta = report.metadata;
   const summary = report.summary;
   const nonce = getNonce();
+  const view = buildReportViewModel(report);
+  const bannersHtml = view.banners.map((banner) => `
+    <div class="analysis-banner ${banner.kind}">
+      <strong>${escHtml(banner.title)}</strong><br>${escHtml(banner.message)}
+    </div>
+  `).join("");
 
   // --- Summary section ---
   let summaryHtml = `
@@ -109,13 +147,16 @@ function buildResultHtml(report: DiffiniteReport): string {
     </div>
   `;
 
-  if (meta) {
+  if (meta.exec_mode !== "unknown") {
     summaryHtml += `
       <div class="meta-bar">
         <span>Mode: <strong>${escHtml(meta.exec_mode)}</strong></span>
-        <span>K=${meta.k}</span>
-        <span>W=${meta.w}</span>
-        <span>min Jaccard=${meta.threshold.toFixed(1)}%</span>
+        <span>K=${meta.k ?? "unknown"}</span>
+        <span>W=${meta.w ?? "unknown"}</span>
+        <span>effective Jaccard=${meta.threshold === null ? "unknown" : `${meta.threshold.toFixed(1)}%`}</span>
+        <span>provenance=${escHtml(meta.threshold_provenance)}</span>
+        <span>normalize=${meta.normalize === null ? "unknown" : meta.normalize ? "on" : "off"}</span>
+        <span>comments(line/deep)=${escHtml(String(report.preprocessing.line_diff_comments ?? "unknown"))}/${escHtml(String(report.preprocessing.deep_compare_comments ?? "unknown"))}</span>
       </div>
     `;
   }
@@ -151,26 +192,26 @@ function buildResultHtml(report: DiffiniteReport): string {
 
   // --- Deep Compare section ---
   let deepHtml = "";
-  if (report.deep_results && report.deep_results.length > 0) {
+  if (view.deepRows.length > 0) {
     let deepRows = "";
-    for (const dr of report.deep_results) {
-      for (const m of dr.matches) {
+    for (const m of view.deepRows) {
         const jpct = (m.jaccard * 100).toFixed(1);
-        const jClass = m.jaccard >= 0.8 ? "badge-high" : m.jaccard >= 0.5 ? "badge-mid" : "badge-low";
+        const jClass = m.kind === "inconclusive"
+          ? "badge-inconclusive"
+          : m.jaccard >= 0.8 ? "badge-high" : m.jaccard >= 0.5 ? "badge-mid" : "badge-low";
         deepRows += `
           <tr>
-            <td>${escHtml(dr.file_a)}</td>
+            <td>${escHtml(m.file_a)}</td>
             <td>${escHtml(m.file_b)}</td>
             <td>${m.shared_hashes}</td>
-            <td><span class="badge ${jClass}">${jpct}%</span></td>
+            <td><span class="badge ${jClass}">${escHtml(m.label)} · ${jpct}%</span></td>
           </tr>
         `;
-      }
     }
 
     deepHtml = `
       <div class="deep-section" id="block-deep">
-        <h2>Deep Compare — N:M Cross-Match</h2>
+        <h2>Deep Compare — 유사 후보</h2>
         <table class="deep-table">
           <thead>
             <tr><th>File A</th><th>File B</th><th>Shared</th><th>Jaccard</th></tr>
@@ -209,6 +250,7 @@ function buildResultHtml(report: DiffiniteReport): string {
       <div><strong>A:</strong> ${escHtml(report.dir_a)}</div>
       <div><strong>B:</strong> ${escHtml(report.dir_b)}</div>
     </div>
+    ${bannersHtml}
     ${summaryHtml}
   </header>
 
@@ -295,6 +337,9 @@ const CSS = `
   .meta-bar { color: var(--fg-dim); font-size: 11px; }
 
   .stat strong { color: var(--accent); }
+  .analysis-banner { margin: 10px 0; padding: 10px 12px; border-radius: 4px; }
+  .analysis-banner.warning { border: 2px solid #f14c4c; background: rgba(241,76,76,.12); }
+  .analysis-banner.info { border: 1px solid var(--accent); background: rgba(0,120,212,.12); }
 
   main { padding: 16px 24px; }
 
@@ -377,6 +422,7 @@ const CSS = `
   .badge-high { background: #28a745; }
   .badge-mid  { background: #e0a800; color: #1e1e1e; }
   .badge-low  { background: #dc3545; }
+  .badge-inconclusive { background: #6c757d; border: 1px dashed #fff; }
 
   /* Deep Compare */
   .deep-section { margin-top: 24px; }
@@ -433,7 +479,16 @@ const JS = `
   const vscode = acquireVsCodeApi();
   const blocks = document.querySelectorAll('.diff-block');
   const navPos = document.getElementById('navPos');
+  const exportButtons = document.querySelectorAll('.export-btn');
   let currentBlock = -1;
+  let exportPending = false;
+
+  window.addEventListener('message', (event) => {
+    if (event.data && event.data.command === 'exportComplete') {
+      exportPending = false;
+      exportButtons.forEach(button => { button.disabled = false; });
+    }
+  });
 
   function goTo(idx) {
     if (blocks.length === 0) return;
@@ -454,8 +509,11 @@ const JS = `
     if (e.key === 'k' || e.key === 'K') { e.preventDefault(); goTo(currentBlock - 1); }
   });
 
-  document.querySelectorAll('.export-btn').forEach(btn => {
+  exportButtons.forEach(btn => {
     btn.addEventListener('click', () => {
+      if (exportPending) return;
+      exportPending = true;
+      exportButtons.forEach(button => { button.disabled = true; });
       const format = btn.getAttribute('data-format');
       vscode.postMessage({ command: 'export', format });
     });

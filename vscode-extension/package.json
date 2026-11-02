@@ -15,11 +15,31 @@
   },
   "qna": "https://github.com/nash-dir/diffinite/issues",
   "icon": "icon.png",
-  "keywords": ["diff", "code comparison", "forensic", "winnowing", "plagiarism", "similarity", "source code", "litigation", "code audit", "side-by-side"],
+  "keywords": [
+    "diff",
+    "code comparison",
+    "forensic",
+    "winnowing",
+    "plagiarism",
+    "similarity",
+    "source code",
+    "litigation",
+    "code audit",
+    "side-by-side"
+  ],
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Other", "Visualization"],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Diffinite launches a local Python process that reads source trees and writes reports; enable it only after trusting the workspace."
+    }
+  },
+  "categories": [
+    "Other",
+    "Visualization"
+  ],
   "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
@@ -43,12 +63,16 @@
         "diffinite.pythonPath": {
           "type": "string",
           "default": "python",
+          "scope": "machine",
           "description": "Path to Python interpreter with diffinite installed"
         },
         "diffinite.defaultMode": {
           "type": "string",
           "default": "deep",
-          "enum": ["simple", "deep"],
+          "enum": [
+            "simple",
+            "deep"
+          ],
           "description": "Default execution mode"
         },
         "diffinite.workers": {
@@ -76,7 +100,12 @@
         "diffinite.pdfLang": {
           "type": "string",
           "default": "ko",
-          "enum": ["ko", "ja", "zh-cn", "en"],
+          "enum": [
+            "ko",
+            "ja",
+            "zh-cn",
+            "en"
+          ],
           "description": "Major language code to automatically resolve OS-specific fonts from expansion packs. Ignored if pdfFont is specified."
         },
         "diffinite.batesPresets": {
@@ -86,12 +115,28 @@
           "items": {
             "type": "object",
             "properties": {
-              "name": { "type": "string", "description": "Preset display name (e.g. case ID)" },
-              "prefix": { "type": "string", "description": "Bates prefix (e.g. PLAINTIFF-)" },
-              "suffix": { "type": "string", "description": "Bates suffix (e.g. -CONFIDENTIAL)" },
-              "nextBatesNumber": { "type": "integer", "default": 1, "description": "Next Bates start number (auto-updated after export)" }
+              "name": {
+                "type": "string",
+                "description": "Preset display name (e.g. case ID)"
+              },
+              "prefix": {
+                "type": "string",
+                "description": "Bates prefix (e.g. PLAINTIFF-)"
+              },
+              "suffix": {
+                "type": "string",
+                "description": "Bates suffix (e.g. -CONFIDENTIAL)"
+              },
+              "nextBatesNumber": {
+                "type": "integer",
+                "default": 1,
+                "description": "Next Bates start number (auto-updated after export)"
+              }
             },
-            "required": ["name", "prefix"]
+            "required": [
+              "name",
+              "prefix"
+            ]
           }
         }
       }
@@ -100,12 +145,16 @@
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
+    "typecheck": "tsc --noEmit -p ./",
+    "test": "npm run compile && node --test test/*.test.js",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src"
   },
   "devDependencies": {
-    "@types/vscode": "^1.85.0",
     "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "3.2.2",
+    "ovsx": "1.0.2",
     "typescript": "^5.3.0"
   }
 }

@@ -6,22 +6,22 @@
  * before generating the final PDF report.
  */
 import * as vscode from "vscode";
-import * as path from "path";
-import * as fs from "fs";
 import { DiffiniteReport } from "./runner";
+import { buildReportViewModel } from "./analysisModel";
 import { escHtml, getNonce } from "./webviewUtils";
 
 export class TreeViewerPanel {
   public static currentPanel: TreeViewerPanel | undefined;
   private readonly _panel: vscode.WebviewPanel;
   private _disposables: vscode.Disposable[] = [];
+  private _disposed = false;
   
   // Callback invoked when user clicks "Generate Final Report"
-  private _onGenerateCallback: ((selectedFilesA: string[]) => void) | undefined;
+  private _onGenerateCallback: ((selectedFilesA: string[]) => Promise<void>) | undefined;
 
   public static createOrShow(
     report: DiffiniteReport,
-    onGenerate: (selectedFilesA: string[]) => void
+    onGenerate: (selectedFilesA: string[]) => Promise<void>
   ) {
     if (TreeViewerPanel.currentPanel) {
       TreeViewerPanel.currentPanel._panel.reveal(vscode.ViewColumn.Active);
@@ -46,7 +46,7 @@ export class TreeViewerPanel {
   private constructor(
     panel: vscode.WebviewPanel,
     report: DiffiniteReport,
-    onGenerate: (selectedFilesA: string[]) => void
+    onGenerate: (selectedFilesA: string[]) => Promise<void>
   ) {
     this._panel = panel;
     this._onGenerateCallback = onGenerate;
@@ -55,16 +55,17 @@ export class TreeViewerPanel {
     this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
 
     this._panel.webview.onDidReceiveMessage(
-      (message) => {
+      async (message) => {
         switch (message.command) {
           case "generate": {
             const selectedFiles: string[] = Array.isArray(message.files)
               ? message.files.filter((f: unknown): f is string => typeof f === "string")
               : [];
-            if (this._onGenerateCallback) {
-                this._onGenerateCallback(selectedFiles);
+            const callback = this._onGenerateCallback;
+            this.dispose(); // Close first so a second Generate message cannot race.
+            if (callback) {
+              await callback(selectedFiles);
             }
-            this.dispose(); // Close tree view and proceed
             return;
           }
           case "cancel":
@@ -78,6 +79,8 @@ export class TreeViewerPanel {
   }
 
   public dispose() {
+    if (this._disposed) { return; }
+    this._disposed = true;
     TreeViewerPanel.currentPanel = undefined;
     this._panel.dispose();
     while (this._disposables.length) {
@@ -97,6 +100,12 @@ export class TreeViewerPanel {
     // in a much more robust and readable way without complex JS tree libraries.
     
     const nonce = getNonce();
+    const view = buildReportViewModel(report);
+    const bannersHtml = view.banners.map((banner) => `
+      <div style="border:2px solid ${banner.kind === "warning" ? "#f14c4c" : "#0078d4"};padding:10px;margin:8px 0;">
+        <strong>${escHtml(banner.title)}</strong><br>${escHtml(banner.message)}
+      </div>
+    `).join("");
     let rowsHtml = "";
 
     // Sort results by similarity descending
@@ -205,6 +214,7 @@ export class TreeViewerPanel {
 <body>
     <div class="header">
         <h1>Select Files for Final Report</h1>
+        ${bannersHtml}
         <p>Phase 1 complete. Review the similarity metrics below and select ONLY the files you wish to include in the final PDF/HTML generation.</p>
         <div style="margin-bottom: 10px;">
             <button class="btn-secondary" id="btn-all">Check All</button>
@@ -267,6 +277,7 @@ export class TreeViewerPanel {
         });
 
         document.getElementById('btn-generate').addEventListener('click', () => {
+            genBtn.disabled = true;
             const selected = [];
             checkboxes.forEach(cb => {
                 if(cb.checked) selected.push(cb.value);

@@ -99,7 +99,7 @@ N:M cross-matching table (deep mode):
 | **Matched Files (B)** | All B-files sharing fingerprints above the Jaccard threshold |
 | **Shared Hashes** | Count of Winnowing fingerprints the file pair has in common |
 | **Jaccard** | `\|A∩B\| / \|A∪B\|` — fraction of shared Winnowing fingerprints |
-| **Inconclusive** | Shown when Normalize is on and the smaller file is below 45 tokens — precision is unsalvageable at that size |
+| **Inconclusive** | Shown when Normalize is on and the smaller file is below 45 tokens. Outside the measured profile this is a conservative guard, not a calibrated precision claim. |
 
 ---
 
@@ -136,7 +136,7 @@ All options are configurable through the built-in GUI panel:
 | **Mode** | `deep` | `simple` = 1:1 only. `deep` = 1:1 + N:M cross-matching |
 | **Strip Comments** | off | Remove comments before comparison |
 | **By Word** | off | Compare by word instead of by line |
-| **Normalize** | off | Normalize identifiers → `ID`, literals → `LIT` before fingerprinting (Type-2 clone detection). When enabled, the deep threshold defaults to **93** (calibrated for FP ≤ 1%). Matches below a 45-token floor are marked *inconclusive*. |
+| **Normalize** | off | Normalize identifiers → `ID`, literals → `LIT` before fingerprinting. Python records the effective threshold and whether the measured profile (K=5, W=4, comments stripped, language-aware off) applies. Other profiles are shown as unvalidated; matches below 45 tokens remain *inconclusive / 판단 유보*. |
 | **Collapse Identical** | off | Fold unchanged blocks (3 context lines) |
 | **Detect Moved Blocks** | off | Highlight moved code in purple/blue instead of plain delete/add |
 | **No Autojunk** | off | Disable autojunk heuristic for more precise forensic analysis |
@@ -146,11 +146,20 @@ All options are configurable through the built-in GUI panel:
 | **Threshold** | `60` | Fuzzy file-name matching threshold (0–100) |
 | **K-gram** | `5` | Winnowing K-gram size (Schleimer 2003 §4.2) |
 | **Window** | `4` | Winnowing window size. Detection guarantee: sequences ≥ K+W−1 tokens |
-| **Threshold (Deep)** | `5` / `93` | Minimum Jaccard similarity (0–100) to include in results. Default is `5` (raw channel) or **`93`** when Normalize is enabled (calibrated operating point). |
+| **Deep Threshold Mode** | `Auto` | Auto omits `--threshold-deep`, so Python remains the source of truth. Manual passes only the value explicitly entered by the user and is shown with `user` provenance. |
+| **Allow Partial** | off | Permit an explicitly **Incomplete analysis / 불완전 결과** after a worker or file failure. Off is fail-closed. |
 | **Bates Preset** | — | Select a saved preset to auto-fill prefix/suffix/start |
 | **Bates Prefix** | (empty) | Prefix for Bates numbering (e.g. `PLAINTIFF-`) |
 | **Bates Suffix** | (empty) | Suffix for Bates numbering (e.g. `-CONFIDENTIAL`) |
 | **Starting Number** | `1` | First Bates number (auto-continues across reports) |
+
+Older saved options have no Auto/Manual marker, so an existing numeric
+`thresholdDeep` cannot be distinguished from an intentional override. Migration
+preserves that number as **Manual** and displays a warning; selecting Auto is an
+explicit user choice. Result JSON schema v2 displays Python's effective threshold,
+provenance, canonical calibration disclosure, actual preprocessing, and
+partial/truncation status. Legacy JSON still opens with missing fields shown as
+`unknown`, rather than being inferred as complete or calibrated.
 
 ---
 

@@ -1,0 +1,22 @@
+{
+  "metadata": {
+    "exec_mode": "deep",
+    "k": 5,
+    "w": 4,
+    "threshold": 5,
+    "autojunk": true
+  },
+  "dir_a": "a",
+  "dir_b": "b",
+  "comparison_unit": "line",
+  "comment_mode": "included",
+  "summary": {
+    "matched_pairs": 0,
+    "unmatched_a_count": 0,
+    "unmatched_b_count": 0
+  },
+  "results": [],
+  "deep_results": [],
+  "unmatched_a": [],
+  "unmatched_b": []
+}

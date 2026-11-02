@@ -6,125 +6,39 @@
  *   2. Fallback: System Python interpreter (`python -m diffinite`)
  */
 import * as vscode from "vscode";
-import { spawn, exec } from "child_process";
+import { spawn } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
 import { getPythonPath } from "./config";
+import { createTempJsonFile } from "./tempFiles";
+import {
+  buildCoreArgs,
+  defaultAnalysisOptions,
+  DiffiniteOptions,
+  DiffiniteReport,
+  parseLiveReport,
+} from "./analysisModel";
+import { ActiveProcessRegistry, waitForProcessClose } from "./processRegistry";
+import { createExportTransaction } from "./exportTransaction";
 
-/** Options collected from the GUI panel. */
-export interface DiffiniteOptions {
-  mode: "simple" | "deep";
-  stripComments: boolean;
-  byWord: boolean;
-  normalizeWhitespace: boolean;
-  normalize: boolean;
-  collapseIdentical: boolean;
-  detectMoved: boolean;
-  noAutojunk: boolean;
-  threshold: number;
-  kGram: number;
-  window: number;
-  thresholdDeep: number;
-  pageNumber: boolean;
-  fileNumber: boolean;
-  batesNumber: boolean;
-  hash: boolean;
-  encoding: string;
-  sortBy: string;
-  sortOrder: string;
-  batesPrefix: string;
-  batesSuffix: string;
-  batesStart: number;
-  uncomparedFiles: "inline" | "separate" | "none";
-  binaryHandling: "exclude" | "hash" | "error";
-  
-  // Phase 1/2 Architecture
-  metricsOnly?: boolean;
-  filterJson?: string;
+export type { DiffiniteOptions, DiffiniteReport } from "./analysisModel";
 
-  // Performance & Output
-  workers: number;
-  noMerge: boolean;
-  preserveTree: boolean;
-  pdfFont: string;
-  pdfLang: string;
-}
+type DiffiniteProcess = ReturnType<typeof spawn>;
+const activeProcesses = new ActiveProcessRegistry<DiffiniteProcess>();
+// VS Code caps deactivation at 5s; 4s leaves its final second for cleanup and log flushing.
+// Source: microsoft/vscode extHostExtensionService.ts (`Promise.race([timeout(5000), ...])`).
+const PROCESS_TERMINATION_TIMEOUT_MS = 4_000;
 
-/** Structure of the JSON report produced by `diffinite --report-json`. */
-export interface DiffiniteReport {
-  metadata: {
-    exec_mode: string;
-    k: number;
-    w: number;
-    threshold: number;
-    autojunk: boolean;
-  } | null;
-  dir_a: string;
-  dir_b: string;
-  comparison_unit: string;
-  comment_mode: string;
-  summary: {
-    matched_pairs: number;
-    unmatched_a_count: number;
-    unmatched_b_count: number;
-  };
-  results: Array<{
-    file_a: string;
-    file_b: string;
-    name_similarity: number;
-    ratio: number;
-    additions: number;
-    deletions: number;
-    html_diff: string;
-    error: string | null;
-  }>;
-  deep_results: Array<{
-    file_a: string;
-    fingerprint_count_a: number;
-    matches: Array<{
-      file_b: string;
-      shared_hashes: number;
-      jaccard: number;
-    }>;
-  }> | null;
-  unmatched_a: string[];
-  unmatched_b: string[];
+interface ProcessTerminationResult {
+  closed: boolean;
+  stillRunning: boolean;
+  pid?: number;
 }
 
 /** Default analysis options. */
 export function defaultOptions(): DiffiniteOptions {
-  return {
-    mode: "deep",
-    stripComments: false,
-    byWord: false,
-    normalizeWhitespace: false,
-    normalize: false,
-    collapseIdentical: false,
-    detectMoved: false,
-    noAutojunk: true,  // Forensic precision enabled by default
-    threshold: 60,
-    kGram: 5,
-    window: 4,
-    thresholdDeep: 5,
-    pageNumber: true,
-    fileNumber: true,
-    batesNumber: true,
-    hash: true,
-    encoding: "auto",
-    sortBy: "",
-    sortOrder: "asc",
-    batesPrefix: "",
-    batesSuffix: "",
-    batesStart: 1,
-    uncomparedFiles: "inline",
-    binaryHandling: "hash",
-    workers: 4,
-    noMerge: false,
-    preserveTree: true,
-    pdfFont: "",
-    pdfLang: "ko",
-  };
+  return defaultAnalysisOptions();
 }
 
 // ---------------------------------------------------------------------------
@@ -157,80 +71,11 @@ function resolveBinary(): { exe: string; prefixArgs: string[] } {
  * Build CLI arguments from GUI options.
  */
 function buildArgs(opts: DiffiniteOptions): string[] {
-  const args: string[] = ["--mode", opts.mode];
-  if (opts.stripComments) { args.push("--strip-comments"); }
-  if (opts.byWord) { args.push("--by-word"); }
-  if (opts.normalizeWhitespace) { args.push("--normalize-whitespace"); }
-  if (opts.normalize) { args.push("--normalize"); }
-  if (opts.collapseIdentical) { args.push("--collapse-identical"); }
-  if (opts.detectMoved) { args.push("--detect-moved"); }
-  if (opts.noAutojunk) { args.push("--no-autojunk"); }
-  args.push("--threshold", String(opts.threshold));
-  args.push("--k-gram", String(opts.kGram));
-  args.push("--window", String(opts.window));
-  args.push("--threshold-deep", String(opts.thresholdDeep));
-  if (opts.pageNumber) { args.push("--page-number"); }
-  if (opts.fileNumber) { args.push("--file-number"); }
-  if (opts.batesNumber) { args.push("--bates-number"); }
-  if (opts.hash) { args.push("--hash"); }
-  if (opts.encoding && opts.encoding !== "auto") {
-    args.push("--encoding", opts.encoding);
-  }
-  if (opts.sortBy) {
-    args.push("--sort-by", opts.sortBy);
-    args.push("--sort-order", opts.sortOrder || "asc");
-  }
-  if (opts.batesPrefix) {
-    args.push("--bates-prefix", opts.batesPrefix);
-  }
-  if (opts.batesSuffix) {
-    args.push("--bates-suffix", opts.batesSuffix);
-  }
-  if (opts.batesStart > 1) {
-    args.push("--bates-start", String(opts.batesStart));
-  }
-  if (opts.uncomparedFiles && opts.uncomparedFiles !== "inline") {
-    args.push("--uncompared-files", opts.uncomparedFiles);
-  }
-  if (opts.binaryHandling && opts.binaryHandling !== "hash") {
-    args.push("--binary-handling", opts.binaryHandling);
-  }
+  const args = buildCoreArgs(opts);
   // Auto-inject built-in ignore file if it exists
   const defaultIgnoreFile = path.join(os.homedir(), ".diffignore");
   if (fs.existsSync(defaultIgnoreFile)) {
     args.push("--ignore-file", defaultIgnoreFile);
-  }
-
-  // Phase 1/2 Flags
-  if (opts.metricsOnly) {
-    args.push("--metrics-only");
-  }
-  if (opts.filterJson) {
-    args.push("--filter-json", opts.filterJson);
-  }
-
-  // Multi-processing & Export Modes
-  if (opts.workers && opts.workers > 1) {
-    args.push("--workers", opts.workers.toString());
-  }
-  if (opts.noMerge) {
-    args.push("--no-merge");
-  }
-  if (opts.noMerge && !opts.preserveTree) {
-    args.push("--no-preserve-tree");
-  }
-
-  // Unreadable Log (Forensics)
-  const wsPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  if (wsPath) {
-    args.push("--unreadable-log", path.join(wsPath, "diffinite_unreadable_files.log"));
-  }
-
-  // PDF Font & Lang
-  if (opts.pdfFont) {
-    args.push("--pdf-font", opts.pdfFont);
-  } else if (opts.pdfLang) {
-    args.push("--pdf-lang", opts.pdfLang);
   }
 
   return args;
@@ -244,7 +89,8 @@ function spawnDiffinite(
 ): ReturnType<typeof spawn> {
   const { exe, prefixArgs } = resolveBinary();
   const allArgs = [...prefixArgs, ...extraArgs];
-  console.log('[Diffinite] Spawning:', exe, allArgs.join(' '));
+  // Do not log source/report paths: they can contain privileged case metadata.
+  console.log('[Diffinite] Starting local analyzer:', path.basename(exe));
   
   // Dev mode injection removed (L3): The Windows Embedded Python ignores
   // PYTHONPATH by design if a ._pth file exists. If running via system Python,
@@ -252,7 +98,150 @@ function spawnDiffinite(
   // rather than dynamic runtime patching which causes silent fallbacks.
   const env = process.env;
 
-  return spawn(exe, allArgs, { env });
+  const proc = spawn(exe, allArgs, {
+    env,
+    windowsHide: true,
+    // A separate POSIX process group lets cancellation reach worker children.
+    detached: os.platform() !== "win32",
+  });
+  activeProcesses.track(proc);
+  return proc;
+}
+
+function forceDirectProcessKill(proc: DiffiniteProcess): void {
+  try { proc.kill("SIGKILL"); } catch { /* logged if it remains alive */ }
+}
+
+function isProcessTreeStillRunning(proc: DiffiniteProcess): boolean {
+  if (proc.pid === undefined) {
+    return proc.exitCode === null && proc.signalCode === null;
+  }
+  try {
+    // POSIX children are launched in their own group; probe the group so a
+    // surviving worker is detected even if the Python parent has exited.
+    process.kill(os.platform() === "win32" ? proc.pid : -proc.pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+function detachUnresponsiveProcess(proc: DiffiniteProcess): void {
+  proc.stdout?.removeAllListeners();
+  proc.stderr?.removeAllListeners();
+  proc.stdin?.removeAllListeners();
+  proc.stdout?.destroy();
+  proc.stderr?.destroy();
+  proc.stdin?.destroy();
+  proc.removeAllListeners();
+  proc.once("error", (err) => {
+    console.warn(`[Diffinite] Detached analyzer process later reported an error: ${err.message}`);
+  });
+  proc.unref();
+}
+
+async function terminateProcessTree(proc: DiffiniteProcess): Promise<ProcessTerminationResult> {
+  if (proc.exitCode !== null || proc.signalCode !== null) {
+    activeProcesses.release(proc);
+    return { closed: true, stillRunning: false, pid: proc.pid };
+  }
+  const closedPromise = waitForProcessClose(proc, PROCESS_TERMINATION_TIMEOUT_MS);
+  let windowsKiller: ReturnType<typeof spawn> | undefined;
+
+  if (os.platform() === "win32" && proc.pid) {
+    // Argument-array spawn avoids shell interpolation of the PID. Awaiting the
+    // target close (below) prevents cleanup from racing worker termination.
+    const systemRoot = process.env.SystemRoot;
+    try {
+      if (!systemRoot) {
+        throw new Error("SystemRoot is unavailable");
+      }
+      // Use the OS-owned absolute path so a workspace/PATH taskkill.exe cannot run.
+      const taskkillPath = path.join(systemRoot, "System32", "taskkill.exe");
+      windowsKiller = spawn(taskkillPath, ["/pid", String(proc.pid), "/t", "/f"], {
+        windowsHide: true,
+        stdio: "ignore",
+      });
+      windowsKiller.once("error", () => {
+        forceDirectProcessKill(proc);
+      });
+      windowsKiller.once("close", (code) => {
+        if (code !== 0) { forceDirectProcessKill(proc); }
+      });
+    } catch {
+      forceDirectProcessKill(proc);
+    }
+  } else if (proc.pid) {
+    try {
+      // Cancellation is an explicit forced stop. SIGKILL mirrors taskkill /f
+      // and guarantees the whole dedicated POSIX worker group cannot linger.
+      process.kill(-proc.pid, "SIGKILL");
+    } catch {
+      forceDirectProcessKill(proc);
+    }
+  } else {
+    forceDirectProcessKill(proc);
+  }
+
+  const closed = await closedPromise;
+  if (!closed) {
+    // Retry the direct handle if the tree command failed or never completed.
+    forceDirectProcessKill(proc);
+  }
+  if (windowsKiller?.exitCode === null) {
+    try { windowsKiller.kill("SIGKILL"); } catch { /* helper already exited */ }
+    windowsKiller.unref();
+  }
+
+  const stillRunning = !closed && isProcessTreeStillRunning(proc);
+  if (!closed) {
+    if (stillRunning) {
+      console.warn(
+        `[Diffinite] Analyzer process${proc.pid ? ` PID ${proc.pid}` : ""} is still running ` +
+        `after the ${PROCESS_TERMINATION_TIMEOUT_MS}ms forced-shutdown timeout. ` +
+        "Close it with the operating system process manager.",
+      );
+    } else {
+      console.warn(
+        `[Diffinite] Analyzer process${proc.pid ? ` PID ${proc.pid}` : ""} exited without ` +
+        "emitting close; releasing extension resources.",
+      );
+    }
+    detachUnresponsiveProcess(proc);
+  }
+  activeProcesses.release(proc);
+  return { closed, stillRunning, pid: proc.pid };
+}
+
+function cancellationError(
+  operation: "Analysis" | "Export",
+  result: ProcessTerminationResult,
+): Error {
+  const preserved = operation === "Export" ? " Existing output was preserved." : "";
+  if (result.stillRunning) {
+    return new Error(
+      `${operation} cancelled, but analyzer${result.pid ? ` PID ${result.pid}` : ""} is still ` +
+      `running after forced termination. Close it with the operating system process manager.${preserved}`,
+    );
+  }
+  if (!result.closed) {
+    return new Error(
+      `${operation} cancelled; the analyzer did not emit a close event before timeout.${preserved}`,
+    );
+  }
+  return new Error(`${operation} cancelled by user.${preserved}`);
+}
+
+/** Terminate every analyzer still owned by this extension host. */
+export async function terminateAllProcesses(): Promise<void> {
+  try {
+    await activeProcesses.terminateAll(async (proc) => {
+      await terminateProcessTree(proc);
+    });
+  } catch (err) {
+    // Never make VS Code deactivation wait on or reject for a broken child.
+    console.warn(`[Diffinite] Analyzer shutdown completed with errors: ${err}`);
+  }
 }
 
 /**
@@ -265,8 +254,9 @@ export async function runAnalysis(
   progress: vscode.Progress<{ message?: string; increment?: number }>,
   token?: vscode.CancellationToken
 ): Promise<DiffiniteReport> {
-  const tmpJson = path.join(os.tmpdir(), `diffinite_${Date.now()}.json`);
-  const cleanupTmp = () => { try { fs.unlinkSync(tmpJson); } catch { /* ignore */ } };
+  const temporary = createTempJsonFile("diffinite-report-");
+  const tmpJson = temporary.filePath;
+  const cleanupTmp = temporary.cleanup;
 
   // Options first, then '--', then the positional directories. The '--' sentinel
   // stops argparse treating a path that begins with '-' as an option.
@@ -279,37 +269,45 @@ export async function runAnalysis(
   progress.report({ message: "Running diffinite analysis…" });
 
   return new Promise<DiffiniteReport>((resolve, reject) => {
-    const proc = spawnDiffinite(cliArgs);
-
-    // Handle User Cancellation
-    if (token) {
-      token.onCancellationRequested(() => {
-        console.log('[Diffinite] User requested cancellation. Killing process tree…');
-        // On Windows the multiprocessing workers are separate processes; a plain
-        // kill on the parent orphans them. taskkill /t terminates the whole tree.
-        if (os.platform() === 'win32' && proc.pid) {
-          exec(`taskkill /pid ${proc.pid} /t /f`);
-        } else {
-          proc.kill('SIGTERM');
-        }
-        cleanupTmp();
-        reject(new Error("Analysis cancelled by user."));
-      });
+    let proc: DiffiniteProcess;
+    try {
+      proc = spawnDiffinite(cliArgs);
+    } catch (err) {
+      cleanupTmp();
+      reject(new Error(`Failed to start diffinite: ${err instanceof Error ? err.message : String(err)}`));
+      return;
     }
-
-    let stdoutData = "";
+    let settled = false;
+    let cancelled = false;
+    let cancellationDisposable: vscode.Disposable | undefined;
     let stderrData = "";
     const workerProgress: Record<string, { current: number, total: number }> = {};
     let lastReportedPct = 0;
 
+    const rejectOnce = (error: Error): void => {
+      if (settled) { return; }
+      settled = true;
+      cancellationDisposable?.dispose();
+      cleanupTmp();
+      reject(error);
+    };
+
+    const resolveOnce = (report: DiffiniteReport): void => {
+      if (settled) { return; }
+      settled = true;
+      cancellationDisposable?.dispose();
+      cleanupTmp();
+      resolve(report);
+    };
+
     proc.stderr?.on("data", (chunk: Buffer) => {
-      stderrData += chunk.toString();
+      // Keep only the latest stream chunk so a noisy child cannot exhaust the
+      // extension host. Python tracebacks place the final exception last.
+      stderrData = chunk.toString();
     });
 
     proc.stdout?.on("data", (chunk: Buffer) => {
       const text = chunk.toString();
-      stdoutData += text;
-      
       const lines = text.split(/\r?\n/);
       let progressUpdated = false;
       for (const line of lines) {
@@ -356,32 +354,52 @@ export async function runAnalysis(
 
     proc.on("close", async (code) => {
       console.log('[Diffinite] Process exited with code:', code);
+      if (cancelled) {
+        rejectOnce(new Error("Analysis cancelled by user."));
+        return;
+      }
       if (code !== 0) {
-        console.error('[Diffinite] stderr:', stderrData);
-        cleanupTmp();
-        reject(new Error(`diffinite exited with code ${code}:\n${stderrData}`));
+        rejectOnce(new Error(`diffinite exited with code ${code}:\n${stderrData}`));
         return;
       }
       try {
         // Phase-2 JSON embeds full html_diff per file and can be large, so read
         // it off the UI thread to avoid freezing VS Code on big selections.
         const raw = await fs.promises.readFile(tmpJson, "utf-8");
-        const report: DiffiniteReport = JSON.parse(raw);
-        cleanupTmp();
-        resolve(report);
+        const report = parseLiveReport(JSON.parse(raw));
+        if (cancelled) {
+          rejectOnce(new Error("Analysis cancelled by user."));
+        } else {
+          resolveOnce(report);
+        }
       } catch (err) {
-        cleanupTmp();
-        reject(new Error(`Failed to parse JSON report: ${err}`));
+        rejectOnce(new Error(`Failed to parse JSON report: ${err}`));
       }
     });
 
     proc.on("error", (err) => {
-      cleanupTmp();
-      reject(new Error(
-        `Failed to start diffinite. Check that the bundled binary exists ` +
-        `or set diffinite.pythonPath in settings.\n${err.message}`
-      ));
+      rejectOnce(cancelled
+        ? new Error("Analysis cancelled by user.")
+        : new Error(
+          `Failed to start diffinite. Check that the bundled binary exists ` +
+          `or set diffinite.pythonPath in settings.\n${err.message}`
+        ));
     });
+
+    const cancel = (): void => {
+      if (settled || cancelled) { return; }
+      cancelled = true;
+      progress.report({ message: "Cancelling analysis and stopping workers…" });
+      void terminateProcessTree(proc).then(
+        (result) => rejectOnce(cancellationError("Analysis", result)),
+        (err) => rejectOnce(new Error(`Analysis cancellation cleanup failed: ${err}`)),
+      );
+    };
+    if (token?.isCancellationRequested) {
+      cancel();
+    } else if (token) {
+      cancellationDisposable = token.onCancellationRequested(cancel);
+    }
   });
 }
 
@@ -398,36 +416,80 @@ export async function runExport(
   token?: vscode.CancellationToken
 ): Promise<void> {
   const formatFlag = `--report-${format}`;
+  const exportTransaction = createExportTransaction({
+    dirA,
+    dirB,
+    outputPath,
+    format,
+    noMerge: opts.noMerge,
+    uncomparedFiles: opts.uncomparedFiles,
+    batesNumber: opts.batesNumber,
+  });
+
+  let selectionFilter: ReturnType<typeof createTempJsonFile> | undefined;
+  const exportOptions = { ...opts };
+  try {
+    if (opts.selectedFiles !== undefined) {
+      if (opts.selectedFiles.length === 0) {
+        throw new Error("Cannot export an empty Phase-2 selection");
+      }
+      selectionFilter = createTempJsonFile("diffinite-export-filter-");
+      fs.writeFileSync(
+        selectionFilter.filePath,
+        JSON.stringify(opts.selectedFiles),
+        "utf8",
+      );
+      exportOptions.filterJson = selectionFilter.filePath;
+    }
+  } catch (err) {
+    selectionFilter?.cleanup();
+    exportTransaction.abort();
+    throw err;
+  }
 
   const cliArgs = [
-    formatFlag, outputPath,
-    ...buildArgs(opts),
+    formatFlag, exportTransaction.stagedOutputPath,
+    ...buildArgs(exportOptions),
     "--", dirA, dirB,
   ];
 
   progress.report({ message: `Exporting ${format.toUpperCase()} report…` });
 
   return new Promise<void>((resolve, reject) => {
-    const proc = spawnDiffinite(cliArgs);
-
-    // Handle User Cancellation
-    if (token) {
-      token.onCancellationRequested(() => {
-        console.log('[Diffinite] User requested cancellation. Killing process tree…');
-        if (os.platform() === 'win32' && proc.pid) {
-          exec(`taskkill /pid ${proc.pid} /t /f`);
-        } else {
-          proc.kill('SIGTERM');
-        }
-        reject(new Error("Export cancelled by user."));
-      });
+    let proc: DiffiniteProcess;
+    try {
+      proc = spawnDiffinite(cliArgs);
+    } catch (err) {
+      selectionFilter?.cleanup();
+      exportTransaction.abort();
+      reject(new Error(`Failed to start diffinite: ${err instanceof Error ? err.message : String(err)}`));
+      return;
     }
-
+    let settled = false;
+    let cancelled = false;
+    let cancellationDisposable: vscode.Disposable | undefined;
     let stderr = "";
     const workerProgress: Record<string, string> = {};
 
+    const rejectOnce = (error: Error): void => {
+      if (settled) { return; }
+      settled = true;
+      cancellationDisposable?.dispose();
+      selectionFilter?.cleanup();
+      exportTransaction.abort();
+      reject(error);
+    };
+    const resolveOnce = (): void => {
+      if (settled) { return; }
+      settled = true;
+      cancellationDisposable?.dispose();
+      selectionFilter?.cleanup();
+      resolve();
+    };
+
     proc.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
+      // See runAnalysis: retain useful terminal context without unbounded growth.
+      stderr = chunk.toString();
     });
 
     proc.stdout?.on("data", (chunk: Buffer) => {
@@ -446,16 +508,46 @@ export async function runExport(
       }
     });
 
-    proc.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(`diffinite export failed (code ${code}):\n${stderr}`));
+    proc.on("close", async (code) => {
+      if (cancelled) {
+        rejectOnce(new Error("Export cancelled by user. Existing output was preserved."));
         return;
       }
-      resolve();
+      if (code !== 0) {
+        rejectOnce(new Error(`diffinite export failed (code ${code}):\n${stderr}`));
+        return;
+      }
+      try {
+        await exportTransaction.publish({
+          isCancellationRequested: () => cancelled || token?.isCancellationRequested === true,
+        });
+        resolveOnce();
+      } catch (err) {
+        rejectOnce(cancelled || token?.isCancellationRequested
+          ? new Error("Export cancelled by user. Existing output was preserved.")
+          : new Error(`Failed to publish complete export artifacts: ${err}`));
+      }
     });
 
     proc.on("error", (err) => {
-      reject(new Error(`Failed to start diffinite: ${err.message}`));
+      rejectOnce(cancelled
+        ? new Error("Export cancelled by user.")
+        : new Error(`Failed to start diffinite: ${err.message}`));
     });
+
+    const cancel = (): void => {
+      if (settled || cancelled) { return; }
+      cancelled = true;
+      progress.report({ message: "Cancelling export and stopping workers…" });
+      void terminateProcessTree(proc).then(
+        (result) => rejectOnce(cancellationError("Export", result)),
+        (err) => rejectOnce(new Error(`Export cancellation cleanup failed: ${err}`)),
+      );
+    };
+    if (token?.isCancellationRequested) {
+      cancel();
+    } else if (token) {
+      cancellationDisposable = token.onCancellationRequested(cancel);
+    }
   });
 }
