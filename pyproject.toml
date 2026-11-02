@@ -1,5 +1,6 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+# Setuptools 77 introduced PEP 639 SPDX license-expression metadata support.
+requires = ["setuptools>=77.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +8,7 @@ name = "diffinite"
 version = "0.13.1"
 description = "Forensic source-code comparison tool — Winnowing fingerprints and professional PDF reports for IP litigation & code audit"
 readme = "README.md"
-license = {text = "Apache-2.0"}
+license = "Apache-2.0"
 requires-python = ">=3.10"
 authors = [
     { name = "nash-dir" },
@@ -22,7 +23,6 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Legal Industry",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -36,7 +36,14 @@ dependencies = [
     "rapidfuzz>=3.0.0",
     "charset-normalizer>=3.0.0",
     "xhtml2pdf>=0.2.11",
-    "pypdf>=4.0.0",
+    # pip-audit on 2026-07-20 reported these as the first fixed versions for
+    # advisories affecting the PDF/runtime dependency graph.
+    "pypdf>=6.13.3",
+    "cryptography>=48.0.1",
+    "idna>=3.15",
+    "lxml>=6.1.0",
+    "pillow>=12.3.0",
+    "urllib3>=2.7.0",
     "pygments>=2.16.0",
     "reportlab>=4.0.0",
 ]
@@ -45,6 +52,8 @@ dependencies = [
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
+    "ruff>=0.9.0",
+    "mypy>=1.14.0",
 ]
 
 
@@ -68,3 +77,25 @@ exclude = ["example*", "legacy*", "tests*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E9", "F"]
+
+[tool.mypy]
+python_version = "3.10"
+files = [
+    "src/diffinite/calibration.py",
+    "src/diffinite/cli.py",
+    "src/diffinite/deep_compare.py",
+    "src/diffinite/models.py",
+    "src/diffinite/evidence.py",
+    "src/diffinite/parser.py",
+    "src/diffinite/pipeline.py",
+]
+warn_unused_configs = true
+check_untyped_defs = true
+no_implicit_optional = true

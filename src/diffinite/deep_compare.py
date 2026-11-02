@@ -49,6 +49,7 @@ from diffinite.fingerprint import (
     extract_fingerprints,
     tokenize,
 )
+from diffinite.languages import get_spec
 from diffinite.models import DeepMatchResult
 from diffinite.parser import strip_comments
 
@@ -58,20 +59,32 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────────────────
 # 워커 함수 (ProcessPoolExecutor 직렬화를 위해 모듈 최상위 정의 필수)
 # ──────────────────────────────────────────────────────────────────────
-def _extract_one(args: tuple) -> tuple[str, set[int], int]:
+def _extract_one(args: tuple) -> tuple[str, str, set[int], int, int, str | None]:
     """단일 파일의 핑거프린트를 추출한다.
 
     Args:
         args: ``(side, abs_path, rel_path, extension, k, w, normalize, lang_aware,
-                 max_bytes)`` — tuple 포장은 ``pool.map()`` 인터페이스 제약.
+                 max_bytes, strip_requested, encoding)``.
 
     Returns:
-        ``(side, rel_path, hash_set, fingerprint_count, token_count)``
+        ``(side, rel_path, hash_set, fingerprint_count, token_count, failure_reason)``
         읽기 실패 / 크기 초과 시 빈 set / count=0 / token_count=-1 반환.
         ``token_count`` 은 normalize 모드에서만 계산한다(판정불가 floor 판정용);
         그 외에는 -1(미산정)을 돌려준다.
     """
-    side, abs_path, rel_path, extension, k, w, normalize, lang_aware, max_bytes = args
+    (
+        side,
+        abs_path,
+        rel_path,
+        extension,
+        k,
+        w,
+        normalize,
+        lang_aware,
+        max_bytes,
+        strip_requested,
+        encoding,
+    ) = args
 
     # Size cap: skip oversized files entirely (both channels) so an untrusted
     # large/pathological file can't hang the run — especially under --lang-aware,
@@ -81,34 +94,45 @@ def _extract_one(args: tuple) -> tuple[str, set[int], int]:
         try:
             if Path(abs_path).stat().st_size > max_bytes:
                 logger.warning(
-                    "Skipping oversized file in deep compare (> %d bytes): %s",
-                    max_bytes, rel_path)
-                return side, rel_path, set(), 0, -1
+                    "Skipping oversized file in deep compare (> %d bytes): %s", max_bytes, rel_path
+                )
+                return side, rel_path, set(), 0, -1, "max-file-size-exceeded"
         except OSError:
             pass
 
     try:
-        text = read_file(abs_path)
+        text = read_file(abs_path, encoding=encoding)
     except PermissionError:
         logger.warning("Permission denied during deep compare: %s", rel_path)
-        return side, rel_path, set(), 0, -1
+        return side, rel_path, set(), 0, -1, "permission-denied"
 
     if text is None:
-        return side, rel_path, set(), 0, -1
+        # An explicit decoder or a registered source language means this was
+        # intended to be text. Treat the failed read/decode as evidence loss;
+        # unregistered binary assets remain an intentional deep-channel skip.
+        explicit_encoding = bool(encoding and encoding.lower() not in ("auto", ""))
+        failure_reason = (
+            "decode-or-read-failure" if explicit_encoding or get_spec(extension) else None
+        )
+        return side, rel_path, set(), 0, -1, failure_reason
 
-    cleaned = strip_comments(text, extension)
+    cleaned = strip_comments(text, extension) if strip_requested else text
     fps = extract_fingerprints(
-        cleaned, k=k, w=w, normalize=normalize,
-        ext=extension, lang_aware=lang_aware,
+        cleaned,
+        k=k,
+        w=w,
+        normalize=normalize,
+        ext=extension,
+        lang_aware=lang_aware,
     )
     hash_set = {fp.hash_value for fp in fps}
     # Token count gates the inconclusive band; only needed under normalize.
-    # Use the RAW token count as a channel-independent file-size proxy: the floor
-    # (calibration.INCONCLUSIVE_TOKEN_FLOOR) was calibrated in raw-token units, and
-    # --lang-aware's Pygments tokenization yields a different count, so deriving the
-    # count from the active channel would shift the floor decision off-calibration.
+    # Use the RAW token count as a channel-independent file-size proxy: the
+    # compatibility guard was defined in raw-token units, while --lang-aware's
+    # Pygments tokenization yields a different count. Changing channels would
+    # silently change which pairs receive the conservative inconclusive label.
     n_tokens = len(tokenize(cleaned)) if normalize else -1
-    return side, rel_path, hash_set, len(fps), n_tokens
+    return side, rel_path, hash_set, len(fps), n_tokens, None
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -170,6 +194,9 @@ def run_deep_compare(
     lang_aware: bool = False,
     max_index_entries: int = 10_000_000,
     max_file_size_mb: float = 10.0,
+    strip_comments: bool = False,
+    encoding: str | None = None,
+    allow_partial: bool = False,
     status: Optional[dict] = None,
 ) -> list[DeepMatchResult]:
     """Execute N:M cross-matching between two directories.
@@ -205,16 +232,44 @@ def run_deep_compare(
     # Prepare work items
     max_bytes = int(max_file_size_mb * 1024 * 1024) if max_file_size_mb else 0
     items_a = [
-        ("A", str(root_a / f), f, Path(f).suffix.lower(), k, w, normalize, lang_aware, max_bytes)
+        (
+            "A",
+            str(root_a / f),
+            f,
+            Path(f).suffix.lower(),
+            k,
+            w,
+            normalize,
+            lang_aware,
+            max_bytes,
+            strip_comments,
+            encoding,
+        )
         for f in files_a
     ]
     items_b = [
-        ("B", str(root_b / f), f, Path(f).suffix.lower(), k, w, normalize, lang_aware, max_bytes)
+        (
+            "B",
+            str(root_b / f),
+            f,
+            Path(f).suffix.lower(),
+            k,
+            w,
+            normalize,
+            lang_aware,
+            max_bytes,
+            strip_comments,
+            encoding,
+        )
         for f in files_b
     ]
 
-    logger.info("Deep Compare: extracting fingerprints (%d + %d files, %d workers) …",
-                len(items_a), len(items_b), workers)
+    logger.info(
+        "Deep Compare: extracting fingerprints (%d + %d files, %d workers) …",
+        len(items_a),
+        len(items_b),
+        workers,
+    )
 
     # Parallel fingerprint extraction
     fp_a: dict[str, set[int]] = {}
@@ -225,10 +280,47 @@ def run_deep_compare(
 
     all_items = items_a + items_b
     ctx = multiprocessing.get_context("spawn")
+    results = []
+    failed_files: list[dict[str, str]] = []
     with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
-        results = list(pool.map(_extract_one, all_items))
+        futures = [pool.submit(_extract_one, item) for item in all_items]
+        for item, future in zip(all_items, futures):
+            side, _abs_path, rel_path = item[:3]
+            try:
+                results.append(future.result())
+            except Exception as exc:
+                failed_files.append(
+                    {
+                        "side": side,
+                        "path": rel_path,
+                        "reason": f"worker-failure: {exc}",
+                    }
+                )
 
-    for side, rel, hset, cnt, ntok in results:
+    for side, rel, _hset, _cnt, _ntok, failure_reason in results:
+        if failure_reason:
+            failed_files.append(
+                {
+                    "side": side,
+                    "path": rel,
+                    "reason": failure_reason,
+                }
+            )
+
+    # A configured size cap is still an omitted deep-analysis input.  It may be
+    # emitted only under the caller's explicit partial-analysis authorization;
+    # otherwise an incomplete evidence result would look like a complete run.
+    fatal_failures = failed_files
+    if fatal_failures and not allow_partial:
+        details = ", ".join(
+            f"{item['side']}:{item['path']} ({item['reason']})" for item in fatal_failures
+        )
+        raise RuntimeError(
+            "Deep Compare worker/file failure; refusing a partial analysis. "
+            "Use --allow-partial to emit an explicitly incomplete report: " + details
+        )
+
+    for side, rel, hset, cnt, ntok, _failure_reason in results:
         if side == "A":
             fp_a[rel] = hset
             fp_a_counts[rel] = cnt
@@ -241,6 +333,16 @@ def run_deep_compare(
     inv_b, index_truncated = build_inverted_index(fp_b, max_entries=max_index_entries)
     if status is not None:
         status["index_truncated"] = index_truncated
+        status["requested_file_count"] = len(all_items)
+        status["successful_file_count"] = len(all_items) - len(failed_files)
+        status["failed_files"] = failed_files
+
+    if index_truncated and not allow_partial:
+        raise RuntimeError(
+            "Deep Compare inverted index reached --max-index-entries; "
+            "refusing an incomplete analysis. Use --allow-partial to emit an "
+            "explicitly incomplete report."
+        )
 
     # Query each A-file against the index
     deep_results: list[DeepMatchResult] = []
@@ -263,15 +365,12 @@ def run_deep_compare(
         for file_id_b, shared in b_counts.items():
             jaccard = _jaccard(hashes_a, fp_b[file_id_b])
             if jaccard >= min_jaccard:
-                # Inconclusive band: under normalize, a pair where the smaller
-                # file is below the calibrated token floor cannot be separated
-                # from independent same-domain code at any useful threshold, so
-                # the score is flagged rather than presented as a confident match.
+                # Inconclusive band: the published corpus did not establish a
+                # separate precision claim for this small-file guard. Flag the
+                # score conservatively instead of presenting it as confident.
                 tokens_b = fp_b_tokens.get(file_id_b, -1)
                 smaller = min(tokens_a, tokens_b)
-                inconclusive = (
-                    normalize and smaller >= 0 and smaller < INCONCLUSIVE_TOKEN_FLOOR
-                )
+                inconclusive = normalize and smaller >= 0 and smaller < INCONCLUSIVE_TOKEN_FLOOR
                 matched_b.append((file_id_b, shared, round(jaccard, 4), inconclusive))
 
         # Sort by Jaccard desc, then shared-hash count desc, then file id asc.
@@ -281,11 +380,13 @@ def run_deep_compare(
         matched_b.sort(key=lambda x: (-x[2], -x[1], x[0]))
 
         if matched_b:
-            deep_results.append(DeepMatchResult(
-                file_a=file_id_a,
-                matched_files_b=matched_b,
-                fingerprint_count_a=fp_a_counts.get(file_id_a, 0),
-            ))
+            deep_results.append(
+                DeepMatchResult(
+                    file_a=file_id_a,
+                    matched_files_b=matched_b,
+                    fingerprint_count_a=fp_a_counts.get(file_id_a, 0),
+                )
+            )
 
     deep_results.sort(key=lambda r: r.file_a)
     logger.info("Deep Compare: found %d A-files with cross-matches", len(deep_results))

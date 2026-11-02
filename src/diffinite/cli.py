@@ -15,9 +15,17 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import sys
 
-from diffinite.calibration import NORMALIZE_DEFAULT_THRESHOLD
+from diffinite.calibration import (
+    NORMALIZE_CALIBRATION_K,
+    NORMALIZE_CALIBRATION_W,
+    NORMALIZE_DEFAULT_THRESHOLD,
+    RAW_LEGACY_THRESHOLD,
+    assess_normalize_calibration,
+    resolve_threshold_deep,
+)
 from diffinite.collector import FUZZY_THRESHOLD
 from diffinite.fingerprint import DEFAULT_K, DEFAULT_W
 from diffinite.models import AnalysisMetadata
@@ -29,23 +37,17 @@ logging.basicConfig(
 )
 
 
-def _resolve_threshold_deep(
-    threshold_deep: float | None, normalize: bool
-) -> tuple[float, str]:
+def _resolve_threshold_deep(threshold_deep: float | None, normalize: bool) -> tuple[float, str]:
     """Resolve the deep Jaccard threshold and record its provenance.
 
     The raw and normalize channels have different false-positive profiles, so a
-    normalize run left at the raw-calibrated 5% has a measured ~100% false-positive
+    normalize run left at the historical raw 5% has a measured ~100% false-positive
     rate on independent code. When the user did not pass --threshold-deep, the
     normalize channel substitutes the ratified normalize default; otherwise the
     explicit value wins. Returns ``(value_0_100, provenance)`` where provenance is
-    one of ``"user" | "default" | "normalize-default"``.
+    one of ``"user" | "legacy-uncalibrated" | "normalize-default"``.
     """
-    if threshold_deep is not None:
-        return threshold_deep, "user"
-    if normalize:
-        return NORMALIZE_DEFAULT_THRESHOLD, "normalize-default"
-    return 5.0, "default"
+    return resolve_threshold_deep(threshold_deep, normalize)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -57,7 +59,8 @@ def main(argv: list[str] | None = None) -> None:
     # degrades to '?' rather than raising UnicodeEncodeError.
     for _stream in (sys.stdout, sys.stderr):
         try:
-            _stream.reconfigure(encoding="utf-8", errors="replace")
+            reconfigure = getattr(_stream, "reconfigure")
+            reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError):
             pass  # captured/replaced streams (e.g. pytest) lack reconfigure
 
@@ -159,7 +162,6 @@ def main(argv: list[str] | None = None) -> None:
         help="Sort direction (default: asc). Only effective with --sort-by.",
     )
 
-
     # ── Annotations ───────────────────────────────────────────────────
     parser.add_argument(
         "--page-number",
@@ -183,19 +185,13 @@ def main(argv: list[str] | None = None) -> None:
         "--bates-prefix",
         type=str,
         default="",
-        help=(
-            "Bates number prefix (e.g. 'PLAINTIFF-'). "
-            "Combined as: {prefix}{number}{suffix}"
-        ),
+        help=("Bates number prefix (e.g. 'PLAINTIFF-'). Combined as: {prefix}{number}{suffix}"),
     )
     parser.add_argument(
         "--bates-suffix",
         type=str,
         default="",
-        help=(
-            "Bates number suffix (e.g. '-CONFIDENTIAL'). "
-            "Combined as: {prefix}{number}{suffix}"
-        ),
+        help=("Bates number suffix (e.g. '-CONFIDENTIAL'). Combined as: {prefix}{number}{suffix}"),
     )
     parser.add_argument(
         "--bates-start",
@@ -286,7 +282,11 @@ def main(argv: list[str] | None = None) -> None:
         "--max-file-size",
         type=float,
         default=10.0,
-        help="Maximum file size in MB. Files larger than this will bypass memory decode and fall back to hash comparison (default: 10.0 MB).",
+        help=(
+            "Maximum file size in MB. Oversized pairs use SHA-256 in the line "
+            "channel and are omitted from Deep Compare; the deep omission fails "
+            "closed unless --allow-partial is set (default: 10.0 MB)."
+        ),
     )
     # 2MB HTML is roughly ~100k DOM nodes. xhtml2pdf's html5lib parser is written in pure Python
     # and recursive traversing hits RecursionError or extreme GC pauses beyond this point.
@@ -347,7 +347,8 @@ def main(argv: list[str] | None = None) -> None:
         "If none specified, defaults to PDF (report.pdf).",
     )
     format_group.add_argument(
-        "--report-pdf", "-o",
+        "--report-pdf",
+        "-o",
         metavar="PATH",
         default=None,
         help="Generate a merged PDF report at the given path",
@@ -397,18 +398,14 @@ def main(argv: list[str] | None = None) -> None:
     # ── Deep compare options ──────────────────────────────────────────
     deep_group = parser.add_argument_group(
         "Deep Compare",
-        "Winnowing-based N:M cross-matching options (only active in "
-        "'--mode deep').",
+        "Winnowing-based N:M cross-matching options (only active in '--mode deep').",
     )
     deep_group.add_argument(
         "--k-gram",
         type=int,
         default=DEFAULT_K,
         dest="k_gram",
-        help=(
-            f"K-gram token window size (default: {DEFAULT_K}). "
-            "Schleimer 2003, §4.2."
-        ),
+        help=(f"K-gram token window size (default: {DEFAULT_K}). Schleimer 2003, §4.2."),
     )
     deep_group.add_argument(
         "--window",
@@ -426,9 +423,12 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         dest="threshold_deep",
         help=(
-            "Minimum Jaccard similarity 0-100 to report. Default: 5 (raw), or "
-            f"{NORMALIZE_DEFAULT_THRESHOLD:.0f} when --normalize is set (calibrated "
-            "for false-positive <= 1%%; see calibration.py). Pass a value to override."
+            f"Minimum Jaccard similarity 0-100 to report. Default: {RAW_LEGACY_THRESHOLD:g} (raw), or "
+            f"{NORMALIZE_DEFAULT_THRESHOLD:.0f} when --normalize is set. The published "
+            f"false-positive estimate applies only at K={NORMALIZE_CALIBRATION_K}, "
+            f"W={NORMALIZE_CALIBRATION_W}, with --strip-comments and without "
+            "--lang-aware; other profiles retain the numeric default for compatibility "
+            "but are unvalidated. Pass a value to override."
         ),
     )
     deep_group.add_argument(
@@ -437,7 +437,8 @@ def main(argv: list[str] | None = None) -> None:
         default=False,
         help=(
             "Normalize identifiers to ID and literals to LIT before "
-            "fingerprinting (improves Type-2 clone detection)"
+            "fingerprinting; renamed-identifier similarity is easier to surface "
+            "but false-positive risk increases"
         ),
     )
     deep_group.add_argument(
@@ -476,7 +477,8 @@ def main(argv: list[str] | None = None) -> None:
         dest="max_index_entries",
         help=(
             "Maximum entries in the inverted index for Deep Compare. "
-            "Prevents OOM on massive corpora (default: 10,000,000)."
+            "Reaching the cap fails closed unless --allow-partial explicitly "
+            "permits an incomplete result (default: 10,000,000)."
         ),
     )
     forensic_group.add_argument(
@@ -499,12 +501,22 @@ def main(argv: list[str] | None = None) -> None:
             "generated reports, and integrity manifest."
         ),
     )
+    forensic_group.add_argument(
+        "--allow-partial",
+        action="store_true",
+        default=False,
+        help=(
+            "Allow explicitly incomplete reports when only some workers/files fail. "
+            "Without this flag, worker/file failures fail closed."
+        ),
+    )
 
     args = parser.parse_args(argv)
 
     # ── Resolve the deep threshold default by channel ────────────────
     args.threshold_deep, threshold_provenance = _resolve_threshold_deep(
-        args.threshold_deep, args.normalize)
+        args.threshold_deep, args.normalize
+    )
 
     # ── Validate numeric ranges at the boundary ──────────────────────
     # Degenerate values must fail loudly here, not crash mid-run after the
@@ -518,12 +530,45 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("--workers must be >= 1.")
     if args.max_index_entries < 1:
         parser.error("--max-index-entries must be >= 1.")
-    if not 0 <= args.threshold <= 100:
+    if not math.isfinite(args.threshold) or not 0 <= args.threshold <= 100:
         parser.error("--threshold must be between 0 and 100.")
-    if not 0 <= args.threshold_deep <= 100:
+    if not math.isfinite(args.threshold_deep) or not 0 <= args.threshold_deep <= 100:
         parser.error("--threshold-deep must be between 0 and 100.")
+    if not math.isfinite(args.max_file_size) or args.max_file_size <= 0:
+        parser.error("--max-file-size must be a finite value greater than 0.")
+    if not math.isfinite(args.max_diff_html_size) or args.max_diff_html_size <= 0:
+        parser.error("--max-diff-html-size must be a finite value greater than 0.")
     if args.bates_start < 1:
         parser.error("--bates-start must be >= 1.")
+
+    calibration_assessment = None
+    if args.mode == "deep" and args.normalize:
+        calibration_assessment = assess_normalize_calibration(
+            threshold=args.threshold_deep,
+            k=args.k_gram,
+            w=args.window,
+            strip_comments=args.strip_comments,
+            lang_aware=args.lang_aware,
+        )
+        if calibration_assessment.status == "unvalidated-profile":
+            logging.warning(
+                "Normalize is running with an unvalidated fingerprint profile "
+                "(%s differs); the published false-positive rate and confidence "
+                "interval do not apply.",
+                ", ".join(calibration_assessment.profile_mismatches),
+            )
+        elif calibration_assessment.status == "off-calibration-threshold":
+            logging.warning(
+                "Manual normalize threshold %.1f is outside the measured operating "
+                "point; the published false-positive rate and confidence interval "
+                "do not apply.",
+                args.threshold_deep,
+            )
+    elif args.mode == "deep" and threshold_provenance == "legacy-uncalibrated":
+        logging.warning(
+            "Raw threshold 5 is a historical, uncalibrated compatibility default; "
+            "results are manual-review similarity candidates, not legal conclusions."
+        )
 
     # Convert threshold-deep from 0-100 (user-facing) to 0-1 (internal)
     min_jaccard_internal = args.threshold_deep / 100.0
@@ -538,6 +583,19 @@ def main(argv: list[str] | None = None) -> None:
         autojunk=not args.no_autojunk,
         normalize=args.normalize,
         lang_aware=args.lang_aware,
+        strip_comments=args.strip_comments,
+        calibration_profile_id=(
+            calibration_assessment.profile_id if calibration_assessment else None
+        ),
+        calibration_status=(
+            calibration_assessment.status if calibration_assessment else "not-applicable"
+        ),
+        calibration_profile_mismatches=(
+            calibration_assessment.profile_mismatches if calibration_assessment else ()
+        ),
+        calibration_threshold_matches=(
+            calibration_assessment.threshold_matches if calibration_assessment else None
+        ),
     )
 
     # Resolve encoding
@@ -545,7 +603,12 @@ def main(argv: list[str] | None = None) -> None:
 
     # Resolve default PDF output if no --report-* specified
     report_pdf = args.report_pdf
-    if report_pdf is None and args.report_html is None and args.report_md is None and args.report_json is None:
+    if (
+        report_pdf is None
+        and args.report_html is None
+        and args.report_md is None
+        and args.report_json is None
+    ):
         report_pdf = "report.pdf"
 
     run_pipeline(
@@ -567,6 +630,7 @@ def main(argv: list[str] | None = None) -> None:
         kgram_size=args.k_gram,
         window_size=args.window,
         min_jaccard=min_jaccard_internal,
+        threshold_provenance=threshold_provenance,
         normalize=args.normalize,
         lang_aware=args.lang_aware,
         metadata=metadata,
@@ -576,6 +640,7 @@ def main(argv: list[str] | None = None) -> None:
         # Evidence integrity
         embed_hash=args.embed_hash,
         bundle_path=args.bundle_path,
+        allow_partial=args.allow_partial,
         # Multi-format output
         report_pdf=report_pdf,
         report_html=args.report_html,

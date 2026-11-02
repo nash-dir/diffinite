@@ -36,6 +36,26 @@ FUZZY_THRESHOLD: float = 60
 
 import fnmatch
 import os
+import stat
+
+
+def _is_link_like_directory(path: Path) -> bool:
+    """Return whether a directory entry can redirect traversal elsewhere.
+
+    ``Path.is_symlink()`` covers POSIX links and Windows symbolic links.  On
+    Windows, directory junctions and other reparse points also redirect reads
+    but are not reported as symbolic links on every supported Python version.
+    Treat every directory reparse point as an excluded, disclosed input rather
+    than allowing an evidence walk to escape or duplicate its declared root.
+    """
+    if path.is_symlink():
+        return True
+    try:
+        attributes = path.lstat().st_file_attributes
+    except (AttributeError, OSError):
+        return False
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", None)
+    return bool(reparse_flag is not None and attributes & reparse_flag)
 
 # ──────────────────────────────────────────────────────────────────────
 # 파일 수집 & 무시 패턴 처리
@@ -93,6 +113,13 @@ def collect_files(directory: str, ignore_patterns: list[str] | None = None, unre
         kept_dirs = []
         for d in dirnames:
             rel_d = f"{rel_dir}/{d}" if rel_dir else d
+            abs_dir = current_dir / d
+            if _is_link_like_directory(abs_dir):
+                if unreadable_list is not None:
+                    unreadable_list.append(
+                        f"{rel_d} (skipped: linked or reparse-point directory)"
+                    )
+                continue
             if not should_ignore(rel_d, ignore_patterns):
                 kept_dirs.append(d)
         dirnames[:] = kept_dirs

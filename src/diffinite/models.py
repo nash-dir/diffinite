@@ -123,6 +123,18 @@ class DiffResult:
     hash_match: Optional[bool] = None
     """SHA-256 match status for binary files. None for text files."""
 
+    html_diff_truncated: bool = False
+    """True when the inline diff payload was omitted because it exceeded the limit."""
+
+    html_diff_truncation_reason: Optional[str] = None
+    """Machine-readable reason for omitting the inline diff payload."""
+
+    html_diff_original_bytes: Optional[int] = None
+    """UTF-8 byte size of the generated diff before it was omitted."""
+
+    html_diff_omitted_bytes: Optional[int] = None
+    """Number of original diff bytes omitted from serialized/display output."""
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Winnowing 핑거프린트 엔트리
@@ -212,13 +224,14 @@ class AnalysisMetadata:
     # NOTE: fields below are appended AFTER the historical fields above so that
     # positional construction `AnalysisMetadata("deep", 5, 4, 5.0, autojunk, ...)`
     # keeps its original meaning. Do not insert new fields mid-struct.
-    threshold_provenance: str = "default"
-    """``threshold`` 값의 출처: ``"user"`` (명시 지정), ``"default"`` (raw 기본 5%),
-    ``"normalize-default"`` (normalize 채널 보정 기본값, calibration.py). 보고서가
-    임계값이 어디서 왔는지 명시해 감정 재현성·방어력을 높인다."""
+    threshold_provenance: str = "legacy-uncalibrated"
+    """``threshold`` 값의 출처: ``"user"`` (명시 지정),
+    ``"legacy-uncalibrated"`` (raw 호환 기본값), ``"normalize-default"``
+    (normalize 채널 보정 기본값, calibration.py). 보고서가 임계값의 출처를
+    명시해 감정 재현성·방어력을 높인다."""
 
     normalize: bool = False
-    """``--normalize`` (Type-2 정규화) 사용 여부. True이면 식별자가 평탄화되어
+    """``--normalize`` 식별자·리터럴 정규화 사용 여부. True이면 식별자가 평탄화되어
     위양성률 특성이 달라지므로(calibration.py), 보고서가 채널·임계값·측정 오류율을
     공시할 수 있도록 기록한다."""
 
@@ -226,6 +239,138 @@ class AnalysisMetadata:
     """언어 인식 정규화(``--lang-aware``) 사용 여부. True이면 deep 모드 핑거프린트가
     언어별 키워드 인식(Pygments lexer / 레지스트리)으로 생성되어, 기본(언어 무관)
     정규화와 **핑거프린트가 호환되지 않는다** — 보고서에 채널을 명시해 둔다."""
+
+    ignore_patterns: tuple[str, ...] = ()
+    """실제로 적용된 제외 규칙. 설정 파일의 절대경로 대신 유효 규칙 자체를
+    기록해 개인정보를 노출하지 않으면서 수집 대상을 재현한다."""
+
+    ignore_file_sha256: str | None = None
+    """읽은 제외 파일 원본 바이트의 SHA-256. 주석·개행까지 같은 정책 파일인지
+    외부 원본과 대조할 수 있으며, 파일 경로는 기록하지 않는다."""
+
+    filter_applied: bool = False
+    """2단계 선택 필터가 적용되었는지 여부. 빈 필터와 미적용을 구분한다."""
+
+    filter_paths: tuple[str, ...] = ()
+    """실제로 선택된 A측 상대경로의 정렬된 목록."""
+
+    filter_file_sha256: str | None = None
+    """선택 JSON 원본 바이트의 SHA-256. 임시 파일의 절대경로는 기록하지 않는다."""
+
+    strip_comments: bool | None = None
+    """Deep fingerprint 입력에 실제 적용된 주석 제거 여부. ``None``은 구형
+    호출자가 이 의미론적 설정을 기록하지 않아 알 수 없음을 뜻한다."""
+
+    calibration_profile_id: str | None = None
+    """normalize 오류율 수치를 산출한 버전 고정 검증 프로필 식별자."""
+
+    calibration_status: str = "not-assessed"
+    """검증 수치 적용 상태: ``applicable``, ``unvalidated-profile``,
+    ``off-calibration-threshold``, ``not-applicable`` 또는 ``not-assessed``."""
+
+    calibration_profile_mismatches: tuple[str, ...] = ()
+    """검증 프로필과 다른 실제 설정 필드명. 빈 튜플은 차이가 없거나
+    아직 평가되지 않았다는 뜻이므로 ``calibration_status``와 함께 해석한다."""
+
+    calibration_threshold_matches: bool | None = None
+    """실제 threshold가 검증 프로필의 측정 지점과 같은지 여부."""
+
+    filename_threshold: float | None = None
+    """A/B의 1:1 파일명 매칭에 적용된 최소 유사도(0–100). Deep Jaccard
+    ``threshold``와 의미가 다르므로 별도 기록한다."""
+
+    by_word: bool | None = None
+    """라인 단위 대신 단어 단위 difflib 비교를 실제 적용했는지 여부."""
+
+    squash_blanks: bool | None = None
+    """주석 제거 뒤 연속 빈 줄을 축약했는지 여부. 주석 제거가 꺼져 있으면
+    실제 효과가 없으므로 실행 경로는 False를 기록한다."""
+
+    normalize_whitespace: bool | None = None
+    """라인/단어 diff에서 공백을 정규화했는지 여부."""
+
+    encoding: str = "unknown"
+    """실제 디코딩 정책. 자동 감지는 ``"auto"``, 명시 인코딩은 그 이름을 기록한다."""
+
+    binary_handling: str = "unknown"
+    """디코딩 불가능 파일 정책: ``exclude``, ``hash`` 또는 ``error``."""
+
+    max_file_size_mb: float | None = None
+    """텍스트 분석 대신 해시 경로를 선택하거나 deep 분석을 건너뛰는 파일 크기 상한."""
+
+    max_diff_html_size_mb: float | None = None
+    """inline diff payload를 완전히 대체하는 UTF-8 HTML 크기 상한."""
+
+    max_index_entries: int | None = None
+    """Deep Compare 역색인의 최대 항목 수. 상한 도달 시 결과가 과소보고될 수 있다."""
+
+    detect_moved: bool | None = None
+    """렌더링 diff에서 이동 블록 탐지를 실제 요청했는지 여부."""
+
+    collapse_identical: bool | None = None
+    """동일 문맥을 축약해 제한된 주변 줄만 렌더링했는지 여부."""
+
+    metrics_only: bool | None = None
+    """점수만 계산하고 inline diff payload를 만들지 않은 실행인지 여부."""
+
+    uncompared_mode: str = "unknown"
+    """미비교 파일 목록의 보고 정책: ``inline``, ``separate`` 또는 ``none``."""
+
+    allow_partial: bool | None = None
+    """일부 입력/worker 실패를 명시적 불완전 보고서로 허용한 정책인지 여부."""
+
+
+@dataclass
+class AnalysisStatus:
+    """Completeness accounting shared by JSON and human-readable reports."""
+
+    allow_partial: bool = False
+    reasons: list[str] = field(default_factory=list)
+    diff_requested_pair_count: int = 0
+    diff_successful_pair_count: int = 0
+    diff_failed_pairs: list[dict[str, str]] = field(default_factory=list)
+    deep_requested_file_count: int = 0
+    deep_successful_file_count: int = 0
+    deep_failed_files: list[dict[str, str]] = field(default_factory=list)
+    deep_index_truncated: bool = False
+    diff_truncated_count: int = 0
+    # Appended to preserve positional compatibility with the historical fields.
+    collection_failed_files: list[dict[str, str]] = field(default_factory=list)
+
+    @property
+    def state(self) -> str:
+        return "incomplete" if self.reasons else "complete"
+
+    def mark_incomplete(self, reason: str) -> None:
+        if reason not in self.reasons:
+            self.reasons.append(reason)
+
+    def to_dict(self) -> dict:
+        return {
+            "state": self.state,
+            "reasons": list(self.reasons),
+            "allow_partial": self.allow_partial,
+            "collection": {
+                "failed_file_count": len(self.collection_failed_files),
+                "failed_files": list(self.collection_failed_files),
+            },
+            "diff": {
+                "requested_pair_count": self.diff_requested_pair_count,
+                "successful_pair_count": self.diff_successful_pair_count,
+                "failed_pair_count": len(self.diff_failed_pairs),
+                "failed_pairs": list(self.diff_failed_pairs),
+            },
+            "deep": {
+                "requested_file_count": self.deep_requested_file_count,
+                "successful_file_count": self.deep_successful_file_count,
+                "failed_file_count": len(self.deep_failed_files),
+                "failed_files": list(self.deep_failed_files),
+            },
+            "truncation": {
+                "deep_index_truncated": self.deep_index_truncated,
+                "diff_truncated_count": self.diff_truncated_count,
+            },
+        }
 
 
 # ──────────────────────────────────────────────────────────────────────

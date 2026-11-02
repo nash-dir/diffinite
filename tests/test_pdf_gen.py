@@ -1,7 +1,5 @@
 """Tests for PDF generation module."""
 
-import pytest
-
 from diffinite.models import DiffResult, FileMatch, DeepMatchResult
 from diffinite.pdf_gen import build_cover_body, build_diff_page_html, _break_path
 
@@ -83,22 +81,33 @@ class TestBuildCoverHtml:
         assert "autojunk=" in html
         assert "off" in html  # autojunk=False rendered
 
-    def _cover_with_meta(self, *, normalize, exec_mode):
+    def _cover_with_meta(self, *, normalize, exec_mode, strip_comments=True):
         from diffinite.models import AnalysisMetadata
         from diffinite.calibration import NORMALIZE_DEFAULT_THRESHOLD
         meta = AnalysisMetadata(
             exec_mode=exec_mode, k=5, w=4, threshold=NORMALIZE_DEFAULT_THRESHOLD,
             threshold_provenance="normalize-default", normalize=normalize,
+            strip_comments=strip_comments,
         )
         return build_cover_body(
             _make_results(), unmatched_a=[], unmatched_b=[],
-            dir_a="a", dir_b="b", by_word=False, strip_comments=False, metadata=meta,
+            dir_a="a", dir_b="b", by_word=False,
+            strip_comments=strip_comments, metadata=meta,
         )
 
     def test_pdf_cover_discloses_fp_under_normalize_deep(self):
         # The PDF is the primary forensic deliverable; it must carry the FP rate.
+        from diffinite.calibration import NORMALIZE_FP_RATE_PCT
         html = self._cover_with_meta(normalize=True, exec_mode="deep")
-        assert "false-positive" in html.lower()
+        assert f"{NORMALIZE_FP_RATE_PCT:.2g}%" in html
+
+    def test_pdf_cover_withholds_measured_fp_for_unvalidated_profile(self):
+        from diffinite.calibration import NORMALIZE_FP_RATE_PCT
+        html = self._cover_with_meta(
+            normalize=True, exec_mode="deep", strip_comments=False,
+        )
+        assert "unvalidated profile" in html.lower()
+        assert f"{NORMALIZE_FP_RATE_PCT:.2g}%" not in html
 
     def test_pdf_cover_no_disclosure_in_simple_mode(self):
         # normalize is a no-op without deep fingerprinting, so no disclosure.

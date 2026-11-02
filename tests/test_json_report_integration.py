@@ -32,8 +32,11 @@ def test_json_report_generation():
         # Verify schema
         assert "metadata" in data
         assert data["metadata"]["exec_mode"] == "simple"
-        assert data["dir_a"] == str(dir_a)
-        assert data["dir_b"] == str(dir_b)
+        # Reports use stable aliases so temporary or client-specific absolute paths
+        # cannot leak into an evidence artifact.
+        assert data["dir_a"] == "A"
+        assert data["dir_b"] == "B"
+        assert tmpdir not in json_path.read_text(encoding="utf-8")
         assert data["summary"]["matched_pairs"] == 1
         
         # Verify results

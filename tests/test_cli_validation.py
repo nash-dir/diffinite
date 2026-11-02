@@ -20,6 +20,11 @@ from diffinite.cli import main
     "--threshold=-1",
     "--threshold-deep=200",
     "--threshold-deep=-5",
+    "--max-file-size=0",
+    "--max-file-size=-1",
+    "--max-file-size=nan",
+    "--max-diff-html-size=0",
+    "--max-diff-html-size=inf",
     "--bates-start=0",
     "--bates-start=-3",
 ])
@@ -46,7 +51,9 @@ class TestThresholdProvenance:
 
     def test_raw_default(self):
         from diffinite.cli import _resolve_threshold_deep
-        assert _resolve_threshold_deep(None, normalize=False) == (5.0, "default")
+        assert _resolve_threshold_deep(None, normalize=False) == (
+            5.0, "legacy-uncalibrated",
+        )
 
     def test_normalize_default_substituted(self):
         from diffinite.cli import _resolve_threshold_deep
@@ -59,6 +66,52 @@ class TestThresholdProvenance:
         from diffinite.cli import _resolve_threshold_deep
         assert _resolve_threshold_deep(12.0, normalize=False) == (12.0, "user")
         assert _resolve_threshold_deep(12.0, normalize=True) == (12.0, "user")
+
+
+@pytest.mark.parametrize(
+    ("extra_args", "expected_status", "expected_mismatches"),
+    [
+        (["--strip-comments"], "applicable", ()),
+        (["--strip-comments", "--k-gram=6"], "unvalidated-profile", ("k",)),
+        (["--strip-comments", "--window=5"], "unvalidated-profile", ("w",)),
+        ([], "unvalidated-profile", ("strip_comments",)),
+        (
+            ["--strip-comments", "--lang-aware"],
+            "unvalidated-profile",
+            ("lang_aware",),
+        ),
+    ],
+)
+def test_cli_metadata_distinguishes_validated_normalize_profile(
+    monkeypatch, extra_args, expected_status, expected_mismatches
+):
+    import diffinite.cli as cli
+    from diffinite.calibration import NORMALIZE_CALIBRATION_PROFILE_ID
+
+    captured = {}
+    monkeypatch.setattr(cli, "run_pipeline", lambda **kwargs: captured.update(kwargs))
+    cli.main(["left", "right", "--normalize", *extra_args])
+
+    metadata = captured["metadata"]
+    assert metadata.threshold == 93.0
+    assert metadata.threshold_provenance == "normalize-default"
+    assert metadata.calibration_profile_id == NORMALIZE_CALIBRATION_PROFILE_ID
+    assert metadata.calibration_status == expected_status
+    assert metadata.calibration_profile_mismatches == expected_mismatches
+
+
+def test_cli_warns_when_default_threshold_runs_on_unvalidated_profile(
+    monkeypatch, caplog
+):
+    import diffinite.cli as cli
+
+    monkeypatch.setattr(cli, "run_pipeline", lambda **_kwargs: None)
+    with caplog.at_level("WARNING"):
+        cli.main(["left", "right", "--normalize"])
+
+    warning = " ".join(record.getMessage() for record in caplog.records).lower()
+    assert "unvalidated" in warning
+    assert "false-positive" in warning or "fp" in warning
 
 
 def test_help_is_ascii_safe_on_legacy_console():
