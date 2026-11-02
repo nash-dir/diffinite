@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.14.0] — unreleased
+
+### Breaking
+
+- **Fail-closed by default.** Unreadable/undecodable source files, hashing or worker failures and a truncated Deep Compare index now abort the run instead of producing a silently partial report. Pass `--allow-partial` to get an explicitly marked incomplete report (the old behaviour, now disclosed).
+- **Deep Compare no longer strips comments unless `--strip-comments` is given.** Jaccard values for the same command line differ from 0.13.x. The measured normalize false-positive figures apply only to `--normalize --strip-comments` with default K/W; other runs are labelled `unvalidated-profile`.
+- **JSON report schema v2** (`schema_version: 2`). The default `threshold_provenance` value is now `legacy-uncalibrated` (was `default`). The extension requires a schema-v2 report, i.e. diffinite ≥ 0.14.0 when using a system Python.
+
+### Added
+
+- **Directional containment** in every Deep Compare table and the JSON report: *A in B* = shared ÷ unique fingerprints of A, *B in A* = shared ÷ unique fingerprints of B (analogous to the 원본 기준 / 비교본 기준 ratios of Korean software appraisal and the per-direction similarity of JPlag/Dolos, but counted in unique fingerprints). For a pair that is listed, a file copied whole into a larger file now reads ~100% instead of a diluted Jaccard. Descriptive only — rows are still selected by the Jaccard threshold, so a small file inside a much larger one can remain unlisted. JSON adds `unique_hashes_a`, `unique_hashes_b`, `containment_a_in_b`, `containment_b_in_a`.
+- **Out-of-sample validation** (`python -m tests.validation.holdout`): leave-one-assignment-out on IR-Plag and an independent check on the SOCO 2014 training set; results in `example/validation/holdout.md`. `example/download_examples.py --dataset soco14` fetches the SOCO training set pinned by SHA-256.
+- Deep Compare now reports files it skipped as binary content (`analysis_status.deep.skipped_binary_files`) instead of counting them as processed.
+- Evidence hardening: immutable source snapshot verified before and after analysis, transactional multi-format output with rollback, provenance of ignore/filter policies, CSV formula-injection escaping.
+
+### Fixed
+
+- `#if 0 … #else … #endif`: the live `#else`/`#elif` branch was deleted as dead code, and a nested `#ifdef` inside `#if 0` ended the dead block early. `#if 0 // comment` is now recognised.
+- The line channel stripped comments from **both** files with File A's language rules; each file now uses its own.
+- A binary file saved under a source extension (e.g. a compiled blob named `.py`) no longer aborts the whole run; Deep Compare skips it and lists it in the report as skipped binary content.
+- Under `--allow-partial` with a truncated Deep Compare index, *Shared Hashes* undercounted while Jaccard did not; both (and containment) now use the same full fingerprint sets.
+- An unterminated `#if 0` (e.g. inside a comment) no longer blanks the rest of a C file.
+- When one file of a pair has an unregistered extension (`Foo.java` vs `Foo.java.orig`), `--strip-comments` now applies the registered partner's rules to both sides.
+- `example/download_examples.py` could not fetch IR-Plag (upstream now ships a nested zip) and only targeted case-01. It now fetches all 7 cases from a pinned commit and verifies SHA-256, so the calibration corpus is reproducible.
+- Tests importing `tomllib` no longer break collection on Python 3.10.
+
+### Docs
+
+- Corrected the K=5 rationale (Schleimer 2003 has no §4.2 and prescribes no k for source code), the "always detected" wording (a shared fingerprint is guaranteed; reporting still depends on the threshold), the collision-probability claim, and the Oracle v. Google wording that called token overlap "structural similarity".
+- README Limitations now state plainly: no parsing/AST analysis, language-agnostic normalization keyword list, deep channel gives no line locations for N:M matches.
+- Calibration disclosure now states Java-only scope, clustering in 7 assignments, and that the single false positive scored 100%.
+- NOTICE corrected: datasets are downloaded, not tracked; earlier history did contain copies; citations fixed.
+
 ## [0.13.1] — 2026-06-23
 
 ### Docs

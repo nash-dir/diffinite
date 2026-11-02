@@ -1,4 +1,4 @@
-.vsix
+*.vsix
 *.log
 node_modules/
 src/

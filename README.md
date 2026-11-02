@@ -7,7 +7,7 @@
 
 **Forensic source-code comparison tool for IP litigation and code audit.**
 
-Diffinite compares two directories of source code and produces professional PDF/HTML reports with syntax-highlighted side-by-side diffs. It uses [Winnowing fingerprints](https://theory.stanford.edu/~aiken/publications/papers/sigmod03.pdf) (Schleimer et al., 2003 — the algorithm behind [Stanford MOSS](https://theory.stanford.edu/~aiken/moss/)) for N:M cross-matching to detect code reuse even across renamed, split, or merged files.
+Diffinite compares two directories of source code and produces professional PDF/HTML reports with syntax-highlighted side-by-side diffs. It uses [Winnowing fingerprints](https://theory.stanford.edu/~aiken/publications/papers/sigmod03.pdf) (Schleimer et al., 2003 — the algorithm behind [Stanford MOSS](https://theory.stanford.edu/~aiken/moss/)) for N:M cross-matching to detect code reuse across renamed files; for pairs that pass the Jaccard threshold, directional containment (*A in B / B in A*) shows how much of each file was carried over.
 
 ![sample report](https://raw.githubusercontent.com/nash-dir/diffinite/master/docs/report-sample.png)
 
@@ -116,7 +116,7 @@ The cover page contains a summary table for each matched file pair:
 |--------|-------------|
 | **File A / File B** | Matched file paths |
 | **Name Sim.** | Fuzzy filename similarity score (0–100) |
-| **Content Match** | `difflib.SequenceMatcher.ratio()` — proportion of matching content. `1.0` = identical. |
+| **Line match (difflib)** | `difflib.SequenceMatcher.ratio()` as a percentage — `2 × matched lines ÷ (lines A + lines B)`. `100%` = identical. Blank and brace-only lines count as matches, so unrelated files typically still score 10–30% on this column. |
 | **Added / Deleted** | Number of lines (or words) added to or deleted from File A to produce File B. |
 
 ### Diff Pages
@@ -211,7 +211,7 @@ Korean, Japanese, and Chinese text is rendered correctly in PDF output. By defau
 
 | Option | Default | Description |
 |--------|:-------:|-------------|
-| `--k-gram N` | `5` | K-gram size for Winnowing. Larger K = fewer but more specific fingerprints. (Schleimer 2003, §4.2) |
+| `--k-gram N` | `5` | K-gram size for Winnowing. Larger K = fewer but more specific fingerprints. K=5 is the value frozen in the calibration profile (the paper prescribes no value for code). |
 | `--window N` | `4` | Winnowing window size. Guarantees detection of any shared sequence ≥ `K+W−1` = 8 tokens. |
 | `--threshold-deep N` | `5` raw / `93` normalize | Minimum Jaccard similarity (percent, 0–100) to include in results. Raw 5 is a **legacy, uncalibrated compatibility default**, not a safe cutoff. `--normalize` auto keeps **93**; the measured statistics apply only to the exact profile documented below. Pass a value to override; manual values are recorded as `user`. |
 | `--normalize` | off | Normalize identifiers → `ID`, literals → `LIT` before fingerprinting. This makes renamed-identifier similarity easier to surface but **raises the false-positive rate on independent code** — see [Normalize precision](#normalize-precision--false-positive-rate). Matches below 45 tokens are conservatively marked *inconclusive*. Every report states whether the measured calibration applies to its actual K/W/comment/language profile. |
@@ -411,6 +411,8 @@ python example/download_examples.py          # download all datasets
 python example/download_examples.py --dataset aosp  # or download one
 ```
 
+The two validation corpora (`plagiarism` = IR-Plag, `soco14` = SOCO 2014 training set) are pinned to exact upstream archives and verified by SHA-256, so `python -m tests.validation.error_rate` and `python -m tests.validation.holdout` reproduce the published figures from byte-identical inputs.
+
 Pre-generated benchmark reports (Markdown) are in `example/benchmark/`.
 
 ### 1. Google v. Oracle — API Header Similarity
@@ -430,7 +432,7 @@ diffinite example/Case-Oracle/AOSP_Google example/Case-Oracle/OpenJDK_Oracle \
 | `Math.java` | 5.2% | 6.3% |
 | `String.java` | 3.3% | 6.8% |
 
-**Observation**: The line-level Match (difflib) scores stay under 10%, confirming the *bodies* are independently written. Deep Compare still surfaces shared Winnowing fingerprints — Jaccard 6–23% (highest on `Collections.java`) — because the API *signatures and declarations* are necessarily similar. High structural similarity alongside low line-level Match is precisely the SSO pattern at issue in the case: the same interface, independently implemented. Diffinite reports both numbers; interpreting them is the expert's job.
+**Observation**: The line-level Match (difflib) scores stay under 10%, confirming the *bodies* are independently written. Deep Compare still surfaces shared Winnowing fingerprints — Jaccard 6–23% (highest on `Collections.java`) — because the API *signatures and declarations* are necessarily similar. Higher shared-fingerprint (token k-gram) overlap alongside low line-level Match is consistent with the same interface being independently implemented. Diffinite does not parse code, so this is token overlap, not a structural (SSO) analysis. Diffinite reports both numbers; interpreting them is the expert's job.
 
 ### 2. Eclipse Collections v. OpenJDK — Negative Control
 
@@ -491,8 +493,16 @@ An explicit/manual `--normalize --threshold-deep 5` is not a defensible safety c
 **What the operating point honestly is** (quoted only when the run matches the measured profile; every other normalize report says that these figures do not apply):
 
 - The false-positive rate is **0.95%, but that is 1 of 105 file pairs** — Wilson 95% CI **[0.17%, 5.2%]**. It is not a *known* 1% rate; the upper bound exceeds 5%.
-- **Recall is not uniform.** At threshold 93: L1 65%, L2 46%, L3 21%, **L4–L6 0%**. The threshold reliably flags only near-verbatim copies; heavily restructured copies fall below it and need manual review. The pooled "~22%" should not be read as uniform sensitivity.
-- The 105 negatives derive from only **7 assignments** (not i.i.d.), and nothing **> 212 tokens** was tested — the operating point is unvalidated on large files. At FP ≤ 1% the 45-token floor is non-binding on this corpus (it gates sub-floor matches at runtime, which this corpus does not exercise).
+- **Recall is not uniform.** At threshold 93: L1 65%, L2 46%, L3 21%, **L4–L6 0%**. The threshold flags at most near-verbatim copies, and even of those about a third are missed (L1 65%); heavily restructured copies fall below it and need manual review. The pooled "~22%" should not be read as uniform sensitivity.
+- The 105 negatives derive from only **7 assignments** (not i.i.d.), and nothing **> 212 tokens** was tested — the operating point is unvalidated on large files. At FP ≤ 1% the 45-token floor is non-binding on this corpus (it gates sub-floor matches at runtime, which this corpus does not exercise). 45 is simply the smallest file pair in the corpus, not a measured boundary.
+- All corpus files are **Java**; no other language was measured.
+- **93 is set by single pairs.** The one false positive (case-01, an independent submission) scores **100%**, so no threshold excludes it; the next-highest independent pair scores between 92% and 93% (`pr_curve.csv`: FP 2/105 at threshold 92, 1/105 at 93), which is why the lowest qualifying whole number is 93.
+
+**Out-of-sample checks** ([`tests/validation/holdout.py`](tests/validation/holdout.py); results in [`example/validation/holdout.md`](example/validation/holdout.md)):
+
+- *Leave-one-assignment-out on IR-Plag.* Re-running the "FP ≤ 1%" selection on 6 assignments and testing on the 7th is **unstable**: whenever the assignment containing the 100% false positive is in the selection set, no threshold meets the target and nothing would be flagged (6 of 7 folds). The same procedure with an "FP ≤ 5%" target picks a stable threshold (77–78 in every fold): pooled out-of-sample FP **5/105 = 4.8%** (Wilson 95% CI 2.1–10.7%; pairs cluster in 7 assignments, so the true interval is wider; per-fold FP ranged 0/15 to 3/15), recall 33.5%. Applied unchanged per assignment, threshold 93 gives FP 1/15 on case-01 and 0/15 on the other six. The shipped threshold has not been changed on the basis of this check; choosing an operating point is a forensic decision.
+- *SOCO 2014 training set* (Flores et al., FIRE 2014; never used for calibration), frozen profile, threshold 93: **0 of 33,327** Java pairs without an expert re-use label were flagged, and recall on the 84 expert-labelled Java re-use pairs is **16.7%**; on C it is **0%** (26 pairs). Unlabelled pairs are not proven independent, so 0 flags bounds — but does not measure — the false-positive rate; no confidence bound is quoted because every file appears in ~258 pairs. About 90% of SOCO files exceed the 212-token range measured on IR-Plag (median 589 Java tokens). The corpus is fetched and SHA-256-verified by `python example/download_examples.py --dataset soco14`.
+- *Containment is not a copying signal under normalize on small files*: the median independent IR-Plag pair already has max(A in B, B in A) = 0.76. That is why containment is reported as a descriptive column without any threshold.
 
 For non-JVM/Python/JS languages, `--lang-aware` reduces the collapse by preserving language keywords (e.g. Rust `fn`/`pub`) instead of flattening them to `ID`.
 
@@ -537,23 +547,33 @@ Diffinite uses the **Winnowing** algorithm (Schleimer, Wilkerson, Aiken. *"Winno
 
 **Pipeline**: `source → tokenize → K-gram → rolling hash → winnow → fingerprint set`
 
-The algorithm provides a **density guarantee**: any shared token sequence of length ≥ `K + W − 1` (default: 8) will always be detected, regardless of its position in the file.
+The algorithm provides a **density guarantee**: any shared token sequence of length ≥ `K + W − 1` (default: 8) always produces at least one shared fingerprint, regardless of its position in the file. A pair is *reported* only if its similarity score clears the Deep Compare threshold, so a short shared run inside two large files can produce a shared fingerprint without the pair being listed.
+
+**Scores**: per file pair, Diffinite reports
+
+- **Jaccard** `|A∩B| ÷ |A∪B|` over the two sets of unique fingerprint hashes. Pairs are selected (thresholded) on this value.
+- **A in B** `|A∩B| ÷ |A|` and **B in A** `|A∩B| ÷ |B|` — directional containment, i.e. "what share of A's fingerprints also occur in B" (and vice versa). This is the quantity that stays at ~100% when a whole file was copied into a larger one, where Jaccard is diluted by the size difference. It is analogous to the per-direction similarity of JPlag/Dolos and to the 원본 기준 / 비교본 기준 ratios used in Korean software appraisal, but its denominator is unique winnowed fingerprints, not tokens or lines, so the numbers are not interchangeable with those tools'. Containment has no calibrated threshold. Containment is shown only for pairs that Jaccard already selects: a small file copied whole into a much larger one can still fall below the Jaccard threshold and not be listed at all.
 
 **Parameters**:
 
 | Parameter | Default | Rationale |
 |-----------|:-------:|-----------|
-| `K` (k-gram) | `5` | Schleimer 2003 §4.2 recommended range. 5 consecutive tokens per fingerprint unit. |
-| `W` (window) | `4` | Window of 4 fingerprints → minimum detectable sequence = 8 tokens. |
-| `HASH_BASE` | `257` | Standard Rabin hash base (prime). |
-| `HASH_MOD` | `2⁶¹ − 1` | Mersenne prime — efficient modular arithmetic, minimal collision probability. |
+| `K` (k-gram) | `5` | Noise threshold: runs shorter than 5 tokens never match. The paper prescribes no value for source code — it advises choosing k empirically for the document set (Schleimer 2003, §5). K=5 is the value frozen in the measured IR-Plag calibration profile; changing it voids that measurement. |
+| `W` (window) | `4` | Chosen with K so that the guarantee threshold `t = K + W − 1` is 8 tokens. Expected fingerprint density `2 ÷ (W + 1)` (Schleimer 2003, §3). |
+| `HASH_BASE` | `257` | Karp–Rabin polynomial rolling-hash base (any value larger than the token-hash alphabet works; no tuning involved). |
+| `HASH_MOD` | `2⁶¹ − 1` | Mersenne prime for fast modular reduction. Collisions are negligible for ordinary (non-adversarial) input; this is not a cryptographic guarantee. |
+
+Diffinite implements the paper's basic winnowing (rightmost minimal hash per window), not the "robust winnowing" tie-break variant; the difference changes fingerprint density on highly repetitive input, not the guarantee above.
 
 ---
 
 ## Limitations
 
-- **General-purpose tokenizer**: Uses a single regex tokenizer for all languages, not language-specific parsers. Accuracy may vary across languages.
-- **Position-independent**: Winnowing fingerprints are order-independent within a window. Code with reordered functions may produce higher similarity than expected.
+- **No parsing / AST analysis**: Diffinite tokenizes with a regex by default; `--lang-aware` uses Pygments *lexers* (token classes), not parsers. There is no syntax tree, so dead-code insertion, unused-import removal, control-flow rewrites (e.g. `for`→`while`) and other structural edits are not normalized and lower every score. Cross-language ports (e.g. Python→JavaScript) are not detected reliably.
+- **Normalization is language-agnostic**: `--normalize` keeps a single, shared keyword list verbatim (including primitive types such as `int`/`double` and words such as `from`/`in`). Changing a Java `double` to `long`, or renaming a variable to a word that is a keyword in another language, therefore still lowers the normalized score; string contents are tokenized rather than replaced. `--lang-aware` handles these per language but is not the calibrated profile.
+- **Order-insensitive deep score**: the fingerprint *set* ignores global order, so reordering whole functions barely changes Jaccard (token order *within* each K-token gram still matters). The line-level diff, by contrast, drops sharply under reordering.
+- **Deep channel gives "how much", not "where"**: Deep Compare reports file-level scores only. Line-level locations come from the 1:1 diff of name-paired files; an N:M match between differently named files has no line ranges.
+- **Comments and docstrings**: without `--strip-comments`, comments and license headers are fingerprinted (a shared license header alone can produce a substantial Jaccard). Python docstrings are string literals and are kept even with `--strip-comments`.
 - **No corpus-based analysis**: Each comparison is pairwise. There is no built-in corpus-wide frequency weighting (e.g., TF-IDF) to down-weight common idioms.
 - **Binary and obfuscated code**: Not supported. Diffinite operates on source code text only.
 - **Not a legal opinion**: Similarity scores are mathematical measurements, not legal conclusions. Professional review is required before use in any legal proceeding.

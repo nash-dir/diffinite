@@ -6,6 +6,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 from packaging.version import Version
 
 
@@ -160,7 +162,7 @@ def test_publisher_clis_and_transitive_packages_are_integrity_locked():
 
 
 def test_python_package_uses_current_spdx_license_metadata():
-    import tomllib
+    tomllib = pytest.importorskip("tomllib")
 
     project_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(project_path.read_text(encoding="utf-8"))
@@ -414,3 +416,13 @@ def test_license_generation_is_isolated_and_fails_closed_on_bad_inventory():
     assert "Unexpected package in dependency license inventory" in BUNDLE_SCRIPT
     assert "third-party-licenses" in BUNDLE_SCRIPT
     assert "Missing vetted license fallback" in BUNDLE_SCRIPT
+
+
+def test_release_builds_are_gated_on_the_test_suite():
+    """No artifact is built (and so none published) unless pytest passed."""
+    yaml = pytest.importorskip("yaml")
+    jobs = yaml.safe_load(WORKFLOW)["jobs"]
+    assert any("pytest" in str(step.get("run", "")) for step in jobs["test"]["steps"])
+    for build_job in ("build-vsix", "build-python"):
+        needs = jobs[build_job].get("needs")
+        assert needs == "test" or "test" in (needs or [])

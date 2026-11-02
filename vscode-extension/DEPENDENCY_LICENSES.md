@@ -212,7 +212,7 @@
 |                       |           |                                                     | OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE                     |
 |                       |           |                                                     | OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.                              |
 |                       |           |                                                     |                                                                                                   |
-| diffinite             | 0.13.1    | Apache-2.0                                          |                                                                                                   |
+| diffinite             | 0.14.0    | Apache-2.0                                          |                                                                                                   |
 |                       |           |                                                     |                                  Apache License                                                   |
 |                       |           |                                                     |                            Version 2.0, January 2004                                              |
 |                       |           |                                                     |                         http://www.apache.org/licenses/                                           |

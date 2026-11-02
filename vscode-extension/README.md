@@ -16,7 +16,7 @@ Compare two directories of source code with [Winnowing fingerprints](https://the
 
 ### Core Analysis
 - **1:1 File Matching** — Pairs files across two directories using fuzzy name matching, then computes line-by-line or word-by-word diffs with syntax highlighting.
-- **N:M Cross-Matching (Deep Mode)** — Winnowing fingerprint-based Jaccard similarity across all file pairs. Detects code reuse even across renamed, split, or merged files.
+- **N:M Cross-Matching (Deep Mode)** — Winnowing fingerprint-based Jaccard similarity across all file pairs. Detects code reuse across renamed files; for pairs that pass the Jaccard threshold, the directional *A in B / B in A* columns show how much of each file was carried over (Jaccard is diluted when file sizes differ). A small file copied whole into a much larger one can still fall below the Jaccard threshold and not be listed.
 - **Comment Stripping** — 6-state FSM parser supporting 45+ file extensions (`.py`, `.js`, `.ts`, `.java`, `.c`, `.cpp`, `.go`, `.rs`, `.swift`, `.rb`, `.php`, `.sql`, `.html`, `.css`, and more).
 - **Moved Block Detection** — Detects code blocks that were moved (not just added/deleted) and highlights them in purple (original position) and blue (moved destination).
 - **SHA-256 Evidence Integrity** — Embeds cryptographic hashes for all analyzed files directly in the report for forensic chain-of-custody.
@@ -99,6 +99,7 @@ N:M cross-matching table (deep mode):
 | **Matched Files (B)** | All B-files sharing fingerprints above the Jaccard threshold |
 | **Shared Hashes** | Count of Winnowing fingerprints the file pair has in common |
 | **Jaccard** | `\|A∩B\| / \|A∪B\|` — fraction of shared Winnowing fingerprints |
+| **A in B / B in A** | `\|A∩B\| / \|A\|` and `\|A∩B\| / \|B\|` — share of each file's unique fingerprints found in the other — analogous to 원본 기준 / 비교본 기준, but counted in fingerprints, not lines. Stays near 100% when a whole file was copied into a larger one. Descriptive only: rows are selected by the Jaccard threshold. |
 | **Inconclusive** | Shown when Normalize is on and the smaller file is below 45 tokens. Outside the measured profile this is a conservative guard, not a calibrated precision claim. |
 
 ---
@@ -144,8 +145,8 @@ All options are configurable through the built-in GUI panel:
 | **Encoding** | `auto` | Force file encoding (`euc-kr`, `utf-8`, etc.) or auto-detect |
 | **Uncompared Mode** | `inline` | How unmatched files appear: `inline`, `separate`, or `none` |
 | **Threshold** | `60` | Fuzzy file-name matching threshold (0–100) |
-| **K-gram** | `5` | Winnowing K-gram size (Schleimer 2003 §4.2) |
-| **Window** | `4` | Winnowing window size. Detection guarantee: sequences ≥ K+W−1 tokens |
+| **K-gram** | `5` | Winnowing K-gram size. K=5 is the value frozen in the measured calibration profile; the paper prescribes no k for source code (Schleimer 2003, §5). |
+| **Window** | `4` | Winnowing window size. Shared runs of ≥ K+W−1 tokens always share at least one fingerprint; whether the pair is listed depends on the Deep threshold. |
 | **Deep Threshold Mode** | `Auto` | Auto omits `--threshold-deep`, so Python remains the source of truth. Manual passes only the value explicitly entered by the user and is shown with `user` provenance. |
 | **Allow Partial** | off | Permit an explicitly **Incomplete analysis / 불완전 결과** after a worker or file failure. Off is fail-closed. |
 | **Bates Preset** | — | Select a saved preset to auto-fill prefix/suffix/start |
