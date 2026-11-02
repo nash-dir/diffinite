@@ -42,7 +42,10 @@ dependencies = [
     "cryptography>=50.0.0",
     "idna>=3.15",
     "lxml>=6.1.0",
-    "pillow>=13.0.0",
+    # Pillow 13 (first release fixing the 2026-11 advisories) requires Python 3.11+;
+    # Python 3.10 (end-of-life 2026-10) can only get the last 12.x release.
+    "pillow>=13.0.0; python_version >= '3.11'",
+    "pillow>=12.3.0; python_version < '3.11'",
     "urllib3>=2.8.0",
     "certifi>=2026.10.18",
     "pygments>=2.16.0",
