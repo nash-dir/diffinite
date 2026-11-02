@@ -54,7 +54,7 @@ export function showHelp(context: vscode.ExtensionContext): void {
   <p>Diffinite operates in two primary modes:</p>
   <ul>
     <li><span class="param">Simple (1:1 only):</span> Compares files directly by matching their names or relative paths. Best for standardized projects where file structures are identical.</li>
-    <li><span class="param">Deep (1:1 + N:M Winnowing):</span> Cross-matches every file in Directory A against every file in Directory B and reports shared fingerprint similarity candidates, including across renamed, split, or merged files.</li>
+    <li><span class="param">Deep (1:1 + N:M Winnowing):</span> Cross-matches every file in Directory A against every file in Directory B and reports shared fingerprint similarity candidates, including across renamed files. For listed pairs, the <em>A in B / B in A</em> columns show how much of each file was carried over; a small file copied into a much larger one can still fall below the Jaccard threshold and not be listed.</li>
   </ul>
 
   <h2>2. Forensic Precision Options</h2>

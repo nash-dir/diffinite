@@ -66,6 +66,7 @@ from diffinite.evidence import (
     write_manifest,
 )
 from diffinite.fingerprint import DEFAULT_K, DEFAULT_W
+from diffinite.languages import get_spec
 from diffinite.models import (
     AnalysisMetadata,
     AnalysisStatus,
@@ -880,7 +881,18 @@ def _process_match_chunk(
 
         abs_a = str(root_a / m.rel_path_a)
         abs_b = str(root_b / m.rel_path_b)
-        ext = Path(m.rel_path_a).suffix.lower()
+        # Each file is stripped with its own language's comment rules — the same
+        # rule the Deep Compare channel applies — so a cross-extension pair
+        # (e.g. .py vs .js) is not parsed with the other file's grammar.
+        # A side whose extension has no registered language (Foo.java vs
+        # Foo.java.orig) borrows its partner's rules, so the report's
+        # "comments stripped" holds for both files of the pair.
+        ext_a = Path(m.rel_path_a).suffix.lower()
+        ext_b = Path(m.rel_path_b).suffix.lower()
+        if get_spec(ext_a) is None and get_spec(ext_b) is not None:
+            ext_a = ext_b
+        elif get_spec(ext_b) is None and get_spec(ext_a) is not None:
+            ext_b = ext_a
 
         max_bytes = int(max_file_size_mb * 1024 * 1024)
         size_a = os.path.getsize(abs_a) if os.path.exists(abs_a) else 0
@@ -989,8 +1001,8 @@ def _process_match_chunk(
             continue
 
         if strip_comments:
-            text_a = _strip_comments_fn(text_a, ext, squash_blanks=squash_blanks)
-            text_b = _strip_comments_fn(text_b, ext, squash_blanks=squash_blanks)
+            text_a = _strip_comments_fn(text_a, ext_a, squash_blanks=squash_blanks)
+            text_b = _strip_comments_fn(text_b, ext_b, squash_blanks=squash_blanks)
 
         line_counts.append(text_a.count("\n") + 1)
         line_counts.append(text_b.count("\n") + 1)
@@ -1097,7 +1109,8 @@ def _analysis_status_summary(status: AnalysisStatus) -> list[str]:
         (
             "Deep files: "
             f"{status.deep_successful_file_count}/{status.deep_requested_file_count} "
-            f"processed; {len(status.deep_failed_files)} file/worker failure(s)"
+            f"processed; {len(status.deep_failed_files)} file/worker failure(s); "
+            f"{len(status.deep_skipped_binary_files)} skipped as binary content"
         ),
         (
             "Truncation: "
@@ -1120,6 +1133,14 @@ def _analysis_status_summary(status: AnalysisStatus) -> list[str]:
                 f"{item.get('file_a', '?')} ↔ {item.get('file_b', '?')} "
                 f"({item.get('reason', 'unknown')})"
                 for item in status.diff_failed_pairs
+            )
+        )
+    if status.deep_skipped_binary_files:
+        lines.append(
+            "Deep files skipped as binary content (not fingerprinted): "
+            + "; ".join(
+                f"{item.get('side', '?')}:{item.get('path', '?')}"
+                for item in status.deep_skipped_binary_files
             )
         )
     if status.deep_failed_files:
@@ -1579,8 +1600,8 @@ def _generate_markdown_report(
     # Deep Compare
     if deep_results:
         lines.append("\n## Deep Compare — N:M Cross-Match Results\n")
-        lines.append("| A File | B File(s) | Shared Hashes | Jaccard |")
-        lines.append("|--------|-----------|:-------------:|:-------:|")
+        lines.append("| A File | B File(s) | Shared Hashes | Jaccard | A in B | B in A |")
+        lines.append("|--------|-----------|:-------------:|:-------:|:------:|:------:|")
         any_inconclusive = False
         for dr in deep_results:
             for b_file, shared, jaccard, inconclusive in dr.matched_files_b:
@@ -1590,16 +1611,24 @@ def _generate_markdown_report(
                 if inconclusive:
                     any_inconclusive = True
                     jaccard_label += " _(inconclusive)_"
+                a_in_b, b_in_a = dr.containment(b_file, shared)
                 lines.append(
                     f"| `{_md_escape(dr.file_a)}` | `{_md_escape(b_file)}` "
-                    f"| {shared} | {jaccard_label} |"
+                    f"| {shared} | {jaccard_label} "
+                    f"| {a_in_b * 100:.2f}% | {b_in_a * 100:.2f}% |"
                 )
+        lines.append(
+            "\n> **A in B** = shared ÷ unique fingerprints of the A file; "
+            "**B in A** = shared ÷ unique fingerprints of the B file. "
+            "Rows are selected by the Jaccard threshold only; the containment "
+            "columns are descriptive and have no calibrated threshold.\n"
+        )
         if any_inconclusive:
             lines.append(
-                "\n> ℹ **Inconclusive** matches fall below the calibrated "
-                "token floor: under normalize, files this small cannot be "
-                "distinguished from independent same-domain code, so the "
-                "score is not a confident finding.\n"
+                "\n> ℹ **Inconclusive** matches fall below a conservative "
+                "token guard (not a measured threshold): the calibration corpus "
+                "did not measure a separate precision benefit for files this "
+                "small, so the score is not presented as a confident finding.\n"
             )
 
     out = Path(output_path)
@@ -1668,12 +1697,18 @@ def _generate_json_report(
             deep_list.append(
                 {
                     "file_a": dr.file_a,
+                    # Winnowed positions (duplicates included); NOT the Jaccard
+                    # denominator. unique_hashes_a is the set size |A|.
                     "fingerprint_count_a": dr.fingerprint_count_a,
+                    "unique_hashes_a": dr.unique_hashes_a,
                     "matches": [
                         {
                             "file_b": b_file,
                             "shared_hashes": shared,
+                            "unique_hashes_b": dr.unique_hashes_b.get(b_file, 0),
                             "jaccard": jaccard,
+                            "containment_a_in_b": dr.containment(b_file, shared)[0],
+                            "containment_b_in_a": dr.containment(b_file, shared)[1],
                             "inconclusive": inconclusive,
                         }
                         for b_file, shared, jaccard, inconclusive in dr.matched_files_b
@@ -1941,7 +1976,7 @@ def _build_index_html(
     rows = []
     for e in entries:
         name_sim = f"{e.get('name_similarity', 0.0):.1f}"
-        # "Content Match" mirrors the cover/CSV: percentage for text pairs,
+        # "Line match (difflib)" mirrors the cover/CSV: percentage for text pairs,
         # SHA-256 status for binary pairs (difflib ratio is meaningless there).
         if e["error"]:
             content_match = '<span style="color:red">Error</span>'
@@ -2632,6 +2667,9 @@ def run_pipeline(
             "successful_file_count", analysis_status.deep_requested_file_count
         )
         analysis_status.deep_failed_files.extend(deep_status.get("failed_files", []))
+        analysis_status.deep_skipped_binary_files.extend(
+            deep_status.get("skipped_binary_files", [])
+        )
         if analysis_status.deep_failed_files:
             analysis_status.mark_incomplete("deep-file-or-worker-failure")
         # Surface index truncation so a capped run is not read as complete.

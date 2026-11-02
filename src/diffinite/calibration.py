@@ -243,7 +243,10 @@ def normalize_disclosure(
     measured = (
         f"the measured false-positive rate is {NORMALIZE_FP_RATE_PCT:.2g}% "
         f"(Wilson 95% CI {lo:.2g}–{hi:.2g}%, 1/105 file pairs) on the IR-Plag "
-        f"corpus (files ≤{CALIBRATION_MAX_TOKENS} tokens). Recall is non-uniform: "
+        f"Java corpus (files ≤{CALIBRATION_MAX_TOKENS} tokens; other languages "
+        "were not measured). The pairs cluster in 7 assignments, so the true "
+        "uncertainty is wider than this interval, and the one false positive "
+        "scored 100%, which no threshold excludes. Recall is non-uniform: "
         f"~{NORMALIZE_RECALL_NEAR_VERBATIM_PCT:.0f}% for near-verbatim copies but "
         "~0% for heavily restructured ones — flagged matches indicate near-verbatim "
         "similarity, not a general copy verdict."

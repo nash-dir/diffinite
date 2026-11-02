@@ -36,20 +36,23 @@ logger = logging.getLogger(__name__)
 # 핵심 상수
 # ──────────────────────────────────────────────────────────────────────
 DEFAULT_K: int = 5
-"""K-gram 크기. grid search(SQLite 250K-line, AOSP Java)에서 최적값 도출.
-K=5: Jaccard 0.9904, 최고 속도, line-level ratio 대비 gap < 12pp.
+"""K-gram 크기 (noise threshold: K 토큰 미만의 공유 구간은 매칭되지 않는다).
+근거: Schleimer 2003은 코드용 k 값을 정하지 않고 문서 집합별 실험 선택을 권한다(§5).
+K=5는 IR-Plag 보정 프로파일(calibration.NORMALIZE_CALIBRATION_K)에 고정된 값이다 —
+과거 grid search 산출물은 저장소에 남아 있지 않으므로 근거로 인용하지 않는다.
 K↑ = 정밀도↑ 재현율↓ (긴 공유 시퀀스만 탐지), K↓ = 재현율↑ 정밀도↓ (노이즈 증가)."""
 
 DEFAULT_W: int = 4
-"""Winnowing 윈도우 크기. W=4 → 밀도 보장 길이 = W+K-1 = 8 토큰.
+"""Winnowing 윈도우 크기. W=4 → 밀도 보장 길이 = W+K-1 = 8 토큰 (Schleimer 2003 §3).
 W↑ = 핑거프린트 수↓ (속도↑ 정밀도↓), W↓ = 핑거프린트 수↑ (속도↓ 정밀도↑)."""
 
 HASH_BASE: int = 257
-"""Rabin 다항식 해시의 밑(base). 소수 사용으로 분포 균일성 확보."""
+"""Karp-Rabin 다항식 롤링 해시의 밑(base). 토큰 해시 알파벳보다 크기만 하면 되며 튜닝 대상이 아니다."""
 
 HASH_MOD: int = (1 << 61) - 1
 """해시 모듈러. Mersenne 소수 2^61-1 사용 — Python의 `pow(base, exp, mod)`로
-효율적 모듈러 지수 연산 가능. 충돌 확률 ≈ 1/2^61."""
+효율적 모듈러 지수 연산 가능. 밑이 고정이므로 확률적 보장은 없으며, 일반(비적대적)
+입력에서 충돌이 무시할 수준이라는 뜻이다 — 암호학적 보장이 아니다."""
 
 # FNV offset basis and prime for 64-bit (Fowler-Noll-Vo, 1991).
 _FNV1A_OFFSET = 0xcbf29ce484222325

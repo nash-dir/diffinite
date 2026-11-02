@@ -63,6 +63,13 @@ test("live subprocess JSON requires the current complete schema", () => {
   );
 });
 
+test("a v1 report from an older Python package explains the version mismatch", () => {
+  assert.throws(
+    () => model.parseLiveReport(fixture("report-v1.json")),
+    /older than 0\.14\.0/,
+  );
+});
+
 test("live subprocess JSON rejects missing required fields instead of fabricating an empty report", () => {
   assert.throws(
     () => model.parseLiveReport({}),

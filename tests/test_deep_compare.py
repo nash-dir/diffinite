@@ -295,3 +295,111 @@ class TestSizeCap:
         (b / "f.py").write_text(code, encoding="utf-8")
         res = run_deep_compare(str(a), str(b), ["f.py"], ["f.py"], workers=1, max_file_size_mb=10.0)
         assert res and res[0].matched_files_b
+
+
+class TestDirectionalContainment:
+    """A whole file embedded in a larger one: Jaccard is diluted, containment is not."""
+
+    def _write_pair(self, tmp_path):
+        a = tmp_path / "a"
+        b = tmp_path / "b"
+        a.mkdir()
+        b.mkdir()
+        copied = "".join(
+            f"def copied_{i}(x):\n    return x * {i} + {i * 7} - helper_{i}(x)\n\n"
+            for i in range(30)
+        )
+        extra = "".join(
+            f"class Unrelated{i}:\n    value = '{i}' * {i + 3}\n    def m(self, q):\n"
+            f"        return [q for _ in range({i})]\n\n"
+            for i in range(120)
+        )
+        (a / "orig.py").write_text(copied, encoding="utf-8")
+        (b / "merged.py").write_text(extra + copied, encoding="utf-8")
+        return a, b
+
+    def test_containment_reports_full_copy(self, tmp_path):
+        from diffinite.deep_compare import run_deep_compare
+
+        a, b = self._write_pair(tmp_path)
+        results = run_deep_compare(
+            str(a), str(b), ["orig.py"], ["merged.py"], workers=1, min_jaccard=0.0
+        )
+        assert len(results) == 1
+        dr = results[0]
+        b_file, shared, jaccard, _ = dr.matched_files_b[0]
+        a_in_b, b_in_a = dr.containment(b_file, shared)
+        assert a_in_b == 1.0
+        assert jaccard < 0.5
+        assert b_in_a < a_in_b
+        # Unique-hash denominators are the ones Jaccard uses.
+        union = dr.unique_hashes_a + dr.unique_hashes_b[b_file] - shared
+        assert jaccard == pytest.approx(shared / union, abs=1e-4)
+
+    def test_json_report_exposes_containment(self, tmp_path):
+        import json
+
+        from diffinite.pipeline import run_pipeline
+
+        a, b = self._write_pair(tmp_path)
+        out = tmp_path / "out"
+        out.mkdir()
+        report = out / "r.json"
+        run_pipeline(
+            dir_a=str(a),
+            dir_b=str(b),
+            report_json=str(report),
+            min_jaccard=0.0,
+            workers=1,
+        )
+        data = json.loads(report.read_text(encoding="utf-8"))
+        match = data["deep_results"][0]["matches"][0]
+        assert match["containment_a_in_b"] == 1.0
+        assert match["unique_hashes_b"] > data["deep_results"][0]["unique_hashes_a"]
+
+
+def test_binary_content_under_source_extension_does_not_abort(tmp_path):
+    """A compiled blob saved as .py is skipped as binary, not a fatal failure."""
+    from diffinite.deep_compare import run_deep_compare
+
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    code = "".join(f"def f{i}(x):\n    return x + {i}\n" for i in range(20))
+    (a / "real.py").write_text(code, encoding="utf-8")
+    (b / "real.py").write_text(code, encoding="utf-8")
+    (b / "helpers.py").write_bytes(bytes(range(256)) * 8)
+    status: dict = {}
+    results = run_deep_compare(
+        str(a), str(b), ["real.py"], ["real.py", "helpers.py"], workers=1, status=status
+    )
+    assert [r.file_a for r in results] == ["real.py"]
+    assert status["failed_files"] == []
+    # The skip is disclosed, and the file is not counted as fingerprinted.
+    assert status["skipped_binary_files"] == [
+        {"side": "B", "path": "helpers.py", "reason": "skipped-binary-content"}
+    ]
+    assert status["successful_file_count"] == status["requested_file_count"] - 1
+
+
+def test_shared_count_uses_full_sets_when_index_truncated(tmp_path):
+    """Under --allow-partial a truncated index must not shrink shared/containment."""
+    from diffinite.deep_compare import run_deep_compare
+
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    code = "".join(f"def f{i}(x):\n    return x * {i} + {i * 3}\n" for i in range(40))
+    (a / "m.py").write_text(code, encoding="utf-8")
+    (b / "m.py").write_text(code, encoding="utf-8")
+    results = run_deep_compare(
+        str(a), str(b), ["m.py"], ["m.py"], workers=1,
+        max_index_entries=10, allow_partial=True, min_jaccard=0.0,
+    )
+    dr = results[0]
+    b_file, shared, jaccard, _ = dr.matched_files_b[0]
+    assert jaccard == 1.0
+    assert shared == dr.unique_hashes_a == dr.unique_hashes_b[b_file]
+    assert dr.containment(b_file, shared) == (1.0, 1.0)

@@ -56,6 +56,25 @@ from diffinite.parser import strip_comments
 logger = logging.getLogger(__name__)
 
 
+# Non-fatal skip reason: recorded in the report, never treated as a failure.
+SKIPPED_BINARY_REASON = "skipped-binary-content"
+
+
+def _looks_binary(path: str) -> bool:
+    """NUL byte in content that failed text decoding → treat as binary.
+
+    Only consulted after decoding already failed, so UTF-16 text (which
+    contains NULs but decodes) never reaches this check.
+    """
+    try:
+        with open(path, "rb") as fh:
+            # A NUL in the first 8 KiB is the same heuristic git and diff(1)
+            # use to call a file binary; reading the whole file is unnecessary.
+            return b"\x00" in fh.read(8192)
+    except OSError:
+        return False
+
+
 # ──────────────────────────────────────────────────────────────────────
 # 워커 함수 (ProcessPoolExecutor 직렬화를 위해 모듈 최상위 정의 필수)
 # ──────────────────────────────────────────────────────────────────────
@@ -111,6 +130,13 @@ def _extract_one(args: tuple) -> tuple[str, str, set[int], int, int, str | None]
         # intended to be text. Treat the failed read/decode as evidence loss;
         # unregistered binary assets remain an intentional deep-channel skip.
         explicit_encoding = bool(encoding and encoding.lower() not in ("auto", ""))
+        # Undecodable content with a NUL byte is binary data under a source-code
+        # name (e.g. a compiled file saved as .py). The line channel already
+        # reports such a pair by SHA-256 as binary; failing the whole run here
+        # would make one misnamed file block every other result.
+        if not explicit_encoding and _looks_binary(abs_path):
+            logger.warning("Skipping binary content in deep compare: %s", rel_path)
+            return side, rel_path, set(), 0, -1, SKIPPED_BINARY_REASON
         failure_reason = (
             "decode-or-read-failure" if explicit_encoding or get_spec(extension) else None
         )
@@ -297,8 +323,11 @@ def run_deep_compare(
                     }
                 )
 
+    skipped_binary: list[dict[str, str]] = []
     for side, rel, _hset, _cnt, _ntok, failure_reason in results:
-        if failure_reason:
+        if failure_reason == SKIPPED_BINARY_REASON:
+            skipped_binary.append({"side": side, "path": rel, "reason": failure_reason})
+        elif failure_reason:
             failed_files.append(
                 {
                     "side": side,
@@ -334,8 +363,11 @@ def run_deep_compare(
     if status is not None:
         status["index_truncated"] = index_truncated
         status["requested_file_count"] = len(all_items)
-        status["successful_file_count"] = len(all_items) - len(failed_files)
+        status["successful_file_count"] = (
+            len(all_items) - len(failed_files) - len(skipped_binary)
+        )
         status["failed_files"] = failed_files
+        status["skipped_binary_files"] = skipped_binary
 
     if index_truncated and not allow_partial:
         raise RuntimeError(
@@ -362,7 +394,11 @@ def run_deep_compare(
 
         tokens_a = fp_a_tokens.get(file_id_a, -1)
         matched_b: list[tuple[str, int, float, bool]] = []
-        for file_id_b, shared in b_counts.items():
+        for file_id_b in b_counts:
+            # Recount from the full sets: under --allow-partial the inverted
+            # index may be truncated, and Jaccard, containment and the shared
+            # count must all describe the same two sets.
+            shared = len(hashes_a & fp_b[file_id_b])
             jaccard = _jaccard(hashes_a, fp_b[file_id_b])
             if jaccard >= min_jaccard:
                 # Inconclusive band: the published corpus did not establish a
@@ -385,6 +421,8 @@ def run_deep_compare(
                     file_a=file_id_a,
                     matched_files_b=matched_b,
                     fingerprint_count_a=fp_a_counts.get(file_id_a, 0),
+                    unique_hashes_a=len(hashes_a),
+                    unique_hashes_b={b: len(fp_b[b]) for b, *_ in matched_b},
                 )
             )
 

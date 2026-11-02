@@ -151,7 +151,7 @@ class FingerprintEntry:
     """
 
     hash_value: int
-    """Rabin 롤링 해시 값 (mod 2^61-1). 충돌 확률 ≈ 1/2^61."""
+    """Karp-Rabin 롤링 해시 값 (mod 2^61-1). 비적대적 입력에서 충돌은 무시할 수준."""
 
     position: int
     """K-gram이 시작하는 토큰 인덱스 (0-based)."""
@@ -179,7 +179,27 @@ class DeepMatchResult:
     Jaccard 내림차순 정렬."""
 
     fingerprint_count_a: int = 0
-    """A-파일의 총 핑거프린트 수."""
+    """A-파일에서 winnowing이 선택한 위치 수 (중복 해시 포함).
+    Jaccard/containment의 분모가 아니다 — 분모는 ``unique_hashes_a``."""
+
+    unique_hashes_a: int = 0
+    """A-파일의 고유 핑거프린트 해시 수 (|A|). Jaccard·containment가 쓰는 집합 크기."""
+
+    unique_hashes_b: dict[str, int] = field(default_factory=dict)
+    """매칭된 각 B-파일의 고유 핑거프린트 해시 수 (|B|)."""
+
+    def containment(self, b_file: str, shared: int) -> tuple[float, float]:
+        """방향성 포함도 ``(|A∩B|/|A|, |A∩B|/|B|)`` — 원본 기준 / 비교본 기준 비율.
+
+        Jaccard는 합집합 대비 비율이라 큰 파일에 작은 파일이 통째로 들어가도
+        낮게 나온다. 포함도는 "A의 지문 중 몇 %가 B에도 있는가"를 그대로 말한다.
+        (JPlag·Dolos의 방향별 유사도, 국내 감정의 원본/비교본 기준 비율과 유사한 개념이나,
+        분모는 토큰·라인이 아니라 고유 winnowing 지문 해시 수다.)
+        """
+        size_b = self.unique_hashes_b.get(b_file, 0)
+        a_in_b = round(shared / self.unique_hashes_a, 4) if self.unique_hashes_a else 0.0
+        b_in_a = round(shared / size_b, 4) if size_b else 0.0
+        return a_in_b, b_in_a
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -332,6 +352,7 @@ class AnalysisStatus:
     deep_requested_file_count: int = 0
     deep_successful_file_count: int = 0
     deep_failed_files: list[dict[str, str]] = field(default_factory=list)
+    deep_skipped_binary_files: list[dict[str, str]] = field(default_factory=list)
     deep_index_truncated: bool = False
     diff_truncated_count: int = 0
     # Appended to preserve positional compatibility with the historical fields.
@@ -365,6 +386,8 @@ class AnalysisStatus:
                 "successful_file_count": self.deep_successful_file_count,
                 "failed_file_count": len(self.deep_failed_files),
                 "failed_files": list(self.deep_failed_files),
+                "skipped_binary_file_count": len(self.deep_skipped_binary_files),
+                "skipped_binary_files": list(self.deep_skipped_binary_files),
             },
             "truncation": {
                 "deep_index_truncated": self.deep_index_truncated,

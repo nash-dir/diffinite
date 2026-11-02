@@ -283,3 +283,54 @@ class TestJavaScriptTemplateInterpolationDepth:
         assert first == second
         assert "function after" in cleaned
         assert "real comment" not in cleaned
+
+
+class TestIfZeroBlocks:
+    """``#if 0`` removal must drop only the dead branch and keep line count."""
+
+    def test_simple_block_removed(self):
+        src = "a();\n#if 0\ndead();\n#endif\nb();"
+        out = strip_comments(src, ".c")
+        assert "dead" not in out
+        assert "a();" in out and "b();" in out
+        assert out.count("\n") == src.count("\n")
+
+    def test_else_branch_is_live_code(self):
+        src = "#if 0\nold();\n#else\nlive_code();\n#endif\n"
+        out = strip_comments(src, ".c")
+        assert "old" not in out
+        assert "live_code();" in out
+        assert out.count("\n") == src.count("\n")
+
+    def test_elif_branch_is_live_code(self):
+        src = "#if 0\nold();\n#elif defined(X)\nlive();\n#endif\n"
+        out = strip_comments(src, ".c")
+        assert "old" not in out
+        assert "live();" in out
+
+    def test_nested_ifdef_does_not_close_outer_block(self):
+        src = "#if 0\n#ifdef FOO\nx();\n#endif\ndead2();\n#endif\nafter();"
+        out = strip_comments(src, ".c")
+        assert "dead2" not in out
+        assert "x();" not in out
+        assert "after();" in out
+        assert "#endif" not in out
+
+    def test_nested_else_inside_dead_block_stays_dead(self):
+        src = "#if 0\n#ifndef FOO\na();\n#else\nb();\n#endif\n#endif\nc();"
+        out = strip_comments(src, ".c")
+        assert "a();" not in out and "b();" not in out
+        assert "c();" in out
+
+    def test_trailing_comment_on_if_zero(self):
+        src = "#if 0 // disabled\ndead();\n#endif\nok();"
+        out = strip_comments(src, ".c")
+        assert "dead" not in out
+        assert "ok();" in out
+
+    def test_unterminated_if_zero_keeps_original_text(self):
+        # '#if 0' quoted inside a block comment never closes; it must not erase
+        # the live code that follows it.
+        src = "/* example:\n#if 0\n*/\nreal();\nmore();\n"
+        out = strip_comments(src, ".c")
+        assert "real();" in out and "more();" in out

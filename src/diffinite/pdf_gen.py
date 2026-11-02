@@ -644,7 +644,8 @@ def build_cover_body(
             + '<br><strong>Deep files:</strong> '
             + f'{analysis_status.deep_successful_file_count}/'
             + f'{analysis_status.deep_requested_file_count} processed; '
-            + f'{failed_deep_count} file/worker failure(s)'
+            + f'{failed_deep_count} file/worker failure(s); '
+            + f'{len(analysis_status.deep_skipped_binary_files)} skipped as binary content'
             + '<br><strong>Truncation:</strong> '
             + f'{analysis_status.diff_truncated_count} inline diff payload(s); deep index '
             + ('truncated' if analysis_status.deep_index_truncated else 'complete')
@@ -671,6 +672,17 @@ def build_cover_body(
                 '<p class="meta"><strong>Failed diff pairs:</strong> '
                 + html.escape(failed_pairs)
                 + '</p>\n'
+            )
+        if analysis_status.deep_skipped_binary_files:
+            skipped = "; ".join(
+                f"{item.get('side', '?')}:{item.get('path', '?')}"
+                for item in analysis_status.deep_skipped_binary_files
+            )
+            meta_html += (
+                '<p class="meta"><strong>Deep files skipped as binary content '
+                '(not fingerprinted):</strong> '
+                + html.escape(skipped)
+                + '</p>' + chr(10)
             )
         if analysis_status.deep_failed_files:
             failed_files = "; ".join(
@@ -748,8 +760,9 @@ def build_cover_body(
         deep_html += "<h2>Deep Compare &mdash; N:M Cross-Match Results</h2>\n"
         deep_html += (
             '<table class="deep">'
-            '<tr><th style="width: 40%;">A File</th><th style="width: 40%;">B File(s)</th>'
-            '<th style="width: 10%;">Shared Hashes</th><th style="width: 10%;">Jaccard</th></tr>\n'
+            '<tr><th style="width: 32%;">A File</th><th style="width: 32%;">B File(s)</th>'
+            '<th style="width: 9%;">Shared Hashes</th><th style="width: 9%;">Jaccard</th>'
+            '<th style="width: 9%;">A in B</th><th style="width: 9%;">B in A</th></tr>\n'
         )
         any_inconclusive = False
         for dr in deep_results:
@@ -759,15 +772,25 @@ def build_cover_body(
                     any_inconclusive = True
                     jbadge += (' <span class="badge badge-mid" '
                                'title="below token floor">inconclusive</span>')
+                a_in_b, b_in_a = dr.containment(b_file, shared)
                 deep_html += (
                     f"<tr>"
                     f"<td>{_break_path(html.escape(dr.file_a))}</td>"
                     f"<td>{_break_path(html.escape(b_file))}</td>"
                     f"<td>{shared}</td>"
                     f"<td>{jbadge}</td>"
+                    f"<td>{a_in_b * 100:.2f}%</td>"
+                    f"<td>{b_in_a * 100:.2f}%</td>"
                     f"</tr>\n"
                 )
         deep_html += "</table>\n"
+        deep_html += (
+            '<p class="meta"><strong>A in B</strong> = shared &divide; unique '
+            'fingerprints of the A file; <strong>B in A</strong> = shared &divide; '
+            'unique fingerprints of the B file. Rows are selected by the Jaccard '
+            'threshold only; the containment columns are descriptive and have no '
+            'calibrated threshold.</p>\n'
+        )
         if any_inconclusive:
             deep_html += (
                 '<p class="meta">&#8505; <strong>Inconclusive</strong> matches fall '

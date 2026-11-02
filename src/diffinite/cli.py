@@ -405,7 +405,10 @@ def main(argv: list[str] | None = None) -> None:
         type=int,
         default=DEFAULT_K,
         dest="k_gram",
-        help=(f"K-gram token window size (default: {DEFAULT_K}). Schleimer 2003, §4.2."),
+        help=(
+            f"K-gram token window size (default: {DEFAULT_K}; the value frozen in "
+            "the measured normalize calibration profile)."
+        ),
     )
     deep_group.add_argument(
         "--window",
@@ -414,7 +417,8 @@ def main(argv: list[str] | None = None) -> None:
         dest="window",
         help=(
             f"Winnowing window size (default: {DEFAULT_W}). "
-            "Density guarantee: >=(W+K-1) shared tokens always detected."
+            "Shared runs of >=(W+K-1) tokens always share a fingerprint; "
+            "whether the pair is reported depends on --threshold-deep."
         ),
     )
     deep_group.add_argument(

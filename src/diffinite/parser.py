@@ -94,21 +94,27 @@ _C_FAMILY_EXTS = frozenset(
 # ──────────────────────────────────────────────────────────────────────
 # #if 0 전처리 블록 제거 (C-family 전용)
 # ──────────────────────────────────────────────────────────────────────
+# 뒤따르는 주석(`#if 0 // disabled`, `#if 0 /* ... */`)도 허용한다.
 _IF0_PATTERN = re.compile(
-    r"^\s*#\s*if\s+0\s*$",
+    r"^\s*#\s*if\s+0\s*(?://.*|/\*.*)?$",
     re.MULTILINE,
 )
 _ENDIF_PATTERN = re.compile(
     r"^\s*#\s*endif\b",
     re.MULTILINE,
 )
+# 중첩 깊이를 올리는 모든 조건부 지시문 (#if / #ifdef / #ifndef)
+_IF_OPEN_PATTERN = re.compile(r"#\s*if(?:n?def)?\b")
+# 바깥 `#if 0` 의 죽은 분기를 끝내는 지시문 — 이후 분기는 살아 있는 코드
+_ELSE_PATTERN = re.compile(r"#\s*(?:else|elif)\b")
 
 
 def _strip_ifdef_zero(text: str) -> str:
     """``#if 0 … #endif`` 블록을 제거한다. 라인 수는 보존 (빈 줄로 대체).
 
-    중첩 ``#if``/``#endif``를 depth 카운터로 추적하여
-    가장 바깥쪽 ``#if 0`` 블록만 제거한다.
+    중첩 ``#if``/``#ifdef``/``#ifndef``/``#endif``를 depth 카운터로 추적하여
+    가장 바깥쪽 ``#if 0`` 블록만 제거한다. 바깥 블록의 ``#else``/``#elif``
+    이후 분기는 컴파일되는 코드이므로 보존한다 (지시문 줄 자체도 원문 유지).
 
     Note:
         ``#if 0``은 "코드를 주석 처리하는 관용적 방법"으로,
@@ -119,6 +125,7 @@ def _strip_ifdef_zero(text: str) -> str:
     result: list[str] = []
     lines = text.split("\n")
     depth = 0  # #if 0 내부 중첩 깊이
+    block_start = -1  # 현재 바깥 #if 0 블록이 시작된 줄 번호
     i = 0
     while i < len(lines):
         line = lines[i]
@@ -127,18 +134,28 @@ def _strip_ifdef_zero(text: str) -> str:
         if depth == 0:
             if _IF0_PATTERN.match(line):
                 depth = 1
+                block_start = i
                 result.append("")  # 라인 수 보존
             else:
                 result.append(line)
         else:
             # #if 0 블록 내부
-            if stripped.startswith("#") and re.match(r"#\s*if\b", stripped):
+            if _IF_OPEN_PATTERN.match(stripped):
                 depth += 1
-            elif stripped.startswith("#") and re.match(r"#\s*endif\b", stripped):
+            elif _ENDIF_PATTERN.match(stripped):
                 depth -= 1
+            elif depth == 1 and _ELSE_PATTERN.match(stripped):
+                depth = 0
+                result.append(line)  # 살아 있는 분기 시작 — 원문 유지
+                i += 1
+                continue
             result.append("")  # 항상 빈 줄 (라인 수 보존)
 
         i += 1
+    if depth > 0:
+        # 닫히지 않은 #if 0 (예: 주석 안의 예시 텍스트)은 지시문으로 확신할 수
+        # 없으므로 원문을 그대로 둔다 — 파일 끝까지 지우면 살아 있는 코드가 사라진다.
+        result[block_start:] = lines[block_start:]
     return "\n".join(result)
 
 

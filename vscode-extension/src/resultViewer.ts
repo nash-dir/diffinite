@@ -193,6 +193,7 @@ function buildResultHtml(report: DiffiniteReport): string {
   // --- Deep Compare section ---
   let deepHtml = "";
   if (view.deepRows.length > 0) {
+    const pct = (v: number | null): string => (v === null ? "—" : `${(v * 100).toFixed(1)}%`);
     let deepRows = "";
     for (const m of view.deepRows) {
         const jpct = (m.jaccard * 100).toFixed(1);
@@ -205,6 +206,8 @@ function buildResultHtml(report: DiffiniteReport): string {
             <td>${escHtml(m.file_b)}</td>
             <td>${m.shared_hashes}</td>
             <td><span class="badge ${jClass}">${escHtml(m.label)} · ${jpct}%</span></td>
+            <td>${pct(m.containment_a_in_b)}</td>
+            <td>${pct(m.containment_b_in_a)}</td>
           </tr>
         `;
     }
@@ -214,7 +217,7 @@ function buildResultHtml(report: DiffiniteReport): string {
         <h2>Deep Compare — 유사 후보</h2>
         <table class="deep-table">
           <thead>
-            <tr><th>File A</th><th>File B</th><th>Shared</th><th>Jaccard</th></tr>
+            <tr><th>File A</th><th>File B</th><th>Shared</th><th>Jaccard</th><th title="shared ÷ A의 고유 지문 수 (원본 기준)">A in B</th><th title="shared ÷ B의 고유 지문 수 (비교본 기준)">B in A</th></tr>
           </thead>
           <tbody>${deepRows}</tbody>
         </table>

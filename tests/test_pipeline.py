@@ -492,3 +492,28 @@ class TestMetadataCompatAndLibraryDisclosure:
         run_pipeline(str(a), str(b), strip_comments=True, exec_mode="deep",
                      normalize=True, report_md=str(md), min_jaccard=0.05)
         assert "false-positive" in md.read_text(encoding="utf-8").lower()
+
+
+def test_strip_comments_uses_partner_rules_for_unregistered_extension(tmp_path):
+    """Foo.java vs Foo.java.orig: comments are stripped on both sides."""
+    import json
+
+    from diffinite.pipeline import run_pipeline
+
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    body = "class Foo {\n    int x = 1;\n    int y() { return x; }\n}\n"
+    (a / "Foo.java").write_text("// old header\n" + body, encoding="utf-8")
+    (b / "Foo.java.orig").write_text("// a different header\n" + body, encoding="utf-8")
+    out = tmp_path / "out"
+    out.mkdir()
+    report = out / "r.json"
+    run_pipeline(
+        dir_a=str(a), dir_b=str(b), strip_comments=True,
+        exec_mode="simple", report_json=str(report), workers=1,
+    )
+    data = json.loads(report.read_text(encoding="utf-8"))
+    assert len(data["results"]) == 1
+    assert data["results"][0]["ratio"] == 1.0

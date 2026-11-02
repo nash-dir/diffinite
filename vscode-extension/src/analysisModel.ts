@@ -172,6 +172,9 @@ export interface DeepReportMatch {
   file_b: string;
   shared_hashes: number;
   jaccard: number;
+  /** Directional containment (shared / unique hashes of A or B); null for reports that predate it. */
+  containment_a_in_b: number | null;
+  containment_b_in_a: number | null;
   inconclusive: boolean | null;
 }
 
@@ -383,6 +386,16 @@ function validateLiveStatus(
  */
 export function parseLiveReport(raw: unknown): DiffiniteReport {
   const source = requireRecord(raw, "live report");
+  // Python diffinite <= 0.13.x wrote no schema_version. With a system Python
+  // (diffinite.pythonPath / non-Windows builds) that is the likely cause, so say
+  // how to fix it instead of reporting a malformed field.
+  if (source.schema_version === undefined && typeof source.dir_a === "string") {
+    liveReportError(
+      "schema_version",
+      "is missing: the diffinite Python package is older than 0.14.0. " +
+        "Upgrade it (pip install -U diffinite) or use the bundled runtime",
+    );
+  }
   const schemaVersion = requireCount(source.schema_version, "schema_version");
   // The current Python JSON writer contract is schema v2 (pipeline.py).
   if (schemaVersion !== 2) {
@@ -500,6 +513,7 @@ export function parseReport(raw: unknown): DiffiniteReport {
     matches: records(item.matches).map((match): DeepReportMatch => ({
       file_b: text(match.file_b, "unknown"), shared_hashes: num(match.shared_hashes, 0) || 0,
       jaccard: num(match.jaccard, 0) || 0, inconclusive: bool(match.inconclusive),
+      containment_a_in_b: num(match.containment_a_in_b), containment_b_in_a: num(match.containment_b_in_a),
     })),
   }));
 
