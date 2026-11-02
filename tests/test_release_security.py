@@ -368,7 +368,7 @@ def test_python_build_and_bundle_tools_are_hash_locked_without_isolation():
 
 
 def test_bootstrap_and_runtime_locks_exclude_audited_vulnerable_versions():
-    assert '$expectedPipVersion = "26.1.2"' in BUNDLE_SCRIPT
+    assert '$expectedPipVersion = "26.2.2"' in BUNDLE_SCRIPT
     assert "actualPipVersion -ne $expectedPipVersion" in BUNDLE_SCRIPT
     minimums = {
         "certifi": "2026.10.18",
@@ -427,3 +427,12 @@ def test_release_builds_are_gated_on_the_test_suite():
     for build_job in ("build-vsix", "build-python"):
         needs = jobs[build_job].get("needs")
         assert needs == "test" or "test" in (needs or [])
+
+
+def test_pip_bootstrap_uses_an_immutable_hash_pinned_wheel():
+    """A rolling get-pip.py URL cannot be hash-pinned; the pip wheel can."""
+    assert not re.search(r"Invoke-WebRequest[^\n]*bootstrap\.pypa\.io", BUNDLE_SCRIPT)
+    assert "https://files.pythonhosted.org/packages/" in BUNDLE_SCRIPT
+    assert re.search(r'\$expectedPipWheelHash = "[0-9A-F]{64}"', BUNDLE_SCRIPT)
+    assert "actualPipWheelHash -ne $expectedPipWheelHash" in BUNDLE_SCRIPT
+    assert "'install', '--no-index'" in BUNDLE_SCRIPT

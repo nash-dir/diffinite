@@ -74,26 +74,36 @@ foreach ($pth in $pthFiles) {
 # 3. Bootstrap Pip
 # -------------------------------------------------------------------------
 Write-Host "Bootstrapping pip..."
-# get-pip.py SHA256 — bootstrap.pypa.io는 항상 최신본을 주는 롤링 URL이라,
-# pip 릴리스로 내용이 바뀌면 이 핀을 갱신해야 한다(장기적으로는 버전 고정 스냅샷 권장).
-$expectedPipHash = "A341E1A43E38001C551A1508A73FF23636A11970B61D901D9A1CAD2A18F57055"
-$pipScriptPath = "$binPythonDir\get-pip.py"
+# pip is bootstrapped from its own wheel at an immutable PyPI file URL, pinned by
+# SHA-256. (bootstrap.pypa.io/get-pip.py is a rolling URL whose content changes
+# with every pip release, so a pinned hash for it breaks the build each time.)
+# pip-audit on 2026-11-03: 26.1.2 has PYSEC-2026-3721 (fixed in 26.2); 26.2.2
+# (released 2026-10-20) has no known advisories.
+$expectedPipVersion = "26.2.2"
+$pipWheelName = "pip-$expectedPipVersion-py3-none-any.whl"
+$pipWheelUrl = "https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/$pipWheelName"
+$expectedPipWheelHash = "FD7F4DFA8190E014013B9F08F3E973F4E4C26FFD179A204895533A7254813A70"
+$pipWheelPath = "$binPythonDir\$pipWheelName"
 
-Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile $pipScriptPath
+Invoke-WebRequest -Uri $pipWheelUrl -OutFile $pipWheelPath
 
-Write-Host "Verifying get-pip.py hash..."
-$actualPipHash = (Get-FileHash -Path $pipScriptPath -Algorithm SHA256).Hash
-if ($actualPipHash -ne $expectedPipHash) {
-    throw "Security Exception: get-pip.py hash mismatch! Expected $expectedPipHash, got $actualPipHash"
+Write-Host "Verifying pip wheel hash..."
+$actualPipWheelHash = (Get-FileHash -Path $pipWheelPath -Algorithm SHA256).Hash
+if ($actualPipWheelHash -ne $expectedPipWheelHash) {
+    throw "Security Exception: pip wheel hash mismatch! Expected $expectedPipWheelHash, got $actualPipWheelHash"
 }
 
+# Run pip from inside its verified wheel to install that same wheel (no index).
 # Isolated mode blocks PYTHON* environment variables, user-site packages, and
-# the current directory from influencing any code run by the bundled runtime.
-& "$binPythonDir\python.exe" -I $pipScriptPath --no-warn-script-location
+# the current directory from influencing any code run by the bundled runtime;
+# the wheel is therefore put on sys.path explicitly rather than relied on as
+# an implicit script directory.
+$pipBootstrap = "import sys; sys.path.insert(0, sys.argv[1]); " +
+    "from pip._internal.cli.main import main; " +
+    "sys.exit(main(['install', '--no-index', '--no-warn-script-location', sys.argv[1]]))"
+& "$binPythonDir\python.exe" -I -c $pipBootstrap $pipWheelPath
 if ($LASTEXITCODE -ne 0) { throw "Pip bootstrap failed." }
-# pip-audit on 2026-07-20 identified 26.1.2 as the first version fixing every
-# advisory reported for the bootstrap pip; the get-pip hash pins this exact tool.
-$expectedPipVersion = "26.1.2"
+Remove-Item $pipWheelPath -Force
 $actualPipVersion = & "$binPythonDir\python.exe" -I -c "from importlib.metadata import version; print(version('pip'))"
 if ($LASTEXITCODE -ne 0 -or $actualPipVersion -ne $expectedPipVersion) {
     throw "Security Exception: expected bootstrap pip $expectedPipVersion, got $actualPipVersion"
@@ -306,7 +316,6 @@ Get-ChildItem -Path $sitePackages -ErrorAction SilentlyContinue |
     Where-Object { $name = $_.Name; $buildOnlyPatterns | Where-Object { $name -like $_ } } |
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 if (Test-Path "$binPythonDir\Scripts") { Remove-Item "$binPythonDir\Scripts" -Recurse -Force }
-if (Test-Path "$binPythonDir\get-pip.py") { Remove-Item "$binPythonDir\get-pip.py" -Force }
 
 # -------------------------------------------------------------------------
 # 8. Post-prune Version & Tiny Report Verification
