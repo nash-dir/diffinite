@@ -36,14 +36,15 @@ dependencies = [
     "rapidfuzz>=3.0.0",
     "charset-normalizer>=3.0.0",
     "xhtml2pdf>=0.2.11",
-    # pip-audit on 2026-07-20 reported these as the first fixed versions for
-    # advisories affecting the PDF/runtime dependency graph.
-    "pypdf>=6.13.3",
-    "cryptography>=48.0.1",
+    # pip-audit (2026-07-20, re-run 2026-11-03) reported these as the first fixed
+    # versions for advisories affecting the PDF/runtime dependency graph.
+    "pypdf>=6.16.1",
+    "cryptography>=50.0.0",
     "idna>=3.15",
     "lxml>=6.1.0",
-    "pillow>=12.3.0",
-    "urllib3>=2.7.0",
+    "pillow>=13.0.0",
+    "urllib3>=2.8.0",
+    "certifi>=2026.10.18",
     "pygments>=2.16.0",
     "reportlab>=4.0.0",
 ]

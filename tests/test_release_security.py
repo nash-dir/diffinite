@@ -371,12 +371,13 @@ def test_bootstrap_and_runtime_locks_exclude_audited_vulnerable_versions():
     assert '$expectedPipVersion = "26.1.2"' in BUNDLE_SCRIPT
     assert "actualPipVersion -ne $expectedPipVersion" in BUNDLE_SCRIPT
     minimums = {
-        "cryptography": "48.0.1",
+        "certifi": "2026.10.18",
+        "cryptography": "50.0.0",
         "idna": "3.15",
         "lxml": "6.1.0",
-        "pillow": "12.3.0",
-        "pypdf": "6.13.3",
-        "urllib3": "2.7.0",
+        "pillow": "13.0.0",
+        "pypdf": "6.16.1",
+        "urllib3": "2.8.0",
     }
     for package, minimum in minimums.items():
         assert _locked_version(RUNTIME_LOCK, package) >= Version(minimum)

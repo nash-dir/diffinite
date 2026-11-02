@@ -111,7 +111,7 @@
 |                       |           |                                                     | OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE                     |
 |                       |           |                                                     | SOFTWARE.                                                                                         |
 |                       |           |                                                     |                                                                                                   |
-| certifi               | 2026.6.17 | Mozilla Public License 2.0 (MPL 2.0)                | This package contains a modified version of ca-bundle.crt:                                        |
+| certifi               | 2026.10.23 | Mozilla Public License 2.0 (MPL 2.0)                | This package contains a modified version of ca-bundle.crt:                                        |
 |                       |           |                                                     |                                                                                                   |
 |                       |           |                                                     | ca-bundle.crt -- Bundle of CA Root Certificates                                                   |
 |                       |           |                                                     |                                                                                                   |
@@ -178,7 +178,7 @@
 |                       |           |                                                     | OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE                     |
 |                       |           |                                                     | SOFTWARE.                                                                                         |
 |                       |           |                                                     |                                                                                                   |
-| cryptography          | 49.0.0    | Apache-2.0 OR BSD-3-Clause                          | This software is made available under the terms of *either* of the licenses                       |
+| cryptography          | 50.0.2    | Apache-2.0 OR BSD-3-Clause                          | This software is made available under the terms of *either* of the licenses                       |
 |                       |           |                                                     | found in LICENSE.APACHE or LICENSE.BSD. Contributions to cryptography are made                    |
 |                       |           |                                                     | under the terms of *both* these licenses.                                                         |
 |                       |           |                                                     |                                                                                                   |
@@ -519,7 +519,7 @@
 |                       |           |                                                     | OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE                     |
 |                       |           |                                                     | SOFTWARE.                                                                                         |
 |                       |           |                                                     |                                                                                                   |
-| pillow                | 12.3.0    | MIT-CMU                                             | The Python Imaging Library (PIL) is                                                               |
+| pillow                | 13.0.0    | MIT-CMU                                             | The Python Imaging Library (PIL) is                                                               |
 |                       |           |                                                     |                                                                                                   |
 |                       |           |                                                     |     Copyright © 1997-2011 by Secret Labs AB                                                       |
 |                       |           |                                                     |     Copyright © 1995-2011 by Fredrik Lundh and contributors                                       |
@@ -2210,7 +2210,7 @@
 |                       |           |                                                     | OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE                     |
 |                       |           |                                                     | SOFTWARE.                                                                                         |
 |                       |           |                                                     |                                                                                                   |
-| pypdf                 | 6.14.2    | BSD-3-Clause                                        | Copyright (c) 2006-2008, Mathieu Fenniak                                                          |
+| pypdf                 | 6.21.4    | BSD-3-Clause                                        | Copyright (c) 2006-2008, Mathieu Fenniak                                                          |
 |                       |           |                                                     | Some contributions copyright (c) 2007, Ashish Kulkarni <kulkarni.ashish@gmail.com>                |
 |                       |           |                                                     | Some contributions copyright (c) 2014, Steve Witham <switham_github@mac-guyver.com>               |
 |                       |           |                                                     |                                                                                                   |
@@ -3394,7 +3394,7 @@
 |                       |           |                                                     | IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN                           |
 |                       |           |                                                     | CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                        |
 |                       |           |                                                     |                                                                                                   |
-| urllib3               | 2.7.0     | MIT                                                 | MIT License                                                                                       |
+| urllib3               | 2.8.0     | MIT                                                 | MIT License                                                                                       |
 |                       |           |                                                     |                                                                                                   |
 |                       |           |                                                     | Copyright (c) 2008-2020 Andrey Petrov and contributors.                                           |
 |                       |           |                                                     |                                                                                                   |

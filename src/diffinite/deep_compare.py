@@ -363,9 +363,7 @@ def run_deep_compare(
     if status is not None:
         status["index_truncated"] = index_truncated
         status["requested_file_count"] = len(all_items)
-        status["successful_file_count"] = (
-            len(all_items) - len(failed_files) - len(skipped_binary)
-        )
+        status["successful_file_count"] = len(all_items) - len(failed_files) - len(skipped_binary)
         status["failed_files"] = failed_files
         status["skipped_binary_files"] = skipped_binary
 

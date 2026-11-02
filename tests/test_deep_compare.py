@@ -395,8 +395,14 @@ def test_shared_count_uses_full_sets_when_index_truncated(tmp_path):
     (a / "m.py").write_text(code, encoding="utf-8")
     (b / "m.py").write_text(code, encoding="utf-8")
     results = run_deep_compare(
-        str(a), str(b), ["m.py"], ["m.py"], workers=1,
-        max_index_entries=10, allow_partial=True, min_jaccard=0.0,
+        str(a),
+        str(b),
+        ["m.py"],
+        ["m.py"],
+        workers=1,
+        max_index_entries=10,
+        allow_partial=True,
+        min_jaccard=0.0,
     )
     dr = results[0]
     b_file, shared, jaccard, _ = dr.matched_files_b[0]
