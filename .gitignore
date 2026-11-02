@@ -53,7 +53,7 @@ example/validation/*
 !example/unicode/**
 # Generated CLI report outputs left in example/ root
 # (timestamped, e.g. left_right_20260622_2035.{csv,html,md,pdf,json};
-#  *.sig and manifest.sha256.json are already covered by global rules above)
+#  *.sig, *.sha256, and manifest.sha256.json are covered by global rules)
 example/*.csv
 example/*.html
 example/*.md
@@ -73,6 +73,7 @@ tmp/
 /report.md
 /report.json
 *.sig
+*.sha256
 *_uncompared.txt
 
 # Virtual environments (any variant, e.g. .venv-ci)

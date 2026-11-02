@@ -179,7 +179,7 @@ dir_b    Path to the comparison source directory (B)
 | `--report-html PATH` | Generate standalone HTML report (single file, no external deps) |
 | `--report-md PATH` | Generate Markdown summary report |
 | `--report-json PATH` | Generate machine-readable JSON report (used by VS Code extension) |
-| `--no-merge` | Generate individual PDFs per file instead of one merged PDF |
+| `--no-merge` | Generate per-file PDF and/or HTML artifacts in `<stem>_files/` instead of a merged document. The tree is an exact current-run evidence set; obsolete merged anchors/sidecars are removed transactionally. A non-empty prior tree is replaced only when its files match the prior integrity manifest, so unrelated user files are never silently deleted. |
 | `--preserve-tree` / `--no-preserve-tree` | Preserve directory tree structure in individual output (default: on) |
 | `--sort-by {filename,path,similarity,ratio}` | Sort matched pairs in the report. Default: insertion order (no sort). |
 | `--sort-order {asc,desc}` | Sort direction (default: `asc`). Only effective with `--sort-by`. |
@@ -213,8 +213,8 @@ Korean, Japanese, and Chinese text is rendered correctly in PDF output. By defau
 |--------|:-------:|-------------|
 | `--k-gram N` | `5` | K-gram size for Winnowing. Larger K = fewer but more specific fingerprints. (Schleimer 2003, §4.2) |
 | `--window N` | `4` | Winnowing window size. Guarantees detection of any shared sequence ≥ `K+W−1` = 8 tokens. |
-| `--threshold-deep N` | `5` raw / `93` normalize | Minimum Jaccard similarity (percent, 0–100) to include in results. The default differs by channel: raw uses 5; `--normalize` uses **93**, calibrated for a false-positive rate ≤ 1% (see [Normalize precision](#normalize-precision--false-positive-rate) below). Pass a value to override. |
-| `--normalize` | off | Normalize identifiers → `ID`, literals → `LIT` before fingerprinting. Improves Type-2 clone detection (renamed variables) but **raises the false-positive rate on independent code** — see [Normalize precision](#normalize-precision--false-positive-rate). Matches below a 45-token floor are reported as *inconclusive*, and every normalize report discloses its measured false-positive rate. |
+| `--threshold-deep N` | `5` raw / `93` normalize | Minimum Jaccard similarity (percent, 0–100) to include in results. Raw 5 is a **legacy, uncalibrated compatibility default**, not a safe cutoff. `--normalize` auto keeps **93**; the measured statistics apply only to the exact profile documented below. Pass a value to override; manual values are recorded as `user`. |
+| `--normalize` | off | Normalize identifiers → `ID`, literals → `LIT` before fingerprinting. This makes renamed-identifier similarity easier to surface but **raises the false-positive rate on independent code** — see [Normalize precision](#normalize-precision--false-positive-rate). Matches below 45 tokens are conservatively marked *inconclusive*. Every report states whether the measured calibration applies to its actual K/W/comment/language profile. |
 | `--lang-aware` | off | With `--normalize`, use language-aware normalization (Pygments lexer, falling back to per-language keyword sets) so keywords like Rust `fn`/`pub` or Go `func` are preserved instead of flattened to `ID`. Opt-in; produces fingerprints incompatible with the default channel. No effect without `--normalize`. |
 | `--workers N` | `4` | Number of parallel worker processes for diff rendering and fingerprint extraction. |
 
@@ -223,11 +223,12 @@ Korean, Japanese, and Chinese text is rendered correctly in PDF output. By defau
 | Option | Default | Description |
 |--------|:-------:|-------------|
 | `--no-autojunk` | off | Disable `SequenceMatcher`'s autojunk heuristic. Treats all tokens equally — slower but more precise for forensic analysis. |
-| `--max-index-entries N` | `10,000,000` | Memory cap for inverted index. Prevents OOM on large corpora. ~800MB at 10M entries. |
-| `--max-file-size N` | `10.0` | Files larger than this (MB) bypass the in-memory text decode and fall back to a SHA-256 hash comparison (reported as match/no-match rather than a line diff). Prevents OOM/CPU lock on large binary/generated files. |
+| `--max-index-entries N` | `10,000,000` | Memory cap for the Deep Compare inverted index. Reaching the cap fails closed by default; `--allow-partial` is required to emit an explicitly incomplete truncated result. |
+| `--max-file-size N` | `10.0` | Files larger than this (MB) use SHA-256 match/mismatch in the line-comparison channel. Omitting them from Deep Compare fails closed unless `--allow-partial` explicitly authorizes an incomplete result. |
 | `--hash` | off | Embed SHA-256 evidence integrity hashes for all analyzed files in the report. |
 | `--uncompared-files {inline,separate,none}` | `inline` | Control how unmatched files are displayed: inline in the main report, written to a separate `*_uncompared.txt` file, or omitted. |
 | `--bundle PATH` | — | Create an evidence bundle ZIP at `PATH` containing source files, generated reports, and the integrity manifest. |
+| `--allow-partial` | off | Permit an explicitly **incomplete** report after a worker/file failure. Without this flag, such failures stop report generation. |
 | `--dir-alias-a TEXT` / `--dir-alias-b TEXT` | — | Display alias for directory A/B in reports (avoids exposing absolute paths). |
 
 ### Filtering & Advanced Options
@@ -239,7 +240,27 @@ Korean, Japanese, and Chinese text is rendered correctly in PDF output. By defau
 | `--max-diff-html-size N` | `2.0` | Max HTML diff size (MB) before truncation. Prevents xhtml2pdf OOM/`RecursionError` on huge diffs. |
 | `--metrics-only` | off | Phase 1 only: compute similarities and emit JSON, skipping HTML/PDF rendering. |
 | `--filter-json PATH` | — | Phase 2: restrict output to the file-A paths listed in a JSON array (pairs with `--metrics-only`). |
-| `--unreadable-log PATH` | — | Write the list of files that could not be read (permission errors) to `PATH`. |
+| `--unreadable-log PATH` | — | Write the privacy-safe list of files that could not be read. When produced, the log is hashed in the manifest and included in the evidence bundle. A stale log is removed when the current run has no such failures. |
+
+Report checksum sidecars use `.sha256`. The legacy `.sig` sidecar is retained for
+compatibility but is deprecated: it contains only a plain SHA-256 checksum and is
+not an electronic signature or chain-of-custody attestation.
+
+Successful evidence runs analyze and bundle a verified immutable source snapshot,
+then recheck both the live sources and snapshot before committing output. Report,
+manifest, bundle, and checksum updates are covered by one rollback transaction for
+handled failures. Portable filesystems cannot atomically replace the complete
+multi-file set across a power loss, and a hostile local process can still race the
+final filesystem calls; use a dedicated output directory per evidence run and
+retain the bundle checksum outside that directory when stronger custody controls
+are required.
+
+JSON reports now declare `schema_version: 2`. Schema v2 retains the v1 fields and
+adds Python-resolved effective threshold/provenance, the canonical threshold
+disclosure, actual preprocessing, per-result truncation, and `analysis_status`
+success/failure accounting. The VS Code extension continues to open v1 reports;
+fields absent from a legacy report are displayed as `unknown`, never inferred as
+a successful or calibrated state.
 
 ### Page Annotation Options
 
@@ -275,13 +296,22 @@ diffinite plaintiff_code/ defendant_code/ -o exhibit_A.pdf \
 diffinite vendor_v1/ vendor_v2/ --report-html audit.html --strip-comments
 ```
 
-### Maximum Sensitivity (Type-2 Clones)
+### Profile-Bound Calibrated Normalize Channel (Near-Verbatim Candidates)
 
 ```bash
-# Detect renamed-variable copies
+# Python selects the measured normalize operating point (currently 93)
 diffinite original/ suspect/ -o report.pdf \
     --normalize --no-autojunk --strip-comments
 ```
+
+Lower manual thresholds broaden the candidate list but do not inherit the
+calibrated false-positive estimate. They are suitable only for manual review,
+not a legal copying determination.
+
+The published estimate is profile-bound: K=5, W=4, comments stripped, and
+language-aware normalization off. The numeric auto threshold remains 93 for
+compatibility under other profiles, but those reports are explicitly marked
+`unvalidated-profile` and do not quote the measured false-positive rate or CI.
 
 ### Simple Mode (Fast, No Cross-Matching)
 
@@ -307,7 +337,7 @@ diffinite dir_a/ dir_b/ \
 # Larger K-gram = fewer false positives, may miss short matches
 diffinite dir_a/ dir_b/ --k-gram 7 --window 5
 
-# Lower Jaccard threshold = show weaker matches (0–100 scale; raw default 5, 93 under --normalize)
+# Manual lower threshold = more candidates, with no calibrated safety claim
 diffinite dir_a/ dir_b/ --threshold-deep 2
 
 # Stricter file name matching
@@ -416,7 +446,7 @@ diffinite example/Case-NegativeControl/Eclipse_Collections example/Case-Negative
 | `StringIterate.java` | `String.java` | 2.4% | — |
 | `FastList.java` | `ArrayList.java` | 1.5% | — |
 
-**Observation**: No cross-matches above the 5% Jaccard threshold. This is the correct result — independent projects should show near-zero similarity.
+**Observation**: No cross-matches appeared above the historical raw 5% threshold in this fixture. That single negative control does **not** calibrate 5 as a safe cutoff; the same-domain IR-Plag validation below measured a high false-positive rate on small files.
 
 ### 3. IR-Plag Case 01 — Known Plagiarism
 
@@ -429,16 +459,18 @@ diffinite example/plagiarism/case-01/original example/plagiarism/case-01/plagiar
 
 | Original | Plagiarized | Jaccard |
 |----------|-------------|:-:|
-| `T1.java` | `L2/04/hellow.java` | 100.0% |
 | `T1.java` | `L1/04/T1.java` | 100.0% |
 | `T1.java` | `L1/05/HelloWorld.java` | 100.0% |
-| `T1.java` | `L4/05/hellow.java` | 56.2% |
-| `T1.java` | `L5/02/Main.java` | 38.1% |
-| `T1.java` | `L6/07/PrintJava.java` | 36.4% |
-| `T1.java` | `L6/01/L6.java` | 25.0% |
-| `T1.java` | `L6/05/HelloWorld.java` | 15.4% |
+| `T1.java` | `L2/04/hellow.java` | 100.0% |
+| `T1.java` | `L3/04/hellow.java` | 100.0% |
 
-**Observation**: Jaccard decreases as the plagiarism level increases (L1→L6). Verbatim and lightly-edited copies (L1–L3) score 100%. Heavily restructured copies (L5, L6) still show 15–38% shared fingerprints — well above the negative control baseline.
+**Current-default observation**: the regenerated threshold-93 report surfaces 18
+L1–L3 candidates, all at 100%, and no L4–L6 candidates. Historical threshold-5
+output did show lower-scoring L4–L6 rows, but threshold 5 had a 100% measured
+false-positive rate on the small same-domain negatives and must not be presented
+as the current calibrated result. See
+[`example/benchmark/plagiarism_case01.md`](example/benchmark/plagiarism_case01.md)
+for the exact command, base commit, dataset, date, and environment.
 
 ### Normalize precision — false-positive rate
 
@@ -446,17 +478,17 @@ The negative control above runs **without** `--normalize`, while the IR-Plag run
 
 It is measured, symmetrically, by the validation harness ([`tests/validation/error_rate.py`](tests/validation/error_rate.py); regenerate with `python -m tests.validation.error_rate`). The harness scores **per file pair** — every original file vs every candidate file — matching the runtime's per-file N:M decision and per-file token floor. On the IR-Plag corpus, where `non-plagiarized/` submissions are independent answers to the *same* assignment (any similarity is a false positive):
 
-| Channel | False-positive rate @ threshold 5 | Recall @ threshold 5 |
+| Channel | False-positive rate @ historical threshold 5 | Recall @ threshold 5 |
 |---------|:-:|:-:|
 | raw | 100% (tiny files) | 100% |
 | normalize | **100%** | 100% |
 
-The shipped `--threshold-deep 5` is meaningless under `--normalize`: the false-positive rate is 100%. Two mitigations ship as a result (see [`example/validation/error_rate.md`](example/validation/error_rate.md) for the full curves and the operating-point characterization, and [`calibration.json`](example/validation/calibration.json) for the machine-readable numbers):
+An explicit/manual `--normalize --threshold-deep 5` is not a defensible safety cutoff: the measured false-positive rate is 100%. Auto mode therefore does not pass through raw 5. Two mitigations ship as a result (see [`example/validation/error_rate.md`](example/validation/error_rate.md) for the full curves and the operating-point characterization, and [`calibration.json`](example/validation/calibration.json) for the machine-readable numbers):
 
-1. **Calibrated threshold** — under `--normalize`, the default threshold is raised to **93**, the operating point for false-positive ≤ 1%.
-2. **Inconclusive band** — a normalize match whose smaller file is below a **45-token floor** is reported as *inconclusive*: at that size, precision is unsalvageable at any useful threshold.
+1. **Profile-bound threshold** — under `--normalize`, the default threshold is raised to **93**. It is the measured false-positive ≤ 1% operating point only at K=5, W=4, with comments stripped and `--lang-aware` off; other profiles retain 93 as unvalidated compatibility behavior.
+2. **Inconclusive band** — a normalize match whose smaller file is below a **45-token floor** is reported as *inconclusive*. Outside the measured profile this remains a conservative compatibility guard, not a calibrated precision claim.
 
-**What the operating point honestly is** (the calibration's own caveats, disclosed on every normalize report and in `error_rate.md`):
+**What the operating point honestly is** (quoted only when the run matches the measured profile; every other normalize report says that these figures do not apply):
 
 - The false-positive rate is **0.95%, but that is 1 of 105 file pairs** — Wilson 95% CI **[0.17%, 5.2%]**. It is not a *known* 1% rate; the upper bound exceeds 5%.
 - **Recall is not uniform.** At threshold 93: L1 65%, L2 46%, L3 21%, **L4–L6 0%**. The threshold reliably flags only near-verbatim copies; heavily restructured copies fall below it and need manual review. The pooled "~22%" should not be read as uniform sensitivity.
