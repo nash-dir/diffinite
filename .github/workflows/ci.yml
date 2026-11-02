@@ -6,7 +6,33 @@ on:
   pull_request:
     branches: [ "master" ]
 
+permissions:
+  contents: read
+
 jobs:
+  dependency-audit:
+    name: Audit locked Python runtime
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        persist-credentials: false
+
+    - name: Set up audit Python
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      with:
+        python-version: "3.12"
+
+    - name: Install reviewed audit tool
+      # This exact version produced the 2026-07-20 remediation baseline.
+      run: python -m pip install --disable-pip-version-check pip-audit==2.9.0
+
+    - name: Reject vulnerable locked runtime dependencies
+      run: >-
+        python -m pip_audit
+        --requirement vscode-extension/scripts/requirements-bundle.lock
+        --disable-pip --strict --progress-spinner off
+
   test:
     name: Run Tests (${{ matrix.python-version }})
     runs-on: ubuntu-latest
@@ -15,10 +41,12 @@ jobs:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        persist-credentials: false
 
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
       with:
         python-version: ${{ matrix.python-version }}
         cache: 'pip'
@@ -34,25 +62,87 @@ jobs:
     - name: Run pytest
       run: python -m pytest -v --tb=short
 
+    - name: Measure Python coverage
+      # Coverage tracing makes SQLite timing assertions measure the tracer
+      # instead of production performance; the uninstrumented step above remains
+      # the authoritative full-suite performance gate for all four checks.
+      run: >-
+        python -m pytest -q
+        --deselect=tests/test_sqlite_integration.py::TestCommentParser::test_p3_performance_sqlite3_c
+        --deselect=tests/test_sqlite_integration.py::TestCommentParser::test_p3_performance_shell_c
+        --deselect=tests/test_sqlite_integration.py::TestDiffEngine::test_d3_performance_sqlite3_c
+        --deselect=tests/test_sqlite_integration.py::TestFingerprint::test_f4_fingerprint_performance_sqlite3_c
+        --cov=diffinite --cov-report=term-missing
+
+    - name: Python lint (changed correctness boundaries)
+      run: >-
+        python -m ruff check
+        src/diffinite/calibration.py
+        src/diffinite/cli.py
+        src/diffinite/collector.py
+        src/diffinite/deep_compare.py
+        src/diffinite/evidence.py
+        src/diffinite/models.py
+        src/diffinite/parser.py
+        src/diffinite/pdf_gen.py
+        src/diffinite/pipeline.py
+        tests/test_benchmark_smoke.py
+        tests/test_bundle_metadata.py
+        tests/test_calibration.py
+        tests/test_cli_validation.py
+        tests/test_csv_security.py
+        tests/test_deep_compare.py
+        tests/test_evidence_hash.py
+        tests/test_json_report_integration.py
+        tests/test_operational_boundaries.py
+        tests/test_p0_regressions.py
+        tests/test_parser.py
+        tests/test_pdf_gen.py
+        tests/test_pipeline.py
+        tests/test_release_security.py
+        tests/test_remaining_threats.py
+
+    - name: Python format check (new correctness boundaries)
+      run: >-
+        python -m ruff format --check
+        src/diffinite/calibration.py
+        src/diffinite/deep_compare.py
+        src/diffinite/evidence.py
+        tests/test_benchmark_smoke.py
+        tests/test_bundle_metadata.py
+        tests/test_csv_security.py
+        tests/test_deep_compare.py
+        tests/test_evidence_hash.py
+        tests/test_operational_boundaries.py
+        tests/test_p0_regressions.py
+        tests/test_release_security.py
+        tests/test_remaining_threats.py
+
+    - name: Python typecheck
+      run: python -m mypy
+
   test-vscode-bundle:
     name: Test VSCode Bundle (CD)
     runs-on: windows-latest
     needs: test
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        persist-credentials: false
 
     - name: Set up Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
       with:
-        node-version: "20"
+        # package-lock.json contains publishing-tool dependencies requiring Node 22.
+        node-version: "22"
 
     - name: Install Extension dependencies
       working-directory: vscode-extension
-      run: npm install
+      run: npm ci
 
-    - name: Compile TypeScript
+    - name: Typecheck and test TypeScript logic
       working-directory: vscode-extension
-      run: npx tsc -p ./
+      run: npm test
 
     - name: Test Bundle Generation & Smoke Test
       shell: pwsh
@@ -63,6 +153,5 @@ jobs:
       working-directory: vscode-extension
       shell: pwsh
       run: |
-        npm install -g @vscode/vsce@3.2.2
-        vsce package --target win32-x64 --no-dependencies --allow-star-activation --out test-bundle.vsix
+        npx --no-install vsce package --target win32-x64 --no-dependencies --allow-star-activation --out test-bundle.vsix
         Remove-Item test-bundle.vsix -ErrorAction SilentlyContinue
