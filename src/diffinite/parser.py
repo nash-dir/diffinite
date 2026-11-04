@@ -87,27 +87,34 @@ def _has_ifdef_zero(ext: str) -> bool:
 
 # 레거시 호환: C-family 확장자 집합 (외부 코드에서 참조 가능)
 _C_FAMILY_EXTS = frozenset(
-    ext for ext in all_extensions()
-    if (s := get_spec(ext)) is not None and s.has_ifdef_zero
+    ext for ext in all_extensions() if (s := get_spec(ext)) is not None and s.has_ifdef_zero
 )
 
 
 # ──────────────────────────────────────────────────────────────────────
 # #if 0 전처리 블록 제거 (C-family 전용)
 # ──────────────────────────────────────────────────────────────────────
+# 뒤따르는 주석(`#if 0 // disabled`, `#if 0 /* ... */`)도 허용한다.
 _IF0_PATTERN = re.compile(
-    r"^\s*#\s*if\s+0\s*$",    re.MULTILINE,
+    r"^\s*#\s*if\s+0\s*(?://.*|/\*.*)?$",
+    re.MULTILINE,
 )
 _ENDIF_PATTERN = re.compile(
-    r"^\s*#\s*endif\b",       re.MULTILINE,
+    r"^\s*#\s*endif\b",
+    re.MULTILINE,
 )
+# 중첩 깊이를 올리는 모든 조건부 지시문 (#if / #ifdef / #ifndef)
+_IF_OPEN_PATTERN = re.compile(r"#\s*if(?:n?def)?\b")
+# 바깥 `#if 0` 의 죽은 분기를 끝내는 지시문 — 이후 분기는 살아 있는 코드
+_ELSE_PATTERN = re.compile(r"#\s*(?:else|elif)\b")
 
 
 def _strip_ifdef_zero(text: str) -> str:
     """``#if 0 … #endif`` 블록을 제거한다. 라인 수는 보존 (빈 줄로 대체).
 
-    중첩 ``#if``/``#endif``를 depth 카운터로 추적하여
-    가장 바깥쪽 ``#if 0`` 블록만 제거한다.
+    중첩 ``#if``/``#ifdef``/``#ifndef``/``#endif``를 depth 카운터로 추적하여
+    가장 바깥쪽 ``#if 0`` 블록만 제거한다. 바깥 블록의 ``#else``/``#elif``
+    이후 분기는 컴파일되는 코드이므로 보존한다 (지시문 줄 자체도 원문 유지).
 
     Note:
         ``#if 0``은 "코드를 주석 처리하는 관용적 방법"으로,
@@ -118,6 +125,7 @@ def _strip_ifdef_zero(text: str) -> str:
     result: list[str] = []
     lines = text.split("\n")
     depth = 0  # #if 0 내부 중첩 깊이
+    block_start = -1  # 현재 바깥 #if 0 블록이 시작된 줄 번호
     i = 0
     while i < len(lines):
         line = lines[i]
@@ -126,18 +134,28 @@ def _strip_ifdef_zero(text: str) -> str:
         if depth == 0:
             if _IF0_PATTERN.match(line):
                 depth = 1
+                block_start = i
                 result.append("")  # 라인 수 보존
             else:
                 result.append(line)
         else:
             # #if 0 블록 내부
-            if stripped.startswith("#") and re.match(r"#\s*if\b", stripped):
+            if _IF_OPEN_PATTERN.match(stripped):
                 depth += 1
-            elif stripped.startswith("#") and re.match(r"#\s*endif\b", stripped):
+            elif _ENDIF_PATTERN.match(stripped):
                 depth -= 1
+            elif depth == 1 and _ELSE_PATTERN.match(stripped):
+                depth = 0
+                result.append(line)  # 살아 있는 분기 시작 — 원문 유지
+                i += 1
+                continue
             result.append("")  # 항상 빈 줄 (라인 수 보존)
 
         i += 1
+    if depth > 0:
+        # 닫히지 않은 #if 0 (예: 주석 안의 예시 텍스트)은 지시문으로 확신할 수
+        # 없으므로 원문을 그대로 둔다 — 파일 끝까지 지우면 살아 있는 코드가 사라진다.
+        result[block_start:] = lines[block_start:]
     return "\n".join(result)
 
 
@@ -157,8 +175,9 @@ class _State(enum.Enum):
     ``IN_STRING`` → ``CODE``: 닫는 구분자 만남
     ``IN_TEMPLATE_LITERAL`` → ``CODE``: ``${`` 진입 (depth증가 후 CODE로) / 백틱 닫힘
     ``IN_REGEX`` → ``CODE``: 닫는 ``/`` 만남 (문자 클래스 ``[...]`` 밖)
-    ``CODE`` → ``IN_TEMPLATE_LITERAL``: ``}`` with template_depth > 0
+    ``CODE`` → ``IN_TEMPLATE_LITERAL``: active ``${...}`` at brace depth zero
     """
+
     CODE = "CODE"
     IN_STRING = "IN_STRING"
     IN_LINE_COMMENT = "IN_LINE_COMMENT"
@@ -170,19 +189,43 @@ class _State(enum.Enum):
 # JS에서 ``/`` 직전 토큰이 아래에 속하면 식이 올 자리 → 정규식 리터럴로 본다.
 # (그렇지 않으면 나눗셈 연산자.) 표준 토크나이저 휴리스틱.
 _REGEX_PREV_CHARS = frozenset("(,;{}[=+-*%&|^!~<>?:")
-_REGEX_PREV_KEYWORDS = frozenset({
-    "return", "typeof", "instanceof", "in", "of", "new", "delete",
-    "void", "do", "else", "yield", "await", "case",
-})
+_REGEX_PREV_KEYWORDS = frozenset(
+    {
+        "return",
+        "typeof",
+        "instanceof",
+        "in",
+        "of",
+        "new",
+        "delete",
+        "void",
+        "do",
+        "else",
+        "yield",
+        "await",
+        "case",
+    }
+)
+
+# These tokens can be followed by an object literal expression.  Tracking the
+# matching brace lets a following slash be classified as division, while a
+# slash after a statement block can still open a regular-expression literal.
+_OBJECT_LITERAL_PREV_CHARS = frozenset("(,[=:+-*/%&|^!~?")
+_OBJECT_LITERAL_PREV_KEYWORDS = frozenset({"return", "yield", "case", "throw"})
 
 
 def _regex_allowed(prev_sig: str, prev_word: str) -> bool:
     """직전 유의미 토큰을 보고 ``/`` 가 정규식 리터럴을 여는 위치인지 판정한다."""
     if prev_word in _REGEX_PREV_KEYWORDS:
         return True
-    if prev_sig == "":            # 입력/문맥 시작 — 식이 올 자리
+    if prev_sig == "":  # 입력/문맥 시작 — 식이 올 자리
         return True
     return prev_sig in _REGEX_PREV_CHARS
+
+
+def _object_literal_allowed(prev_sig: str, prev_word: str) -> bool:
+    """Return whether an opening brace is in an expression-value position."""
+    return prev_word in _OBJECT_LITERAL_PREV_KEYWORDS or prev_sig in _OBJECT_LITERAL_PREV_CHARS
 
 
 def _has_any_marker(line: str, spec: CommentSpec) -> bool:
@@ -206,7 +249,9 @@ def _has_any_marker(line: str, spec: CommentSpec) -> bool:
     for d in spec.template_delims:
         if d in line:
             return True
-    if spec.has_regex_literals and "/" in line:
+    # Braces affect whether a later slash is division or a regex opener, so JS
+    # brace lines also need the stateful scan even when they contain no comment.
+    if spec.has_regex_literals and any(marker in line for marker in ("/", "{", "}")):
         return True
     return False
 
@@ -263,13 +308,20 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
     out_parts: list[str] = []
     state = _State.CODE
     string_delim: Optional[str] = None  # 현재 열린 문자열 구분자
-    escaped = False                      # 이전 문자가 백슬래시인지
-    template_depth = 0                   # JS 템플릿 리터럴 중첩 깊이
-    regex_in_class = False               # IN_REGEX: 문자 클래스 [...] 내부 여부
+    escaped = False  # 이전 문자가 백슬래시인지
+    # One brace-depth counter per active ${...} interpolation. Object/block
+    # braces inside an interpolation must close before its delimiter can do so.
+    template_brace_depths: list[int] = []
+    template_brace_values: list[list[bool]] = []
+    # Outside template interpolations, distinguish value-producing object
+    # literals from statement blocks so a slash after ``{}`` is unambiguous.
+    code_brace_values: list[bool] = []
+    regex_in_class = False  # IN_REGEX: 문자 클래스 [...] 내부 여부
     # 정규식 vs 나눗셈 판별을 위한 직전 유의미 토큰 추적
-    prev_sig = ""                        # 직전 비공백 코드 문자
-    cur_word = ""                        # 직전(또는 현재) 식별자 토큰
-    in_word = False                      # 현재 식별자 토큰을 이어가는 중인지
+    prev_sig = ""  # 직전 비공백 코드 문자
+    cur_word = ""  # 직전(또는 현재) 식별자 토큰
+    in_word = False  # 현재 식별자 토큰을 이어가는 중인지
+    prev_word_line = -1  # keyword context must not cross ASI newline
 
     line_markers = spec.line_markers
     block_start = spec.block_start or ""
@@ -288,7 +340,7 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
 
     for line_idx, line in enumerate(lines):
         # ── Fast-path ──
-        if state is _State.CODE and not _has_any_marker(line, spec):
+        if state is _State.CODE and not template_brace_depths and not _has_any_marker(line, spec):
             out_parts.append(line)
             # JS 정규식 판별 정확도를 위해 통과한 코드의 끝 토큰을 기록한다
             # (다음 줄 첫 토큰이 정규식인지 판단할 때 필요).
@@ -301,6 +353,8 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
                         j -= 1
                     cur_word = s[j:]
                     in_word = False
+                    if cur_word:
+                        prev_word_line = line_idx
             continue
 
         # ── Slow-path: 문자 단위 상태 머신 ──
@@ -317,8 +371,11 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
 
             # ── IN_BLOCK_COMMENT: 종료 마커 탐색 ──
             if state is _State.IN_BLOCK_COMMENT:
-                if (block_end and (not block_anchored or pos == 0)
-                        and line[pos: pos + len(block_end)] == block_end):
+                if (
+                    block_end
+                    and (not block_anchored or pos == 0)
+                    and line[pos : pos + len(block_end)] == block_end
+                ):
                     pos += len(block_end)
                     state = _State.CODE
                 else:
@@ -328,22 +385,38 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
             # ── IN_REGEX: 정규식 리터럴 내부 (코드로 보존) ──
             if state is _State.IN_REGEX:
                 if escaped:
-                    line_out.append(ch); escaped = False; pos += 1; continue
+                    line_out.append(ch)
+                    escaped = False
+                    pos += 1
+                    continue
                 if ch == "\\":
-                    escaped = True; line_out.append(ch); pos += 1; continue
+                    escaped = True
+                    line_out.append(ch)
+                    pos += 1
+                    continue
                 if ch == "[":
-                    regex_in_class = True; line_out.append(ch); pos += 1; continue
+                    regex_in_class = True
+                    line_out.append(ch)
+                    pos += 1
+                    continue
                 if ch == "]":
-                    regex_in_class = False; line_out.append(ch); pos += 1; continue
+                    regex_in_class = False
+                    line_out.append(ch)
+                    pos += 1
+                    continue
                 if ch == "/" and not regex_in_class:
-                    line_out.append(ch); pos += 1
+                    line_out.append(ch)
+                    pos += 1
                     state = _State.CODE
                     _value_end()
                     continue
-                line_out.append(ch); pos += 1; continue
+                line_out.append(ch)
+                pos += 1
+                continue
 
             # ── IN_STRING: 이스케이프 및 닫힘 처리 ──
             if state is _State.IN_STRING:
+                assert string_delim is not None
                 if escaped:
                     line_out.append(ch)
                     escaped = False
@@ -355,7 +428,7 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
                     pos += 1
                     continue
                 # 트리플-쿼트 닫힘 (""" 또는 ''')
-                if len(string_delim) == 3 and line[pos: pos + 3] == string_delim:
+                if len(string_delim) == 3 and line[pos : pos + 3] == string_delim:
                     line_out.append(string_delim)
                     pos += 3
                     state = _State.CODE
@@ -390,9 +463,15 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
                 if ch == "$" and pos + 1 < length and line[pos + 1] == "{":
                     line_out.append("${")
                     pos += 2
-                    template_depth += 1
+                    template_brace_depths.append(0)
+                    template_brace_values.append([])
                     state = _State.CODE
-                    prev_sig = "{"; cur_word = ""; in_word = False
+                    # Interpolation starts in expression position.  Using an
+                    # opening-paren sentinel lets an immediate ``{}`` be
+                    # recognized as an object literal rather than a block.
+                    prev_sig = "("
+                    cur_word = ""
+                    in_word = False
                     continue
                 # 닫는 구분자(백틱) → CODE 복귀
                 if ch in template_delims:
@@ -408,7 +487,7 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
             # ── CODE: 문자열 열림 감지 ──
             if ch in string_delims:
                 triple = ch * 3
-                if line[pos: pos + 3] == triple:
+                if line[pos : pos + 3] == triple:
                     line_out.append(triple)
                     pos += 3
                     state = _State.IN_STRING
@@ -427,12 +506,55 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
                 state = _State.IN_TEMPLATE_LITERAL
                 continue
 
-            # 중괄호 닫힘: 템플릿 리터럴 내 ${} 표현식 종료 → 템플릿으로 복귀
-            if ch == "}" and template_depth > 0:
-                template_depth -= 1
+            # Interpolation-local object/block braces do not end ${...}.
+            if ch == "{" and template_brace_depths:
+                prev_word = cur_word if prev_word_line == line_idx else ""
+                template_brace_values[-1].append(_object_literal_allowed(prev_sig, prev_word))
                 line_out.append(ch)
                 pos += 1
-                state = _State.IN_TEMPLATE_LITERAL
+                template_brace_depths[-1] += 1
+                prev_sig = ch
+                cur_word = ""
+                in_word = False
+                continue
+
+            # Only a '}' at interpolation brace depth zero returns to template
+            # text; nested object/block closers stay in CODE.
+            if ch == "}" and template_brace_depths:
+                line_out.append(ch)
+                pos += 1
+                if template_brace_depths[-1] > 0:
+                    template_brace_depths[-1] -= 1
+                    is_value = template_brace_values[-1].pop()
+                    prev_sig = ")" if is_value else ch
+                    cur_word = ""
+                    in_word = False
+                else:
+                    template_brace_depths.pop()
+                    template_brace_values.pop()
+                    state = _State.IN_TEMPLATE_LITERAL
+                continue
+
+            # Outside ${...}, remember whether a brace opened an object value
+            # or a statement block.  Both look identical character-by-character
+            # but only an object value can be the left operand of division.
+            if has_regex and ch == "{":
+                prev_word = cur_word if prev_word_line == line_idx else ""
+                code_brace_values.append(_object_literal_allowed(prev_sig, prev_word))
+                line_out.append(ch)
+                pos += 1
+                prev_sig = ch
+                cur_word = ""
+                in_word = False
+                continue
+
+            if has_regex and ch == "}":
+                is_value = code_brace_values.pop() if code_brace_values else False
+                line_out.append(ch)
+                pos += 1
+                prev_sig = ")" if is_value else ch
+                cur_word = ""
+                in_word = False
                 continue
 
             # ── CODE: JS 정규식 리터럴 시작 (식이 올 자리의 / ) ──
@@ -447,8 +569,11 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
                 # 그 외(//, /*, 또는 나눗셈)는 아래 주석/코드 처리로 진행
 
             # ── CODE: 블록 주석 시작 ──
-            if (block_start and (not block_anchored or pos == 0)
-                    and line[pos: pos + len(block_start)] == block_start):
+            if (
+                block_start
+                and (not block_anchored or pos == 0)
+                and line[pos : pos + len(block_start)] == block_start
+            ):
                 state = _State.IN_BLOCK_COMMENT
                 pos += len(block_start)
                 continue
@@ -456,7 +581,7 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
             # ── CODE: 라인 주석 시작 ──
             marker_matched = False
             for marker in line_markers:
-                if line[pos: pos + len(marker)] == marker:
+                if line[pos : pos + len(marker)] == marker:
                     state = _State.IN_LINE_COMMENT
                     pos += len(marker)
                     marker_matched = True
@@ -467,11 +592,12 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
             # 일반 코드 문자 — 정규식 판별용 토큰 추적
             line_out.append(ch)
             if ch.isspace():
-                in_word = False           # 단어 경계 (cur_word는 직전 토큰으로 유지)
+                in_word = False  # 단어 경계 (cur_word는 직전 토큰으로 유지)
             elif ch.isalnum() or ch in "_$":
                 cur_word = (cur_word + ch) if in_word else ch
                 in_word = True
                 prev_sig = ch
+                prev_word_line = line_idx
             else:
                 prev_sig = ch
                 cur_word = ""
@@ -487,9 +613,9 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
         # 깨진 소스코드에서 이후 전체 라인의 주석 제거가 무효화되는 것을 방지.
         if state is _State.IN_STRING and string_delim is not None and len(string_delim) == 1:
             _logger.debug(
-                "Unclosed string (delim=%r) at end of line %d — "
-                "resetting parser to CODE state.",
-                string_delim, line_idx + 1,
+                "Unclosed string (delim=%r) at end of line %d — resetting parser to CODE state.",
+                string_delim,
+                line_idx + 1,
             )
             state = _State.CODE
             string_delim = None

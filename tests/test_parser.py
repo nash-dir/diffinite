@@ -1,7 +1,5 @@
 """Tests for the 2-Pass comment parser."""
 
-import textwrap
-
 import pytest
 
 from diffinite.parser import strip_comments
@@ -72,7 +70,7 @@ class TestCFamilyComments:
 
     def test_template_literal_backtick(self):
         """JS template literal with // inside should be preserved."""
-        src = 'let x = `https://example.com`;\n'
+        src = "let x = `https://example.com`;\n"
         result = strip_comments(src, ".js")
         assert "https://example.com" in result
 
@@ -86,21 +84,21 @@ class TestCFamilyComments:
 
     def test_template_literal_basic(self):
         """JS template literal text should be preserved."""
-        src = 'let msg = `Hello ${name}, welcome!`;\n'
+        src = "let msg = `Hello ${name}, welcome!`;\n"
         result = strip_comments(src, ".js")
         assert "Hello" in result
         assert "welcome" in result
 
     def test_template_literal_comment_inside_expr(self):
         """Comments inside ${} expressions should be stripped."""
-        src = 'let x = `value: ${foo(a) // inline comment\n}`;\n'
+        src = "let x = `value: ${foo(a) // inline comment\n}`;\n"
         result = strip_comments(src, ".js")
         assert "// inline comment" not in result
         assert "foo(a)" in result
 
     def test_template_literal_nested(self):
         """Nested ${} in template literals should be handled correctly."""
-        src = 'let x = `outer ${a + `inner ${b}`} end`;\n'
+        src = "let x = `outer ${a + `inner ${b}`} end`;\n"
         result = strip_comments(src, ".js")
         assert "outer" in result
         assert "inner" in result
@@ -161,6 +159,19 @@ class TestJsRegexLiterals:
         assert "total / count" in result
         assert "next();" in result
 
+    def test_division_after_object_literal_does_not_hide_real_comment(self):
+        src = "const x = {} / 2; // real comment\nconst after = 1;\n"
+        result = strip_comments(src, ".js")
+        assert "{} / 2" in result
+        assert "real comment" not in result
+        assert "const after = 1;" in result
+
+    def test_regex_after_statement_block_remains_a_regex_literal(self):
+        src = r"if (ready) {} /foo\/\/bar/.test(value); // real comment" + "\n"
+        result = strip_comments(src, ".js")
+        assert r"/foo\/\/bar/.test(value)" in result
+        assert "real comment" not in result
+
     def test_real_line_comment_after_value_still_stripped(self):
         src = "let x = 5; // keep value\n"
         result = strip_comments(src, ".js")
@@ -211,5 +222,115 @@ class TestRubyBlockAnchored:
         src = "=begin\nline one\n  =end still comment\nreal_code = 1\n=end\nafter = 2\n"
         result = strip_comments(src, ".rb")
         assert "line one" not in result
-        assert "real_code" not in result   # still inside the block (indented =end ignored)
+        assert "real_code" not in result  # still inside the block (indented =end ignored)
         assert "after = 2" in result
+
+
+class TestJavaScriptTemplateInterpolationDepth:
+    """Template text and interpolation code must return to the right state."""
+
+    @pytest.mark.parametrize(
+        "template",
+        [
+            "`plain template`",
+            "`value=${name}`",
+            "`value=${foo({a: 1})}`",
+            "`nested=${`inner=${value}`}`",
+            r"`escaped \` backtick`",
+            "`multi\nline ${value}\ntext`",
+            "`text // not comment /* also text */`",
+            '`value=${"// string" + item}`',
+        ],
+    )
+    def test_template_variants_preserved_and_real_comment_removed(self, template):
+        source = f"const message = {template}; // actual comment\nconst after = 1; /* remove */\n"
+        output = strip_comments(source, ".js")
+        assert template in output
+        assert "actual comment" not in output
+        assert "remove" not in output
+        assert "const after = 1;" in output
+
+    def test_nested_object_braces_do_not_end_interpolation_early(self):
+        source = (
+            "const message = `value=${foo({a: 1, nested: {b: 2}}) "
+            "+ extra /* interpolation comment */}`;\n"
+            "const after = compute(); // real comment\n"
+            "return after;\n"
+        )
+        output = strip_comments(source, ".js")
+        assert "nested: {b: 2}" in output
+        assert "interpolation comment" not in output
+        assert "real comment" not in output
+        assert "return after;" in output
+
+    def test_object_literal_division_inside_interpolation_strips_comment(self):
+        source = "const value = `${{} / 2 /* remove */}`; // outer comment\n"
+        output = strip_comments(source, ".js")
+        assert "${{} / 2 }" in output
+        assert "remove" not in output
+        assert "outer comment" not in output
+
+    def test_fingerprint_is_deterministic_after_template_interpolation(self):
+        from diffinite.fingerprint import extract_fingerprints
+
+        source = (
+            "const message = `value=${foo({a: 1})}`;\n"
+            "function after(value) { return value + 1; } // real comment\n"
+        )
+        cleaned = strip_comments(source, ".js")
+        first = extract_fingerprints(cleaned, k=3, w=2)
+        second = extract_fingerprints(cleaned, k=3, w=2)
+        assert first == second
+        assert "function after" in cleaned
+        assert "real comment" not in cleaned
+
+
+class TestIfZeroBlocks:
+    """``#if 0`` removal must drop only the dead branch and keep line count."""
+
+    def test_simple_block_removed(self):
+        src = "a();\n#if 0\ndead();\n#endif\nb();"
+        out = strip_comments(src, ".c")
+        assert "dead" not in out
+        assert "a();" in out and "b();" in out
+        assert out.count("\n") == src.count("\n")
+
+    def test_else_branch_is_live_code(self):
+        src = "#if 0\nold();\n#else\nlive_code();\n#endif\n"
+        out = strip_comments(src, ".c")
+        assert "old" not in out
+        assert "live_code();" in out
+        assert out.count("\n") == src.count("\n")
+
+    def test_elif_branch_is_live_code(self):
+        src = "#if 0\nold();\n#elif defined(X)\nlive();\n#endif\n"
+        out = strip_comments(src, ".c")
+        assert "old" not in out
+        assert "live();" in out
+
+    def test_nested_ifdef_does_not_close_outer_block(self):
+        src = "#if 0\n#ifdef FOO\nx();\n#endif\ndead2();\n#endif\nafter();"
+        out = strip_comments(src, ".c")
+        assert "dead2" not in out
+        assert "x();" not in out
+        assert "after();" in out
+        assert "#endif" not in out
+
+    def test_nested_else_inside_dead_block_stays_dead(self):
+        src = "#if 0\n#ifndef FOO\na();\n#else\nb();\n#endif\n#endif\nc();"
+        out = strip_comments(src, ".c")
+        assert "a();" not in out and "b();" not in out
+        assert "c();" in out
+
+    def test_trailing_comment_on_if_zero(self):
+        src = "#if 0 // disabled\ndead();\n#endif\nok();"
+        out = strip_comments(src, ".c")
+        assert "dead" not in out
+        assert "ok();" in out
+
+    def test_unterminated_if_zero_keeps_original_text(self):
+        # '#if 0' quoted inside a block comment never closes; it must not erase
+        # the live code that follows it.
+        src = "/* example:\n#if 0\n*/\nreal();\nmore();\n"
+        out = strip_comments(src, ".c")
+        assert "real();" in out and "more();" in out

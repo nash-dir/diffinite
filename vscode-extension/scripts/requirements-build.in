@@ -1,0 +1,6 @@
+# Build-only tools resolved with pip-tools under the release Python 3.12 runtime.
+# The generated lock pins exact PyPI files by SHA-256; these tools never ship.
+build
+pip-licenses
+setuptools
+wheel

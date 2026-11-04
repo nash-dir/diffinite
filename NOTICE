@@ -9,13 +9,21 @@ The final implementation was reviewed, tested, and approved by the author.
   Third-Party Reference Code and Datasets
 =========================================================================
 
-The following third-party source code files and datasets are included
-in this repository solely as REFERENCE DATA for algorithm validation
-and forensic analysis benchmarking. They are NOT part of the Diffinite
-software itself and retain their original licenses as noted below.
+The following third-party source code files and datasets are used solely
+as REFERENCE DATA for algorithm validation and forensic analysis
+benchmarking. They are NOT part of the Diffinite software itself and
+retain their original licenses as noted below.
 
-These files are located under example/ and TDD/corpus/ directories,
-both of which are excluded from distribution via .gitignore.
+Current tree: these files are NOT tracked. They are fetched on demand
+into example/ by example/download_examples.py (the IR-Plag calibration
+corpus is pinned to an upstream commit and verified by SHA-256) and are
+excluded from the repository by .gitignore and from the Python package
+and VS Code extension builds.
+
+Git history: earlier revisions (roughly v0.3 through v0.12.x) did commit
+copies of some of these files under example/ and TDD/corpus/. Those
+copies remain in the repository history under the licenses listed below.
+The TDD/corpus/ paths named below refer to that historical layout.
 
 -------------------------------------------------------------------------
 1. OpenJDK (Oracle)
@@ -86,9 +94,12 @@ both of which are excluded from distribution via .gitignore.
    Path:     example/plagiarism/
    Source:   https://github.com/oscarkarnalim/sourcecodeplagiarismdataset
    License:  Apache License, Version 2.0
-   Citation: Karnalim, O. (2017). "Source Code Plagiarism Detection
-             in Academia with Information Retrieval: Dataset and the
-             Observation." Informatics in Education, 16(1), 83-102.
+   Pinned:   commit f07e95120680b25f78659ed63cd6130fd05b2df8
+             (archive SHA-256 288efbe0...e9b8d, see download_examples.py)
+   Citation: Karnalim, O., Budi, S., Toba, H., Joy, M. (2019). "Source
+             Code Plagiarism Detection in Academia with Information
+             Retrieval: Dataset and the Observation." Informatics in
+             Education, 18(2). doi:10.15388/infedu.2019.15
    Files:    467 Java source code files across 7 programming tasks
              (case-01 through case-07), each with original,
              non-plagiarized, and plagiarized (L1-L6) submissions.
@@ -96,12 +107,11 @@ both of which are excluded from distribution via .gitignore.
 -------------------------------------------------------------------------
 8. SOCO 2014 (PAN@FIRE Source Code Re-use Detection)
 -------------------------------------------------------------------------
-   Path:     TDD/corpus/soco14/
+   Path:     example/soco14/
    Source:   https://zenodo.org/records/7433031
    License:  Open Access (Creative Commons Attribution 4.0 International)
-   Citation: Flores, E., Barrón-Cedeño, A., Rosso, P., Moreno, L.
-             (2014). "DeSoCoRe: Detecting Source Code Re-Use across
-             Programming Languages." Proceedings of the 6th Forum for
-             Information Retrieval Evaluation (FIRE 2014).
+   Citation: Flores, E., Rosso, P., Moreno, L., Villatoro-Tello, E.
+             (2014). "PAN@FIRE 2014: Overview of SOCO Track on the
+             Detection of SOurce COde Re-use." Working notes of FIRE 2014.
    Files:    Training: 259 Java + 79 C files with expert annotations
              Test: ~30,000 Java + C/C++ files with relevance judgements

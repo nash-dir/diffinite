@@ -1,0 +1,58 @@
+{
+  "schema_version": 2,
+  "metadata": {
+    "exec_mode": "deep",
+    "k": 5,
+    "w": 4,
+    "threshold": 17,
+    "threshold_provenance": "user",
+    "autojunk": false,
+    "normalize": true,
+    "lang_aware": false,
+    "deep_index_truncated": false,
+    "calibration_disclosure": "Canonical Python disclosure"
+  },
+  "preprocessing": {
+    "line_diff_comments": "included",
+    "deep_compare_comments": "included",
+    "normalize_whitespace": false,
+    "fingerprint_normalize": true
+  },
+  "analysis_status": {
+    "state": "complete",
+    "reasons": [],
+    "collection": {
+      "failed_file_count": 0,
+      "failed_files": []
+    },
+    "diff": {
+      "requested_pair_count": 0,
+      "successful_pair_count": 0,
+      "failed_pair_count": 0,
+      "failed_pairs": []
+    },
+    "deep": {
+      "requested_file_count": 0,
+      "successful_file_count": 0,
+      "failed_file_count": 0,
+      "failed_files": []
+    },
+    "truncation": {
+      "deep_index_truncated": false,
+      "diff_truncated_count": 0
+    }
+  },
+  "dir_a": "a",
+  "dir_b": "b",
+  "comparison_unit": "line",
+  "comment_mode": "included",
+  "summary": {
+    "matched_pairs": 0,
+    "unmatched_a_count": 0,
+    "unmatched_b_count": 0
+  },
+  "results": [],
+  "deep_results": [],
+  "unmatched_a": [],
+  "unmatched_b": []
+}

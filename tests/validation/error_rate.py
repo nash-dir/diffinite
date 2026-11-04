@@ -44,6 +44,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from diffinite.calibration import NORMALIZE_CALIBRATION_K, NORMALIZE_CALIBRATION_W
 from diffinite.differ import read_file
 from diffinite.evidence import jaccard_similarity
 from diffinite.fingerprint import extract_fingerprints, tokenize
@@ -102,8 +103,11 @@ def _file_doc(path: Path) -> Doc | None:
     if text is None:
         return None
     cleaned = strip_comments(text, path.suffix.lower())
-    raw = {fp.hash_value for fp in extract_fingerprints(cleaned, normalize=False)}
-    norm = {fp.hash_value for fp in extract_fingerprints(cleaned, normalize=True)}
+    # K/W are the frozen profile, not runtime defaults: a future default change
+    # must not silently alter what this harness measures.
+    k, w = NORMALIZE_CALIBRATION_K, NORMALIZE_CALIBRATION_W
+    raw = {fp.hash_value for fp in extract_fingerprints(cleaned, k=k, w=w, normalize=False)}
+    norm = {fp.hash_value for fp in extract_fingerprints(cleaned, k=k, w=w, normalize=True)}
     if not raw and not norm:
         return None
     return Doc(
@@ -496,7 +500,11 @@ def main() -> None:
         if rec is None:
             calib[f"fp_le_{int(fp_target)}"] = None
             continue
-        fk, fn = fp_rate(scores, "normalize", rec.threshold)
+        # Same denominator as rec.fp_rate: only negatives that clear the floor.
+        judged = [s for s in scores if s.mode == "normalize" and s.label == "neg"
+                  and s.tokens_min >= rec.floor]
+        fk = sum(1 for s in judged if s.jaccard * 100 >= rec.threshold)
+        fn = len(judged)
         lo, hi = wilson_ci(fk, fn)
         per_level = {
             f"L{lv}": round(_rate(recall(scores, "normalize", rec.threshold, level=lv)), 1)

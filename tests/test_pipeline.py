@@ -128,8 +128,10 @@ class TestJsonReport:
 class TestPipelineAuditFeatures:
     """Tests for Phase 1/2 Architecture and Forensic Audit Features."""
     
-    def test_filter_json(self, tmp_path):
+    def test_filter_json(self, monkeypatch, tmp_path):
         from diffinite.pipeline import run_pipeline
+        from diffinite.models import DeepMatchResult
+        import diffinite.pipeline as pipeline
         d_a = tmp_path / "a"; d_a.mkdir()
         d_b = tmp_path / "b"; d_b.mkdir()
         (d_a / "f1.txt").write_text("A", encoding="utf-8")
@@ -139,6 +141,24 @@ class TestPipelineAuditFeatures:
         
         filter_file = tmp_path / "filter.json"
         filter_file.write_text(json.dumps(["f2.txt"]))
+
+        captured = {}
+
+        def fake_deep(_dir_a, _dir_b, files_a, files_b, *, status, **_kwargs):
+            captured["files_a"] = list(files_a)
+            captured["files_b"] = list(files_b)
+            status.update({
+                "requested_file_count": len(files_a) + len(files_b),
+                "successful_file_count": len(files_a) + len(files_b),
+                "failed_files": [],
+                "index_truncated": False,
+            })
+            return [
+                DeepMatchResult(file_a=name, fingerprint_count_a=1)
+                for name in files_a
+            ]
+
+        monkeypatch.setattr(pipeline, "run_deep_compare", fake_deep)
         
         output = str(tmp_path / "result_filtered.json")
         run_pipeline(dir_a=str(d_a), dir_b=str(d_b), report_json=output, filter_json=str(filter_file))
@@ -146,6 +166,48 @@ class TestPipelineAuditFeatures:
         data = json.loads(Path(output).read_text(encoding="utf-8"))
         assert len(data["results"]) == 1
         assert data["results"][0]["file_a"] == "f2.txt"
+        assert captured["files_a"] == ["f2.txt"]
+        assert captured["files_b"] == ["f1.txt", "f2.txt"]
+        assert [item["file_a"] for item in data["deep_results"]] == ["f2.txt"]
+
+    @pytest.mark.parametrize(
+        "selection",
+        ["../secret.py", "/absolute.py", "nested\\file.py", "C:/drive.py", "./f1.txt"],
+    )
+    def test_filter_json_rejects_unsafe_relative_paths(self, tmp_path, selection):
+        from diffinite.pipeline import run_pipeline
+
+        d_a = tmp_path / "a"; d_a.mkdir()
+        d_b = tmp_path / "b"; d_b.mkdir()
+        (d_a / "f1.txt").write_text("A", encoding="utf-8")
+        (d_b / "f1.txt").write_text("B", encoding="utf-8")
+        filter_file = tmp_path / "filter.json"
+        filter_file.write_text(json.dumps([selection]), encoding="utf-8")
+
+        with pytest.raises(RuntimeError, match="filter|relative|unsafe"):
+            run_pipeline(
+                str(d_a), str(d_b), report_json=str(tmp_path / "report.json"),
+                filter_json=str(filter_file), workers=1,
+            )
+
+        assert not (tmp_path / "report.json").exists()
+        assert not (tmp_path / "manifest.sha256.json").exists()
+
+    def test_filter_json_rejects_paths_missing_from_source_a(self, tmp_path):
+        from diffinite.pipeline import run_pipeline
+
+        d_a = tmp_path / "a"; d_a.mkdir()
+        d_b = tmp_path / "b"; d_b.mkdir()
+        (d_a / "f1.txt").write_text("A", encoding="utf-8")
+        (d_b / "f1.txt").write_text("B", encoding="utf-8")
+        filter_file = tmp_path / "filter.json"
+        filter_file.write_text(json.dumps(["missing.txt"]), encoding="utf-8")
+
+        with pytest.raises(RuntimeError, match="filter|missing|source A"):
+            run_pipeline(
+                str(d_a), str(d_b), report_json=str(tmp_path / "report.json"),
+                filter_json=str(filter_file), workers=1,
+            )
 
     def test_multiprocessing_workers(self, tmp_path):
         from diffinite.pipeline import run_pipeline
@@ -190,8 +252,12 @@ class TestPipelineAuditFeatures:
         log_file = tmp_path / "unreadable.log"
         
         try:
-            run_pipeline(dir_a=str(d_a), dir_b=str(d_b), unreadable_log=str(log_file), workers=2)
-            
+            with pytest.raises(RuntimeError, match="hashing failed"):
+                run_pipeline(
+                    dir_a=str(d_a), dir_b=str(d_b),
+                    unreadable_log=str(log_file), workers=2,
+                )
+
             assert log_file.exists()
             log_content = log_file.read_text(encoding="utf-8")
             assert "locked.txt" in log_content
@@ -260,8 +326,9 @@ class TestPipelineAuditFeatures:
         out_dir = tmp_path / "tree_out_files"
         assert out_dir.exists()
         assert (out_dir / "index.html").exists()
-        # Tree mode: file should be at pkg/mod.html
-        assert (out_dir / "pkg" / "mod.html").exists()
+        # Tree mode keeps the full source filename in a reserved namespace so
+        # differing source extensions and the generated index cannot collide.
+        assert (out_dir / "entries" / "pkg" / "mod.py.html").exists()
 
     def test_max_file_size_hash_fallback(self, tmp_path):
         """Files exceeding max_file_size bypass read_file and fall back to SHA-256 hash comparison."""
@@ -282,6 +349,7 @@ class TestPipelineAuditFeatures:
             dir_a=str(d_a), dir_b=str(d_b),
             report_json=output,
             max_file_size_mb=0.000001,
+            exec_mode="simple",
         )
 
         data = json.loads(Path(output).read_text(encoding="utf-8"))
@@ -322,12 +390,13 @@ class TestPipelineAuditFeatures:
 
         try:
             # max_file_size=0.000001 forces hash path; locks cause PermissionError
-            run_pipeline(
-                dir_a=str(d_a), dir_b=str(d_b),
-                unreadable_log=str(log_file),
-                max_file_size_mb=0.000001,
-                workers=1,
-            )
+            with pytest.raises(RuntimeError, match="hashing failed"):
+                run_pipeline(
+                    dir_a=str(d_a), dir_b=str(d_b),
+                    unreadable_log=str(log_file),
+                    max_file_size_mb=0.000001,
+                    workers=1,
+                )
 
             assert log_file.exists()
             log_content = log_file.read_text(encoding="utf-8")
@@ -373,6 +442,7 @@ class TestNormalizeDisclosure:
         return AnalysisMetadata(
             exec_mode="deep", k=5, w=4, threshold=NORMALIZE_DEFAULT_THRESHOLD,
             threshold_provenance=provenance, normalize=normalize,
+            strip_comments=True,
         )
 
     def test_md_banner_discloses_when_normalize(self):
@@ -384,7 +454,13 @@ class TestNormalizeDisclosure:
 
     def test_md_banner_silent_without_normalize(self):
         from diffinite.pipeline import _build_metadata_banner_md
-        assert "false-positive" not in _build_metadata_banner_md(self._meta(False)).lower()
+        from diffinite.models import AnalysisMetadata
+        output = _build_metadata_banner_md(AnalysisMetadata(
+            exec_mode="deep", k=5, w=4, threshold=5.0,
+            threshold_provenance="legacy-uncalibrated", normalize=False,
+        )).lower()
+        assert "not a calibrated safety threshold" in output
+        assert "legal copying determinations" in output
 
     def test_html_banner_discloses_when_normalize(self):
         from diffinite.pipeline import _build_metadata_banner_html
@@ -400,7 +476,7 @@ class TestMetadataCompatAndLibraryDisclosure:
         from diffinite.models import AnalysisMetadata
         m = AnalysisMetadata("deep", 5, 4, 5.0, False)
         assert m.autojunk is False                 # 5th positional is autojunk
-        assert m.threshold_provenance == "default"  # appended fields keep defaults
+        assert m.threshold_provenance == "legacy-uncalibrated"
         assert m.normalize is False and m.lang_aware is False
 
     def test_library_run_discloses_fp_without_explicit_metadata(self, tmp_path):
@@ -416,3 +492,28 @@ class TestMetadataCompatAndLibraryDisclosure:
         run_pipeline(str(a), str(b), strip_comments=True, exec_mode="deep",
                      normalize=True, report_md=str(md), min_jaccard=0.05)
         assert "false-positive" in md.read_text(encoding="utf-8").lower()
+
+
+def test_strip_comments_uses_partner_rules_for_unregistered_extension(tmp_path):
+    """Foo.java vs Foo.java.orig: comments are stripped on both sides."""
+    import json
+
+    from diffinite.pipeline import run_pipeline
+
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    body = "class Foo {\n    int x = 1;\n    int y() { return x; }\n}\n"
+    (a / "Foo.java").write_text("// old header\n" + body, encoding="utf-8")
+    (b / "Foo.java.orig").write_text("// a different header\n" + body, encoding="utf-8")
+    out = tmp_path / "out"
+    out.mkdir()
+    report = out / "r.json"
+    run_pipeline(
+        dir_a=str(a), dir_b=str(b), strip_comments=True,
+        exec_mode="simple", report_json=str(report), workers=1,
+    )
+    data = json.loads(report.read_text(encoding="utf-8"))
+    assert len(data["results"]) == 1
+    assert data["results"][0]["ratio"] == 1.0

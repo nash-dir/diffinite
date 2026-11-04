@@ -31,19 +31,16 @@ import html
 import io
 import json
 import logging
-import os
 import pkgutil
 import sys
-import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from pypdf import PdfReader, PdfWriter
-from reportlab.lib.pagesizes import A4, landscape
 from reportlab.pdfgen import canvas
 from xhtml2pdf import pisa
 
-from diffinite.calibration import normalize_disclosure
+from diffinite.calibration import assess_normalize_metadata, threshold_disclosure
 from diffinite.models import DeepMatchResult, DiffResult, FileHashEntry
 
 if TYPE_CHECKING:
@@ -51,7 +48,7 @@ if TYPE_CHECKING:
     # only under TYPE_CHECKING keeps the runtime import inside the function (to
     # avoid a circular import via models) while letting the forward-ref string
     # resolve under get_type_hints / static analysis.
-    from diffinite.models import AnalysisMetadata
+    from diffinite.models import AnalysisMetadata, AnalysisStatus
 
 logger = logging.getLogger(__name__)
 
@@ -569,13 +566,12 @@ def build_cover_body(
     *,
     deep_results: Optional[list[DeepMatchResult]] = None,
     metadata: Optional["AnalysisMetadata"] = None,
+    analysis_status: Optional["AnalysisStatus"] = None,
     hash_table_html: Optional[str] = None,
     include_uncompared: bool = True,
     uncompared_mode: str = "",
 ) -> str:
     """Build the cover-page body fragment (no DOCTYPE/html/head wrapper)."""
-    from diffinite.models import AnalysisMetadata as _AM  # avoid circular at module level
-
     unit = "word" if by_word else "line"
     comment_mode = "stripped" if strip_comments else "included"
 
@@ -590,18 +586,113 @@ def build_cover_body(
             f'<strong>Mode:</strong> {html.escape(metadata.exec_mode)} &nbsp;|&nbsp; '
             f'<strong>K=</strong>{metadata.k}, <strong>W=</strong>{metadata.w}, '
             f'<strong>T=</strong>{metadata.threshold:.2f} &nbsp;|&nbsp; '
+            f'<strong>provenance=</strong>{html.escape(metadata.threshold_provenance)} &nbsp;|&nbsp; '
+            f'<strong>normalize=</strong>{"on" if metadata.normalize else "off"} &nbsp;|&nbsp; '
             f'<strong>autojunk=</strong>{"on" if metadata.autojunk else "off"}'
             + (' &nbsp;|&nbsp; <strong>lang-aware=</strong>on'
                if metadata.lang_aware else '')
+            + (
+                '<br><strong>Ignore policy:</strong> '
+                f'{len(metadata.ignore_patterns)} rule(s), SHA-256='
+                + html.escape(metadata.ignore_file_sha256 or 'none')
+            )
+            + (
+                ' &nbsp;|&nbsp; <strong>Selection filter:</strong> '
+                + ('applied' if metadata.filter_applied else 'none')
+                + f', {len(metadata.filter_paths)} path(s), SHA-256='
+                + html.escape(metadata.filter_file_sha256 or 'none')
+            )
             + '\n</div>\n'
         )
-        # Normalize false-positive disclosure — the PDF is the primary forensic
-        # deliverable, so it must carry the error rate, not just HTML/MD.
-        if metadata.normalize and metadata.exec_mode == "deep":
+        # The primary forensic deliverable carries Python's canonical threshold
+        # disclosure for both calibrated normalize and uncalibrated raw channels.
+        if metadata.exec_mode == "deep":
             meta_html += (
                 '<p class="meta" style="margin-top:-10px;">&#8505; '
-                + html.escape(normalize_disclosure(
-                    metadata.threshold, metadata.threshold_provenance))
+                + html.escape(threshold_disclosure(
+                    metadata.threshold,
+                    metadata.threshold_provenance,
+                    metadata.normalize,
+                    assessment=(
+                        assess_normalize_metadata(metadata)
+                        if metadata.normalize else None
+                    ),
+                ))
+                + '</p>\n'
+            )
+    if analysis_status is not None and analysis_status.state == "incomplete":
+        meta_html += (
+            '<p class="meta" style="border:2px solid #b00020;padding:8px;'
+            'color:#b00020;font-weight:bold;">&#9888; '
+            'Incomplete analysis / 불완전 결과: '
+            + html.escape(", ".join(analysis_status.reasons))
+            + '. This report must not be read as complete.</p>\n'
+        )
+    if analysis_status is not None:
+        failed_collection_count = len(analysis_status.collection_failed_files)
+        failed_diff_count = len(analysis_status.diff_failed_pairs)
+        failed_deep_count = len(analysis_status.deep_failed_files)
+        meta_html += (
+            '<p class="meta"><strong>Analysis status:</strong> '
+            + html.escape(analysis_status.state)
+            + '<br><strong>Collection:</strong> '
+            + f'{failed_collection_count} file/directory failure(s)'
+            + '<br><strong>Diff pairs:</strong> '
+            + f'{analysis_status.diff_successful_pair_count}/'
+            + f'{analysis_status.diff_requested_pair_count} processed; '
+            + f'{failed_diff_count} worker failure(s)'
+            + '<br><strong>Deep files:</strong> '
+            + f'{analysis_status.deep_successful_file_count}/'
+            + f'{analysis_status.deep_requested_file_count} processed; '
+            + f'{failed_deep_count} file/worker failure(s); '
+            + f'{len(analysis_status.deep_skipped_binary_files)} skipped as binary content'
+            + '<br><strong>Truncation:</strong> '
+            + f'{analysis_status.diff_truncated_count} inline diff payload(s); deep index '
+            + ('truncated' if analysis_status.deep_index_truncated else 'complete')
+            + '</p>\n'
+        )
+        if analysis_status.collection_failed_files:
+            failed_collection = "; ".join(
+                f"{item.get('side', '?')}:{item.get('path', '?')} "
+                f"({item.get('reason', 'unknown')})"
+                for item in analysis_status.collection_failed_files
+            )
+            meta_html += (
+                '<p class="meta"><strong>Failed collection entries:</strong> '
+                + html.escape(failed_collection)
+                + '</p>\n'
+            )
+        if analysis_status.diff_failed_pairs:
+            failed_pairs = "; ".join(
+                f"{item.get('file_a', '?')} ↔ {item.get('file_b', '?')} "
+                f"({item.get('reason', 'unknown')})"
+                for item in analysis_status.diff_failed_pairs
+            )
+            meta_html += (
+                '<p class="meta"><strong>Failed diff pairs:</strong> '
+                + html.escape(failed_pairs)
+                + '</p>\n'
+            )
+        if analysis_status.deep_skipped_binary_files:
+            skipped = "; ".join(
+                f"{item.get('side', '?')}:{item.get('path', '?')}"
+                for item in analysis_status.deep_skipped_binary_files
+            )
+            meta_html += (
+                '<p class="meta"><strong>Deep files skipped as binary content '
+                '(not fingerprinted):</strong> '
+                + html.escape(skipped)
+                + '</p>' + chr(10)
+            )
+        if analysis_status.deep_failed_files:
+            failed_files = "; ".join(
+                f"{item.get('side', '?')}:{item.get('path', '?')} "
+                f"({item.get('reason', 'unknown')})"
+                for item in analysis_status.deep_failed_files
+            )
+            meta_html += (
+                '<p class="meta"><strong>Failed deep files:</strong> '
+                + html.escape(failed_files)
                 + '</p>\n'
             )
 
@@ -669,8 +760,9 @@ def build_cover_body(
         deep_html += "<h2>Deep Compare &mdash; N:M Cross-Match Results</h2>\n"
         deep_html += (
             '<table class="deep">'
-            '<tr><th style="width: 40%;">A File</th><th style="width: 40%;">B File(s)</th>'
-            '<th style="width: 10%;">Shared Hashes</th><th style="width: 10%;">Jaccard</th></tr>\n'
+            '<tr><th style="width: 32%;">A File</th><th style="width: 32%;">B File(s)</th>'
+            '<th style="width: 9%;">Shared Hashes</th><th style="width: 9%;">Jaccard</th>'
+            '<th style="width: 9%;">A in B</th><th style="width: 9%;">B in A</th></tr>\n'
         )
         any_inconclusive = False
         for dr in deep_results:
@@ -680,21 +772,31 @@ def build_cover_body(
                     any_inconclusive = True
                     jbadge += (' <span class="badge badge-mid" '
                                'title="below token floor">inconclusive</span>')
+                a_in_b, b_in_a = dr.containment(b_file, shared)
                 deep_html += (
                     f"<tr>"
                     f"<td>{_break_path(html.escape(dr.file_a))}</td>"
                     f"<td>{_break_path(html.escape(b_file))}</td>"
                     f"<td>{shared}</td>"
                     f"<td>{jbadge}</td>"
+                    f"<td>{a_in_b * 100:.2f}%</td>"
+                    f"<td>{b_in_a * 100:.2f}%</td>"
                     f"</tr>\n"
                 )
         deep_html += "</table>\n"
+        deep_html += (
+            '<p class="meta"><strong>A in B</strong> = shared &divide; unique '
+            'fingerprints of the A file; <strong>B in A</strong> = shared &divide; '
+            'unique fingerprints of the B file. Rows are selected by the Jaccard '
+            'threshold only; the containment columns are descriptive and have no '
+            'calibrated threshold.</p>\n'
+        )
         if any_inconclusive:
             deep_html += (
                 '<p class="meta">&#8505; <strong>Inconclusive</strong> matches fall '
-                'below the calibrated token floor: under normalize, files this small '
-                'cannot be distinguished from independent same-domain code, so the '
-                'score is not a confident finding.</p>\n'
+                'below the conservative token guard. The calibration corpus did '
+                'not measure a separate precision benefit from this guard, so the '
+                'score is not presented as a confident finding.</p>\n'
             )
 
     body = f"""\

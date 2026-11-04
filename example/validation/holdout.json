@@ -1,0 +1,275 @@
+{
+  "corpus_sha256": {
+    "irplag": "97e2619618dbe9314285457f38f0b75a6d17927c42a775b98b293e58addf17e5",
+    "soco": "131e9295b7935475a6e291b9937b95a53259ea39000d5b63b42b7b5194357990"
+  },
+  "fixed_threshold_by_case": [
+    {
+      "case": "case-01",
+      "fp": 1,
+      "negatives": 15,
+      "tp": 18,
+      "positives": 40
+    },
+    {
+      "case": "case-02",
+      "fp": 0,
+      "negatives": 15,
+      "tp": 14,
+      "positives": 54
+    },
+    {
+      "case": "case-03",
+      "fp": 0,
+      "negatives": 15,
+      "tp": 6,
+      "positives": 52
+    },
+    {
+      "case": "case-04",
+      "fp": 0,
+      "negatives": 15,
+      "tp": 13,
+      "positives": 54
+    },
+    {
+      "case": "case-05",
+      "fp": 0,
+      "negatives": 15,
+      "tp": 12,
+      "positives": 53
+    },
+    {
+      "case": "case-06",
+      "fp": 0,
+      "negatives": 15,
+      "tp": 12,
+      "positives": 51
+    },
+    {
+      "case": "case-07",
+      "fp": 0,
+      "negatives": 15,
+      "tp": 2,
+      "positives": 51
+    }
+  ],
+  "loco": [
+    {
+      "fp_target_pct": 1.0,
+      "folds": [
+        {
+          "held_out": "case-01",
+          "threshold": 93,
+          "fp": 1,
+          "negatives": 15,
+          "tp": 18,
+          "positives": 40
+        },
+        {
+          "held_out": "case-02",
+          "threshold": 101,
+          "fp": 0,
+          "negatives": 15,
+          "tp": 0,
+          "positives": 54
+        },
+        {
+          "held_out": "case-03",
+          "threshold": 101,
+          "fp": 0,
+          "negatives": 15,
+          "tp": 0,
+          "positives": 52
+        },
+        {
+          "held_out": "case-04",
+          "threshold": 101,
+          "fp": 0,
+          "negatives": 15,
+          "tp": 0,
+          "positives": 54
+        },
+        {
+          "held_out": "case-05",
+          "threshold": 101,
+          "fp": 0,
+          "negatives": 15,
+          "tp": 0,
+          "positives": 53
+        },
+        {
+          "held_out": "case-06",
+          "threshold": 101,
+          "fp": 0,
+          "negatives": 15,
+          "tp": 0,
+          "positives": 51
+        },
+        {
+          "held_out": "case-07",
+          "threshold": 101,
+          "fp": 0,
+          "negatives": 15,
+          "tp": 0,
+          "positives": 51
+        }
+      ],
+      "infeasible_folds": 6,
+      "pooled_fp": [
+        1,
+        105
+      ],
+      "pooled_fp_rate_pct": 0.95,
+      "pooled_fp_wilson95_pct": [
+        0.17,
+        5.2
+      ],
+      "pooled_recall_pct": 5.07,
+      "folds_with_any_fp": 1
+    },
+    {
+      "fp_target_pct": 5.0,
+      "folds": [
+        {
+          "held_out": "case-01",
+          "threshold": 77,
+          "fp": 1,
+          "negatives": 15,
+          "tp": 18,
+          "positives": 40
+        },
+        {
+          "held_out": "case-02",
+          "threshold": 77,
+          "fp": 1,
+          "negatives": 15,
+          "tp": 19,
+          "positives": 54
+        },
+        {
+          "held_out": "case-03",
+          "threshold": 77,
+          "fp": 3,
+          "negatives": 15,
+          "tp": 18,
+          "positives": 52
+        },
+        {
+          "held_out": "case-04",
+          "threshold": 78,
+          "fp": 0,
+          "negatives": 15,
+          "tp": 21,
+          "positives": 54
+        },
+        {
+          "held_out": "case-05",
+          "threshold": 78,
+          "fp": 0,
+          "negatives": 15,
+          "tp": 19,
+          "positives": 53
+        },
+        {
+          "held_out": "case-06",
+          "threshold": 78,
+          "fp": 0,
+          "negatives": 15,
+          "tp": 16,
+          "positives": 51
+        },
+        {
+          "held_out": "case-07",
+          "threshold": 78,
+          "fp": 0,
+          "negatives": 15,
+          "tp": 8,
+          "positives": 51
+        }
+      ],
+      "infeasible_folds": 0,
+      "pooled_fp": [
+        5,
+        105
+      ],
+      "pooled_fp_rate_pct": 4.76,
+      "pooled_fp_wilson95_pct": [
+        2.05,
+        10.67
+      ],
+      "pooled_recall_pct": 33.52,
+      "folds_with_any_fp": 3
+    }
+  ],
+  "containment": {
+    "negatives": {
+      "n": 105,
+      "median": 0.759,
+      "p95": 0.9,
+      "max": 1.0
+    },
+    "L1": {
+      "n": 60,
+      "median": 1.0,
+      "p95": 1.0,
+      "max": 1.0
+    },
+    "L2": {
+      "n": 56,
+      "median": 1.0,
+      "p95": 1.0,
+      "max": 1.0
+    },
+    "L3": {
+      "n": 57,
+      "median": 0.852,
+      "p95": 1.0,
+      "max": 1.0
+    },
+    "L4": {
+      "n": 60,
+      "median": 0.757,
+      "p95": 0.9,
+      "max": 1.0
+    },
+    "L5": {
+      "n": 59,
+      "median": 0.661,
+      "p95": 0.8,
+      "max": 0.838
+    },
+    "L6": {
+      "n": 63,
+      "median": 0.622,
+      "p95": 0.774,
+      "max": 0.8
+    }
+  },
+  "soco": [
+    {
+      "language": "java",
+      "threshold": 93.0,
+      "files": 259,
+      "positives": 84,
+      "recall_pct": 16.67,
+      "unlabelled_pairs": 33327,
+      "unlabelled_flagged": 0,
+      "unlabelled_flag_rate_pct": 0.0,
+      "median_tokens": 589,
+      "share_files_over_calibrated_max_pct": 89.6
+    },
+    {
+      "language": "c",
+      "threshold": 93.0,
+      "files": 79,
+      "positives": 26,
+      "recall_pct": 0.0,
+      "unlabelled_pairs": 3055,
+      "unlabelled_flagged": 0,
+      "unlabelled_flag_rate_pct": 0.0,
+      "median_tokens": 420,
+      "share_files_over_calibrated_max_pct": 94.9
+    }
+  ]
+}

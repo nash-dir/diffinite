@@ -6,6 +6,7 @@
  */
 import * as vscode from "vscode";
 import { DiffiniteOptions, defaultOptions } from "./runner";
+import { migratePersistedOptions } from "./analysisModel";
 import { getDefaultMode, getBatesPresets, BatesPreset, getPdfFont, getPdfLang } from "./config";
 import { escHtml, getNonce } from "./webviewUtils";
 
@@ -37,7 +38,10 @@ export function showOptionsPanel(
   const lastRunOptions = context.globalState.get<Partial<DiffiniteOptions>>("diffinite.lastRunOptions");
 
   const config = vscode.workspace.getConfiguration("diffinite");
-  const defaults = { ...defaultOptions(), ...(lastRunOptions || {}) };
+  const migration = lastRunOptions
+    ? migratePersistedOptions(lastRunOptions)
+    : { options: defaultOptions(), warnings: [] as string[] };
+  const defaults = migration.options;
   defaults.mode = lastRunOptions?.mode || getDefaultMode() as "simple" | "deep";
   defaults.workers = lastRunOptions?.workers || config.get<number>("workers", 4);
   defaults.noMerge = lastRunOptions?.noMerge ?? config.get<boolean>("noMerge", false);
@@ -48,8 +52,14 @@ export function showOptionsPanel(
   const presets = getBatesPresets();
   const taskHistory = context.globalState.get<TaskHistoryEntry[]>("diffinite.taskHistory") || [];
 
-  panel.webview.html = buildOptionsHtml(defaults, presets, lastDirs, taskHistory);
+  if (migration.warnings.length) {
+    void vscode.window.showWarningMessage(`Diffinite: ${migration.warnings.join(" ")}`);
+  }
+  panel.webview.html = buildOptionsHtml(
+    defaults, presets, lastDirs, taskHistory, migration.warnings,
+  );
 
+  let runPending = false;
   panel.webview.onDidReceiveMessage(
     async (msg: { command: string; target?: string; options?: DiffiniteOptions; dirA?: string; dirB?: string; saveHistory?: boolean }) => {
       if (
@@ -58,37 +68,43 @@ export function showOptionsPanel(
         typeof msg.dirA === "string" && msg.dirA &&
         typeof msg.dirB === "string" && msg.dirB
       ) {
-
-        // Save Persistence
-        await context.globalState.update("diffinite.lastRunOptions", msg.options);
-        await context.globalState.update("diffinite.lastDirs", { dirA: msg.dirA, dirB: msg.dirB });
-
-        // Save History if requested
-        if (msg.saveHistory) {
-          const history = context.globalState.get<TaskHistoryEntry[]>("diffinite.taskHistory") || [];
-          const now = new Date();
-          const baseA = msg.dirA.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "A";
-          const baseB = msg.dirB.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "B";
-          const label = `${now.toLocaleDateString()} ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} | ${baseA} vs ${baseB}`;
-          
-          history.push({ id: now.getTime().toString(), label, dirA: msg.dirA, dirB: msg.dirB, options: msg.options });
-          if (history.length > 50) history.shift(); // Cap history size
-          await context.globalState.update("diffinite.taskHistory", history);
+        if (runPending) {
+          void vscode.window.showWarningMessage("Diffinite: An analysis is already starting from this panel.");
+          return;
         }
-        // Save Presentation options automatically to Global Settings
-        if (msg.options.pdfFont !== undefined) {
-          await config.update("pdfFont", msg.options.pdfFont, vscode.ConfigurationTarget.Global);
-        }
-        if (msg.options.pdfLang !== undefined) {
-          await config.update("pdfLang", msg.options.pdfLang, vscode.ConfigurationTarget.Global);
-        }
+        runPending = true;
 
-        // Trigger the pipeline but DO NOT dispose the panel.
-        // It stays open so users can tweak paths/options and run again safely!
         try {
+          // Save Persistence
+          await context.globalState.update("diffinite.lastRunOptions", msg.options);
+          await context.globalState.update("diffinite.lastDirs", { dirA: msg.dirA, dirB: msg.dirB });
+
+          // Save History if requested
+          if (msg.saveHistory) {
+            const history = context.globalState.get<TaskHistoryEntry[]>("diffinite.taskHistory") || [];
+            const now = new Date();
+            const baseA = msg.dirA.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "A";
+            const baseB = msg.dirB.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "B";
+            const label = `${now.toLocaleDateString()} ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} | ${baseA} vs ${baseB}`;
+
+            history.push({ id: now.getTime().toString(), label, dirA: msg.dirA, dirB: msg.dirB, options: msg.options });
+            if (history.length > 50) history.shift(); // Cap history size
+            await context.globalState.update("diffinite.taskHistory", history);
+          }
+          // Save Presentation options automatically to Global Settings
+          if (msg.options.pdfFont !== undefined) {
+            await config.update("pdfFont", msg.options.pdfFont, vscode.ConfigurationTarget.Global);
+          }
+          if (msg.options.pdfLang !== undefined) {
+            await config.update("pdfLang", msg.options.pdfLang, vscode.ConfigurationTarget.Global);
+          }
+
+          // Trigger the pipeline but DO NOT dispose the panel.
+          // It stays open so users can tweak paths/options and run again safely.
           await onRun(msg.dirA, msg.dirB, msg.options);
         } finally {
-          panel.webview.postMessage({ command: 'runComplete' });
+          runPending = false;
+          void panel.webview.postMessage({ command: 'runComplete' });
         }
       } else if (msg.command === "browse" && (msg.target === "dirA" || msg.target === "dirB")) {
         // Open native directory selection dialog
@@ -120,7 +136,13 @@ export function showOptionsPanel(
   );
 }
 
-function buildOptionsHtml(defaults: DiffiniteOptions, presets: BatesPreset[], lastDirs: { dirA: string; dirB: string }, taskHistory: TaskHistoryEntry[]): string {
+function buildOptionsHtml(
+  defaults: DiffiniteOptions,
+  presets: BatesPreset[],
+  lastDirs: { dirA: string; dirB: string },
+  taskHistory: TaskHistoryEntry[],
+  migrationWarnings: string[],
+): string {
   const nonce = getNonce();
   const presetOptions = presets.map((p) => {
     const label = `${escHtml(p.name)} (${escHtml(p.prefix)}…${escHtml(p.suffix || "")})`;
@@ -229,7 +251,7 @@ function buildOptionsHtml(defaults: DiffiniteOptions, presets: BatesPreset[], la
       <h2>Deep Compare (Winnowing)</h2>
       <div class="field checkbox">
         <input type="checkbox" id="normalize" ${defaults.normalize ? "checked" : ""}>
-        <label for="normalize">Normalize identifiers (Type-2 clone detection)</label>
+        <label for="normalize">Normalize identifiers and literals for fingerprinting</label>
       </div>
       <div class="field">
         <label for="kGram">K-gram size</label>
@@ -240,8 +262,16 @@ function buildOptionsHtml(defaults: DiffiniteOptions, presets: BatesPreset[], la
         <input type="number" id="window" value="${defaults.window}" min="1" max="20" step="1">
       </div>
       <div class="field">
-        <label for="thresholdDeep">Min Jaccard threshold (0–100)</label>
-        <input type="number" id="thresholdDeep" value="${defaults.thresholdDeep}" min="0" max="100" step="1">
+        <label for="thresholdMode">Deep threshold</label>
+        <select id="thresholdMode">
+          <option value="auto" ${defaults.thresholdMode === "auto" ? "selected" : ""}>Auto — Python chooses effective threshold</option>
+          <option value="manual" ${defaults.thresholdMode === "manual" ? "selected" : ""}>Manual — pass user value</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="thresholdDeep">Manual Jaccard threshold (0–100)</label>
+        <input type="number" id="thresholdDeep" value="${defaults.thresholdDeep}" min="0" max="100" step="1" ${defaults.thresholdMode === "auto" ? "disabled" : ""}>
+        <div id="thresholdWarning" class="warning-text">${escHtml(migrationWarnings.join(" "))}</div>
       </div>
     </section>
 
@@ -291,6 +321,10 @@ function buildOptionsHtml(defaults: DiffiniteOptions, presets: BatesPreset[], la
       <div class="field checkbox">
         <input type="checkbox" id="hash" ${defaults.hash ? "checked" : ""}>
         <label for="hash">Embed SHA-256 file hashes in report</label>
+      </div>
+      <div class="field checkbox">
+        <input type="checkbox" id="allowPartial" ${defaults.allowPartial ? "checked" : ""}>
+        <label for="allowPartial">Allow explicitly incomplete output after worker/file failure</label>
       </div>
       <div class="field">
         <label for="uncomparedFiles">Uncompared files list</label>
@@ -497,6 +531,7 @@ const OPTIONS_CSS = `
   }
 
   .bates-details.hidden { display: none; }
+  .warning-text { color: #f0ad4e; font-size: 11px; margin-top: 5px; }
 `;
 
 const OPTIONS_JS = `
@@ -529,6 +564,7 @@ const OPTIONS_JS = `
       }
     } else if (msg.command === 'runComplete') {
       // Revert loading text when the extension host acknowledges completion (or TreeViewer is blocked)
+      btnRun.disabled = false;
       btnRun.innerHTML = '&#9654; Run Analysis';
     }
   });
@@ -561,6 +597,28 @@ const OPTIONS_JS = `
   }
   modeSelect.addEventListener('change', updateDeepVisibility);
   updateDeepVisibility();
+
+  const normalizeCheckbox = document.getElementById('normalize');
+  const thresholdModeSelect = document.getElementById('thresholdMode');
+  const thresholdDeepInput = document.getElementById('thresholdDeep');
+  const thresholdWarning = document.getElementById('thresholdWarning');
+  let legacyThresholdWarning = thresholdWarning.textContent || '';
+  function updateThresholdMode() {
+    const manual = thresholdModeSelect.value === 'manual';
+    thresholdDeepInput.disabled = !manual;
+    if (legacyThresholdWarning) {
+      thresholdWarning.textContent = legacyThresholdWarning;
+    } else if (manual && normalizeCheckbox.checked) {
+      thresholdWarning.textContent = 'Manual normalize threshold: the generated Python disclosure will state whether calibration applies at this value.';
+    } else if (manual) {
+      thresholdWarning.textContent = 'Manual raw threshold: no calibrated false-positive estimate applies.';
+    } else {
+      thresholdWarning.textContent = 'Auto mode sends no --threshold-deep value; Python records the effective threshold and provenance.';
+    }
+  }
+  thresholdModeSelect.addEventListener('change', () => { legacyThresholdWarning = ''; updateThresholdMode(); });
+  normalizeCheckbox.addEventListener('change', () => { legacyThresholdWarning = ''; updateThresholdMode(); });
+  updateThresholdMode();
 
   // Toggle Bates details visibility
   const batesCheckbox = document.getElementById('batesNumber');
@@ -619,11 +677,19 @@ const OPTIONS_JS = `
           document.getElementById('threshold').value = o.threshold || 60;
           document.getElementById('kGram').value = o.kGram || 5;
           document.getElementById('window').value = o.window || 4;
-          document.getElementById('thresholdDeep').value = o.thresholdDeep || 5;
+          document.getElementById('thresholdDeep').value = typeof o.thresholdDeep === 'number' ? o.thresholdDeep : 5;
+          if (o.thresholdMode === 'auto' || o.thresholdMode === 'manual') {
+            thresholdModeSelect.value = o.thresholdMode;
+            legacyThresholdWarning = '';
+          } else {
+            thresholdModeSelect.value = 'manual';
+            legacyThresholdWarning = 'Legacy thresholdDeep is ambiguous and was preserved as manual. Choose Auto to use Python defaults.';
+          }
           document.getElementById('pageNumber').checked = !!o.pageNumber;
           document.getElementById('fileNumber').checked = !!o.fileNumber;
           document.getElementById('batesNumber').checked = !!o.batesNumber;
           document.getElementById('hash').checked = !!o.hash;
+          document.getElementById('allowPartial').checked = !!o.allowPartial;
           document.getElementById('uncomparedFiles').value = o.uncomparedFiles || 'inline';
           document.getElementById('binaryHandling').value = o.binaryHandling || 'hash';
           document.getElementById('sortBy').value = o.sortBy || '';
@@ -639,6 +705,7 @@ const OPTIONS_JS = `
           presetSelect.value = o._batesPresetName || '';
           
           updateDeepVisibility();
+          updateThresholdMode();
           updateBatesVisibility();
         }
       }
@@ -653,6 +720,7 @@ const OPTIONS_JS = `
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
+    if (btnRun.disabled) return;
     dirError.style.display = 'none';
 
     const dirA = dirAEl.value.trim();
@@ -675,11 +743,13 @@ const OPTIONS_JS = `
       threshold: Number(document.getElementById('threshold').value),
       kGram: Number(document.getElementById('kGram').value),
       window: Number(document.getElementById('window').value),
+      thresholdMode: document.getElementById('thresholdMode').value,
       thresholdDeep: Number(document.getElementById('thresholdDeep').value),
       pageNumber: document.getElementById('pageNumber').checked,
       fileNumber: document.getElementById('fileNumber').checked,
       batesNumber: document.getElementById('batesNumber').checked,
       hash: document.getElementById('hash').checked,
+      allowPartial: document.getElementById('allowPartial').checked,
       uncomparedFiles: document.getElementById('uncomparedFiles').value,
       binaryHandling: document.getElementById('binaryHandling').value,
       encoding: 'auto',
@@ -696,7 +766,8 @@ const OPTIONS_JS = `
       pdfLang: document.getElementById('pdfLang').value,
     };
     
-    // Set UI to running state (does not disable button to allow parallel queueing test flows if desired)
+    // Prevent duplicate messages while the extension host owns this run.
+    btnRun.disabled = true;
     btnRun.innerHTML = '<span style="opacity:0.7">&#10227;</span> Running...';
     
     const saveHistory = document.getElementById('saveHistory').checked;

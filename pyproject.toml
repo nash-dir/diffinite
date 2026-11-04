@@ -1,13 +1,14 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+# Setuptools 77 introduced PEP 639 SPDX license-expression metadata support.
+requires = ["setuptools>=77.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "diffinite"
-version = "0.13.1"
+version = "0.14.0"
 description = "Forensic source-code comparison tool — Winnowing fingerprints and professional PDF reports for IP litigation & code audit"
 readme = "README.md"
-license = {text = "Apache-2.0"}
+license = "Apache-2.0"
 requires-python = ">=3.10"
 authors = [
     { name = "nash-dir" },
@@ -22,7 +23,6 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Legal Industry",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -36,7 +36,18 @@ dependencies = [
     "rapidfuzz>=3.0.0",
     "charset-normalizer>=3.0.0",
     "xhtml2pdf>=0.2.11",
-    "pypdf>=4.0.0",
+    # pip-audit (2026-07-20, re-run 2026-11-03) reported these as the first fixed
+    # versions for advisories affecting the PDF/runtime dependency graph.
+    "pypdf>=6.16.1",
+    "cryptography>=50.0.0",
+    "idna>=3.15",
+    "lxml>=6.1.0",
+    # Pillow 13 (first release fixing the 2026-11 advisories) requires Python 3.11+;
+    # Python 3.10 (end-of-life 2026-10) can only get the last 12.x release.
+    "pillow>=13.0.0; python_version >= '3.11'",
+    "pillow>=12.3.0; python_version < '3.11'",
+    "urllib3>=2.8.0",
+    "certifi>=2026.10.18",
     "pygments>=2.16.0",
     "reportlab>=4.0.0",
 ]
@@ -45,6 +56,9 @@ dependencies = [
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
+    # Exact pins: a new formatter or checker release must not fail CI on unchanged code.
+    "ruff==0.17.3",
+    "mypy==2.4.1",
 ]
 
 
@@ -68,3 +82,25 @@ exclude = ["example*", "legacy*", "tests*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E9", "F"]
+
+[tool.mypy]
+python_version = "3.10"
+files = [
+    "src/diffinite/calibration.py",
+    "src/diffinite/cli.py",
+    "src/diffinite/deep_compare.py",
+    "src/diffinite/models.py",
+    "src/diffinite/evidence.py",
+    "src/diffinite/parser.py",
+    "src/diffinite/pipeline.py",
+]
+warn_unused_configs = true
+check_untyped_defs = true
+no_implicit_optional = true

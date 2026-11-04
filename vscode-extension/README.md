@@ -16,7 +16,7 @@ Compare two directories of source code with [Winnowing fingerprints](https://the
 
 ### Core Analysis
 - **1:1 File Matching** — Pairs files across two directories using fuzzy name matching, then computes line-by-line or word-by-word diffs with syntax highlighting.
-- **N:M Cross-Matching (Deep Mode)** — Winnowing fingerprint-based Jaccard similarity across all file pairs. Detects code reuse even across renamed, split, or merged files.
+- **N:M Cross-Matching (Deep Mode)** — Winnowing fingerprint-based Jaccard similarity across all file pairs. Detects code reuse across renamed files; for pairs that pass the Jaccard threshold, the directional *A in B / B in A* columns show how much of each file was carried over (Jaccard is diluted when file sizes differ). A small file copied whole into a much larger one can still fall below the Jaccard threshold and not be listed.
 - **Comment Stripping** — 6-state FSM parser supporting 45+ file extensions (`.py`, `.js`, `.ts`, `.java`, `.c`, `.cpp`, `.go`, `.rs`, `.swift`, `.rb`, `.php`, `.sql`, `.html`, `.css`, and more).
 - **Moved Block Detection** — Detects code blocks that were moved (not just added/deleted) and highlights them in purple (original position) and blue (moved destination).
 - **SHA-256 Evidence Integrity** — Embeds cryptographic hashes for all analyzed files directly in the report for forensic chain-of-custody.
@@ -99,7 +99,8 @@ N:M cross-matching table (deep mode):
 | **Matched Files (B)** | All B-files sharing fingerprints above the Jaccard threshold |
 | **Shared Hashes** | Count of Winnowing fingerprints the file pair has in common |
 | **Jaccard** | `\|A∩B\| / \|A∪B\|` — fraction of shared Winnowing fingerprints |
-| **Inconclusive** | Shown when Normalize is on and the smaller file is below 45 tokens — precision is unsalvageable at that size |
+| **A in B / B in A** | `\|A∩B\| / \|A\|` and `\|A∩B\| / \|B\|` — share of each file's unique fingerprints found in the other — analogous to 원본 기준 / 비교본 기준, but counted in fingerprints, not lines. Stays near 100% when a whole file was copied into a larger one. Descriptive only: rows are selected by the Jaccard threshold. |
+| **Inconclusive** | Shown when Normalize is on and the smaller file is below 45 tokens. Outside the measured profile this is a conservative guard, not a calibrated precision claim. |
 
 ---
 
@@ -136,7 +137,7 @@ All options are configurable through the built-in GUI panel:
 | **Mode** | `deep` | `simple` = 1:1 only. `deep` = 1:1 + N:M cross-matching |
 | **Strip Comments** | off | Remove comments before comparison |
 | **By Word** | off | Compare by word instead of by line |
-| **Normalize** | off | Normalize identifiers → `ID`, literals → `LIT` before fingerprinting (Type-2 clone detection). When enabled, the deep threshold defaults to **93** (calibrated for FP ≤ 1%). Matches below a 45-token floor are marked *inconclusive*. |
+| **Normalize** | off | Normalize identifiers → `ID`, literals → `LIT` before fingerprinting. Python records the effective threshold and whether the measured profile (K=5, W=4, comments stripped, language-aware off) applies. Other profiles are shown as unvalidated; matches below 45 tokens remain *inconclusive / 판단 유보*. |
 | **Collapse Identical** | off | Fold unchanged blocks (3 context lines) |
 | **Detect Moved Blocks** | off | Highlight moved code in purple/blue instead of plain delete/add |
 | **No Autojunk** | off | Disable autojunk heuristic for more precise forensic analysis |
@@ -144,13 +145,23 @@ All options are configurable through the built-in GUI panel:
 | **Encoding** | `auto` | Force file encoding (`euc-kr`, `utf-8`, etc.) or auto-detect |
 | **Uncompared Mode** | `inline` | How unmatched files appear: `inline`, `separate`, or `none` |
 | **Threshold** | `60` | Fuzzy file-name matching threshold (0–100) |
-| **K-gram** | `5` | Winnowing K-gram size (Schleimer 2003 §4.2) |
-| **Window** | `4` | Winnowing window size. Detection guarantee: sequences ≥ K+W−1 tokens |
-| **Threshold (Deep)** | `5` / `93` | Minimum Jaccard similarity (0–100) to include in results. Default is `5` (raw channel) or **`93`** when Normalize is enabled (calibrated operating point). |
+| **Language-aware fingerprints** | — | Not exposed here: `--lang-aware` is available from the CLI only. |
+| **K-gram** | `5` | Winnowing K-gram size. K=5 is the value frozen in the measured calibration profile; the paper prescribes no k for source code (Schleimer 2003, §5). |
+| **Window** | `4` | Winnowing window size. Shared runs of ≥ K+W−1 tokens always share at least one fingerprint; whether the pair is listed depends on the Deep threshold. |
+| **Deep Threshold Mode** | `Auto` | Auto omits `--threshold-deep`, so Python remains the source of truth. Manual passes only the value explicitly entered by the user and is shown with `user` provenance. |
+| **Allow Partial** | off | Permit an explicitly **Incomplete analysis / 불완전 결과** after a worker or file failure. Off is fail-closed. |
 | **Bates Preset** | — | Select a saved preset to auto-fill prefix/suffix/start |
 | **Bates Prefix** | (empty) | Prefix for Bates numbering (e.g. `PLAINTIFF-`) |
 | **Bates Suffix** | (empty) | Suffix for Bates numbering (e.g. `-CONFIDENTIAL`) |
 | **Starting Number** | `1` | First Bates number (auto-continues across reports) |
+
+Older saved options have no Auto/Manual marker, so an existing numeric
+`thresholdDeep` cannot be distinguished from an intentional override. Migration
+preserves that number as **Manual** and displays a warning; selecting Auto is an
+explicit user choice. Result JSON schema v2 displays Python's effective threshold,
+provenance, canonical calibration disclosure, actual preprocessing, and
+partial/truncation status. Legacy JSON still opens with missing fields shown as
+`unknown`, rather than being inferred as complete or calibrated.
 
 ---
 

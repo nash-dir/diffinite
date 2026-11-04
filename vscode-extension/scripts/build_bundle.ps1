@@ -16,8 +16,9 @@
        4a. Hash-verified PyPI deps from requirements-bundle.lock
        4b. Local diffinite package (--no-deps)
     5. Extracts Dependency Licenses (build-only pip-licenses in a temp dir)
-    6. Smoke Test (runs the bundled python.exe -m diffinite --help)
-    7. Aggressive Pruning (removes __pycache__, tests, .c/.cpp files, etc.) — last
+    6. Pre-prune Smoke Test (runs the bundled python.exe -m diffinite --help)
+    7. Aggressive Pruning (removes __pycache__, tests, .c/.cpp files, etc.)
+    8. Post-prune Version & Report Smoke Tests
 #>
 param(
     [string]$pythonVersion = "3.12.9"
@@ -73,27 +74,58 @@ foreach ($pth in $pthFiles) {
 # 3. Bootstrap Pip
 # -------------------------------------------------------------------------
 Write-Host "Bootstrapping pip..."
-# get-pip.py SHA256 — bootstrap.pypa.io는 항상 최신본을 주는 롤링 URL이라,
-# pip 릴리스로 내용이 바뀌면 이 핀을 갱신해야 한다(장기적으로는 버전 고정 스냅샷 권장).
-$expectedPipHash = "A341E1A43E38001C551A1508A73FF23636A11970B61D901D9A1CAD2A18F57055"
-$pipScriptPath = "$binPythonDir\get-pip.py"
+# pip is bootstrapped from its own wheel at an immutable PyPI file URL, pinned by
+# SHA-256. (bootstrap.pypa.io/get-pip.py is a rolling URL whose content changes
+# with every pip release, so a pinned hash for it breaks the build each time.)
+# pip-audit on 2026-11-03: 26.1.2 has PYSEC-2026-3721 (fixed in 26.2); 26.2.2
+# (released 2026-10-20) has no known advisories.
+$expectedPipVersion = "26.2.2"
+$pipWheelName = "pip-$expectedPipVersion-py3-none-any.whl"
+$pipWheelUrl = "https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/$pipWheelName"
+$expectedPipWheelHash = "FD7F4DFA8190E014013B9F08F3E973F4E4C26FFD179A204895533A7254813A70"
+$pipWheelPath = "$binPythonDir\$pipWheelName"
 
-Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile $pipScriptPath
+Invoke-WebRequest -Uri $pipWheelUrl -OutFile $pipWheelPath
 
-Write-Host "Verifying get-pip.py hash..."
-$actualPipHash = (Get-FileHash -Path $pipScriptPath -Algorithm SHA256).Hash
-if ($actualPipHash -ne $expectedPipHash) {
-    throw "Security Exception: get-pip.py hash mismatch! Expected $expectedPipHash, got $actualPipHash"
+Write-Host "Verifying pip wheel hash..."
+$actualPipWheelHash = (Get-FileHash -Path $pipWheelPath -Algorithm SHA256).Hash
+if ($actualPipWheelHash -ne $expectedPipWheelHash) {
+    throw "Security Exception: pip wheel hash mismatch! Expected $expectedPipWheelHash, got $actualPipWheelHash"
 }
 
-& "$binPythonDir\python.exe" $pipScriptPath --no-warn-script-location
+# Run pip from inside its verified wheel to install that same wheel (no index).
+# Isolated mode blocks PYTHON* environment variables, user-site packages, and
+# the current directory from influencing any code run by the bundled runtime;
+# the wheel is therefore put on sys.path explicitly rather than relied on as
+# an implicit script directory.
+$pipBootstrap = "import sys; sys.path.insert(0, sys.argv[1]); " +
+    "from pip._internal.cli.main import main; " +
+    "sys.exit(main(['install', '--no-index', '--no-warn-script-location', sys.argv[1]]))"
+& "$binPythonDir\python.exe" -I -c $pipBootstrap $pipWheelPath
 if ($LASTEXITCODE -ne 0) { throw "Pip bootstrap failed." }
+Remove-Item $pipWheelPath -Force
+$actualPipVersion = & "$binPythonDir\python.exe" -I -c "from importlib.metadata import version; print(version('pip'))"
+if ($LASTEXITCODE -ne 0 -or $actualPipVersion -ne $expectedPipVersion) {
+    throw "Security Exception: expected bootstrap pip $expectedPipVersion, got $actualPipVersion"
+}
 
 # -------------------------------------------------------------------------
 # 4. Install diffinite package and dependencies (Supply-Chain Hardened)
 # -------------------------------------------------------------------------
-Write-Host "Installing build dependencies (setuptools, wheel)..."
-& "$binPythonDir\python.exe" -m pip install setuptools wheel --no-warn-script-location
+$buildLockFile = "$PSScriptRoot\requirements-build.lock"
+if (-not (Test-Path $buildLockFile)) {
+    throw "Security Exception: requirements-build.lock not found at $buildLockFile. Run update_lockfile.ps1 first."
+}
+
+Write-Host "Installing hash-verified build and license tools..."
+& "$binPythonDir\python.exe" -I -m pip install `
+    --require-hashes `
+    --no-deps `
+    --no-warn-script-location `
+    -r $buildLockFile
+if ($LASTEXITCODE -ne 0) {
+    throw "Security Exception: Build-tool hash verification failed."
+}
 
 $sitePackages = "$binPythonDir\Lib\site-packages"
 New-Item -ItemType Directory -Path $sitePackages -Force | Out-Null
@@ -106,7 +138,7 @@ if (-not (Test-Path $lockFile)) {
 
 Write-Host "Installing hash-verified dependencies from lock file..."
 Write-Host "  Lock file: $lockFile"
-& "$binPythonDir\python.exe" -m pip install `
+& "$binPythonDir\python.exe" -I -m pip install `
     --require-hashes `
     --no-deps `
     --target $sitePackages `
@@ -118,8 +150,9 @@ if ($LASTEXITCODE -ne 0) {
 
 # 4b. Install diffinite itself (local source, no deps — already hash-verified above)
 Write-Host "Installing diffinite package (local source, --no-deps)..."
-& "$binPythonDir\python.exe" -m pip install `
+& "$binPythonDir\python.exe" -I -m pip install `
     --no-deps `
+    --no-build-isolation `
     --target $sitePackages `
     --no-warn-script-location `
     $workspaceRoot
@@ -132,25 +165,85 @@ if ($LASTEXITCODE -ne 0) { throw "Diffinite installation failed." }
 # importable by the bundled interpreter to enumerate license metadata. The
 # embedded Python is driven by a `._pth` file, which makes it ignore PYTHONPATH
 # and any --target dir, so it can only import from site-packages. We therefore
-# install it into site-packages and strip it (plus its deps) in the final prune
-# step (#7); .vscodeignore is a second backstop so it never reaches the VSIX.
+# install it from the hash-verified build lock and strip it (plus its deps) in
+# the final prune step (#7); .vscodeignore is a second backstop.
 Write-Host "Extracting open-source licenses..."
 $pythonExeTemplate = "$binPythonDir\python.exe"
-& $pythonExeTemplate -m pip install pip-licenses --no-warn-script-location
-if ($LASTEXITCODE -ne 0) { throw "pip-licenses install failed." }
 
-# Enumerate runtime packages, excluding pip/setuptools/wheel and the build-only
-# license tooling itself (pip-licenses, prettytable, wcwidth).
-$installedPackages = (& $pythonExeTemplate -m pip list --format=freeze) |
-                     Where-Object { $_ -notmatch '^(pip|setuptools|wheel|pip-licenses|prettytable|wcwidth)=' } |
-                     ForEach-Object { ($_ -split '=')[0] }
+# The lock is the runtime dependency source of truth. Enumerating the whole
+# interpreter can leak unrelated build-host packages into the license inventory.
+$installedPackages = @(
+    Select-String -Path $lockFile -Pattern '^([a-zA-Z0-9_.-]+)==' |
+        ForEach-Object { $_.Matches[0].Groups[1].Value }
+) + @('diffinite')
+$expectedLicensePackages = @{}
+foreach ($installedPackage in $installedPackages) {
+    $canonicalInstalledPackage = $installedPackage.ToLowerInvariant() -replace '[-_.]+', '-'
+    $expectedLicensePackages[$canonicalInstalledPackage] = $true
+}
 
 # --no-license-path: keep the license TEXT but drop the absolute LicenseFile
 # path column. Those paths can resolve to the builder's home dir (e.g. a package
 # also present in %APPDATA%\Python), leaking the local username into the public
 # VSIX; they are also meaningless on end-user machines.
-& $pythonExeTemplate -m piplicenses --with-license-file --no-license-path --format=markdown --output-file="$extRoot\DEPENDENCY_LICENSES.md" --packages $installedPackages
+& $pythonExeTemplate -I -m piplicenses --with-license-file --no-license-path --format=markdown --output-file="$extRoot\DEPENDENCY_LICENSES.md" --packages $installedPackages
 if ($LASTEXITCODE -ne 0) { throw "License extraction failed." }
+
+# Python -I prevents a same-named user-site distribution or sitecustomize from
+# contaminating the inventory. Packages whose wheels omit a license file must
+# have a vetted, version-bound source license checked into third-party-licenses/.
+$inventoryPath = "$extRoot\DEPENDENCY_LICENSES.md"
+$inventoryLines = @(Get-Content -Path $inventoryPath)
+$seenLicensePackages = @{}
+$licenseEncoding = New-Object System.Text.UTF8Encoding($false)
+
+for ($lineIndex = 0; $lineIndex -lt $inventoryLines.Count; $lineIndex++) {
+    $cells = @($inventoryLines[$lineIndex] -split '\|')
+    if ($cells.Count -lt 6) { continue }
+
+    $packageName = $cells[1].Trim()
+    $packageVersion = $cells[2].Trim()
+    if (-not $packageName -or $packageName -eq "Name" -or $packageName -match '^-+$') {
+        continue
+    }
+
+    $canonicalName = $packageName.ToLowerInvariant() -replace '[-_.]+', '-'
+    if ($seenLicensePackages.ContainsKey($canonicalName)) {
+        throw "Duplicate package in dependency license inventory: $packageName"
+    }
+    $seenLicensePackages[$canonicalName] = $true
+
+    if ($cells[4].Trim() -eq "UNKNOWN") {
+        $fallbackRelative = "third-party-licenses/$canonicalName-$packageVersion.txt"
+        $fallbackPath = Join-Path $extRoot ($fallbackRelative -replace '/', '\')
+        if (-not (Test-Path $fallbackPath -PathType Leaf) -or
+            (Get-Item $fallbackPath).Length -eq 0) {
+            throw "Missing vetted license fallback for $packageName $packageVersion at $fallbackPath"
+        }
+        $cells[4] = " See $fallbackRelative "
+        $inventoryLines[$lineIndex] = $cells -join '|'
+    }
+}
+
+$missingLicensePackages = @(
+    $expectedLicensePackages.Keys |
+        Where-Object { -not $seenLicensePackages.ContainsKey($_) } |
+        Sort-Object
+)
+if ($missingLicensePackages.Count -gt 0) {
+    throw "Missing package from dependency license inventory: $($missingLicensePackages -join ', ')"
+}
+
+$unexpectedLicensePackages = @(
+    $seenLicensePackages.Keys |
+        Where-Object { -not $expectedLicensePackages.ContainsKey($_) } |
+        Sort-Object
+)
+if ($unexpectedLicensePackages.Count -gt 0) {
+    throw "Unexpected package in dependency license inventory: $($unexpectedLicensePackages -join ', ')"
+}
+
+[System.IO.File]::WriteAllLines($inventoryPath, $inventoryLines, $licenseEncoding)
 Write-Host "Licenses saved to DEPENDENCY_LICENSES.md"
 
 # -------------------------------------------------------------------------
@@ -160,7 +253,7 @@ Write-Host "Licenses saved to DEPENDENCY_LICENSES.md"
 # site-packages, so the prune must be the final step to actually shrink the
 # shipped bundle.
 Write-Host "Running smoke test on bundled python..."
-& "$binPythonDir\python.exe" -m diffinite --help
+& "$binPythonDir\python.exe" -I -m diffinite --help
 if ($LASTEXITCODE -ne 0) { throw "Smoke test failed! The bundled Python architecture is broken." }
 
 # -------------------------------------------------------------------------
@@ -183,18 +276,39 @@ function Prune-Folder {
     Get-ChildItem -Path $path -Recurse -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Extension -in @(".pyc", ".pyo", ".c", ".cpp", ".h") } |
         Remove-Item -Force -ErrorAction SilentlyContinue
-    # Delete dist-info/egg-info (licenses are already collected in step 5)
+    # Preserve diffinite's dist-info: importlib.metadata is the authoritative
+    # runtime version source used in evidence manifests. Other metadata is not
+    # needed after the dependency license inventory has been generated.
     Get-ChildItem -Path $path -Recurse -Directory -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -like "*.dist-info" -or $_.Name -like "*.egg-info" } |
+        Where-Object {
+            ($_.Name -like "*.dist-info" -and $_.Name -notlike "diffinite-*.dist-info") -or
+            $_.Name -like "*.egg-info"
+        } |
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Prune-Folder $binPythonDir
 
+# Keep only the package name/version record needed by importlib.metadata.
+# direct_url.json otherwise records the absolute CI checkout path in the VSIX.
+$diffiniteDistInfo = @(
+    Get-ChildItem -Path $sitePackages -Directory -Filter "diffinite-*.dist-info" -ErrorAction SilentlyContinue
+)
+if ($diffiniteDistInfo.Count -ne 1) {
+    throw "Expected exactly one diffinite dist-info directory after pruning, found $($diffiniteDistInfo.Count)."
+}
+Get-ChildItem -LiteralPath $diffiniteDistInfo[0].FullName -Force |
+    Where-Object { $_.Name -ne "METADATA" } |
+    Remove-Item -Recurse -Force
+if (-not (Test-Path (Join-Path $diffiniteDistInfo[0].FullName "METADATA") -PathType Leaf)) {
+    throw "diffinite METADATA is missing after pruning."
+}
+
 # Remove pip, setuptools, wheel, and the build-only license tooling
 # (pip-licenses + prettytable + wcwidth) — none are used at runtime.
 $buildOnlyPatterns = @(
-    "pip*", "setuptools*", "wheel*",
+    "pip*", "setuptools*", "wheel*", "build*", "packaging*",
+    "pyproject_hooks*", "colorama*",
     "pip_licenses*", "piplicenses*", "prettytable*", "wcwidth*",
     "_distutils_hack", "distutils-precedence.pth"
 )
@@ -202,7 +316,65 @@ Get-ChildItem -Path $sitePackages -ErrorAction SilentlyContinue |
     Where-Object { $name = $_.Name; $buildOnlyPatterns | Where-Object { $name -like $_ } } |
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 if (Test-Path "$binPythonDir\Scripts") { Remove-Item "$binPythonDir\Scripts" -Recurse -Force }
-if (Test-Path "$binPythonDir\get-pip.py") { Remove-Item "$binPythonDir\get-pip.py" -Force }
+
+# -------------------------------------------------------------------------
+# 8. Post-prune Version & Tiny Report Verification
+# -------------------------------------------------------------------------
+# The release artifact is only valid if pruning preserved both version
+# provenance and the complete report-generation path used by the extension.
+Write-Host "Running post-prune bundle verification..."
+
+$versionMatch = Select-String -Path "$workspaceRoot\pyproject.toml" -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+if ($null -eq $versionMatch) { throw "Could not read the project version from pyproject.toml." }
+$expectedVersion = $versionMatch.Matches[0].Groups[1].Value
+
+& "$binPythonDir\python.exe" -I -c 'import sys; from diffinite import __version__; expected = sys.argv[1]; assert __version__ == expected, (__version__, expected)' $expectedVersion
+if ($LASTEXITCODE -ne 0) {
+    throw "Post-prune version check failed. diffinite package metadata was not preserved."
+}
+
+$smokeRoot = Join-Path $binPythonDir "_post_prune_smoke"
+$sourceA = Join-Path $smokeRoot "source-a"
+$sourceB = Join-Path $smokeRoot "source-b"
+$reportPath = Join-Path $smokeRoot "report.json"
+$pdfPath = Join-Path $smokeRoot "report.pdf"
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+
+try {
+    New-Item -ItemType Directory -Path $sourceA, $sourceB -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $sourceA "sample.py"), "def value():`n    return 1`n", $utf8NoBom)
+    [System.IO.File]::WriteAllText((Join-Path $sourceB "sample.py"), "def value():`n    return 2`n", $utf8NoBom)
+
+    # One worker is the documented minimum and keeps this release smoke test
+    # deterministic on constrained GitHub-hosted Windows runners.
+    & "$binPythonDir\python.exe" -I -m diffinite $sourceA $sourceB `
+        --report-json $reportPath `
+        --report-pdf $pdfPath `
+        --workers 1
+    if ($LASTEXITCODE -ne 0) { throw "Post-prune JSON/PDF report generation failed." }
+    if (-not (Test-Path $reportPath -PathType Leaf)) {
+        throw "Post-prune report generation did not create report.json."
+    }
+    if (-not (Test-Path $pdfPath -PathType Leaf)) {
+        throw "Post-prune report generation did not create report.pdf."
+    }
+
+    $smokeReport = Get-Content -Path $reportPath -Raw | ConvertFrom-Json
+    if ($null -eq $smokeReport.schema_version -or
+        $null -eq $smokeReport.summary -or
+        $smokeReport.analysis_status.state -ne "complete") {
+        throw "Post-prune report.json failed its schema/completeness smoke check."
+    }
+
+    # The PDF contract requires both serialized bytes and at least one readable page.
+    & "$binPythonDir\python.exe" -I -c 'import sys; from pathlib import Path; from pypdf import PdfReader; path = Path(sys.argv[1]); reader = PdfReader(path); assert path.stat().st_size > 0 and len(reader.pages) > 0' $pdfPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "Post-prune report.pdf is empty or unreadable."
+    }
+}
+finally {
+    if (Test-Path $smokeRoot) { Remove-Item $smokeRoot -Recurse -Force }
+}
 
 Write-Host "=========================================================="
 Write-Host "✓ SUCCESS: Bundle built and verified successfully."

@@ -6,8 +6,9 @@ Flow: Tokenize → K-gram → Rolling Hash → Winnow → Fingerprint Set
 Core guarantee:
     **Density guarantee** -- if two documents share a common substring of
     >= (W + K - 1) tokens, at least one common fingerprint is produced.
-    With the current settings (K=5, W=4), any shared run of >= 8 tokens is
-    guaranteed to be detected.
+    With the current settings (K=5, W=4), any shared run of >= 8 tokens yields
+    a shared fingerprint. Whether the file pair is *reported* still depends on
+    the Deep Compare threshold.
 
 Reference:
     Schleimer, Wilkerson, Aiken. "Winnowing: Local Algorithms for Document
@@ -36,20 +37,23 @@ logger = logging.getLogger(__name__)
 # 핵심 상수
 # ──────────────────────────────────────────────────────────────────────
 DEFAULT_K: int = 5
-"""K-gram 크기. grid search(SQLite 250K-line, AOSP Java)에서 최적값 도출.
-K=5: Jaccard 0.9904, 최고 속도, line-level ratio 대비 gap < 12pp.
+"""K-gram 크기 (noise threshold: K 토큰 미만의 공유 구간은 매칭되지 않는다).
+근거: Schleimer 2003은 코드용 k 값을 정하지 않고 문서 집합별 실험 선택을 권한다(§5).
+K=5는 IR-Plag 보정 프로파일(calibration.NORMALIZE_CALIBRATION_K)에 고정된 값이다 —
+과거 grid search 산출물은 저장소에 남아 있지 않으므로 근거로 인용하지 않는다.
 K↑ = 정밀도↑ 재현율↓ (긴 공유 시퀀스만 탐지), K↓ = 재현율↑ 정밀도↓ (노이즈 증가)."""
 
 DEFAULT_W: int = 4
-"""Winnowing 윈도우 크기. W=4 → 밀도 보장 길이 = W+K-1 = 8 토큰.
+"""Winnowing 윈도우 크기. W=4 → 밀도 보장 길이 = W+K-1 = 8 토큰 (Schleimer 2003 §3).
 W↑ = 핑거프린트 수↓ (속도↑ 정밀도↓), W↓ = 핑거프린트 수↑ (속도↓ 정밀도↑)."""
 
 HASH_BASE: int = 257
-"""Rabin 다항식 해시의 밑(base). 소수 사용으로 분포 균일성 확보."""
+"""Karp-Rabin 다항식 롤링 해시의 밑(base). 토큰 해시 알파벳보다 크기만 하면 되며 튜닝 대상이 아니다."""
 
 HASH_MOD: int = (1 << 61) - 1
 """해시 모듈러. Mersenne 소수 2^61-1 사용 — Python의 `pow(base, exp, mod)`로
-효율적 모듈러 지수 연산 가능. 충돌 확률 ≈ 1/2^61."""
+효율적 모듈러 지수 연산 가능. 밑이 고정이므로 확률적 보장은 없으며, 일반(비적대적)
+입력에서 충돌이 무시할 수준이라는 뜻이다 — 암호학적 보장이 아니다."""
 
 # FNV offset basis and prime for 64-bit (Fowler-Noll-Vo, 1991).
 _FNV1A_OFFSET = 0xcbf29ce484222325
@@ -236,8 +240,8 @@ def tokenize(
         문자는 일반 식별자/리터럴로 토큰화된다. 따라서 문자열 값만 바뀐 클론은
         정규화 후에도 서로 다른 핑거프린트를 가질 수 있다(식별자 변경에는 둔감).
 
-        입력 ``source``는 이미 주석이 제거된 텍스트여야 한다.
-        ``parser.strip_comments()``를 먼저 호출할 것.
+        주석은 여기서 제거하지 않는다. 입력에 남은 주석은 코드처럼 지문에 포함되므로,
+        제외하려면 ``parser.strip_comments()``를 먼저 호출할 것.
     """
     raw_tokens = TOKEN_RE.findall(source)
     if not normalize:
@@ -352,7 +356,7 @@ def extract_fingerprints(
     ``tokenize → rolling_hash → winnow`` 파이프라인을 실행한다.
 
     Args:
-        source: 주석 제거된 소스코드.
+        source: 소스코드 (주석 제거 여부는 호출자가 결정한다).
         k: K-gram 크기 (>= 1).
         w: Winnowing 윈도우 크기 (>= 1).
         normalize: True이면 Type-2 클론 탐지용 토큰 정규화 적용.
