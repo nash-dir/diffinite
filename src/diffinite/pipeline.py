@@ -55,6 +55,7 @@ from diffinite.deep_compare import run_deep_compare
 from diffinite.differ import compute_diff, generate_html_diff, read_file
 from diffinite.evidence import (
     _logical_report_paths,
+    _path_is_redirect,
     _sha256_file,
     _safe_relative_parts,
     compute_file_hashes,
@@ -89,12 +90,6 @@ from diffinite.pdf_gen import (
 logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
-
-
-def _path_is_redirect(path: Path) -> bool:
-    """Return whether a path is a symlink or Windows junction."""
-    is_junction = getattr(path, "is_junction", None)
-    return path.is_symlink() or bool(is_junction and is_junction())
 
 
 def _tree_contains_redirect(root: Path) -> bool:
@@ -2116,7 +2111,7 @@ def run_pipeline(
     binary_handling: str = "hash",
     # Ignore list
     ignore_file: str | None = None,
-    # Phase 1/2 Architecture
+    # Metrics-only output and JSON file filter
     metrics_only: bool = False,
     filter_json: str | None = None,
     # Stability & Forensics
@@ -2451,234 +2446,240 @@ def run_pipeline(
     # cannot silently produce a successful evidence artifact.
     snapshot_tmp = tempfile.TemporaryDirectory(prefix="diffinite_snapshot_")
     snapshot_base = Path(snapshot_tmp.name)
-    analysis_dir_a = create_immutable_snapshot(
-        dir_a,
-        files_a,
-        hashes_a,
-        str(snapshot_base / "source_a"),
-    )
-    analysis_dir_b = create_immutable_snapshot(
-        dir_b,
-        files_b,
-        hashes_b,
-        str(snapshot_base / "source_b"),
-    )
-    verify_snapshot_matches_manifest(analysis_dir_a, hashes_a, side="A")
-    verify_snapshot_matches_manifest(analysis_dir_b, hashes_b, side="B")
-
-    # Build hash table HTML if --hash requested
-    hash_table_html: str | None = None
-    if embed_hash:
-        hash_table_html = build_hash_table_html(hashes_a, hashes_b)
-
-    # --- Phase 1/2: Filter target files if provided ---
-    if target_files is not None:
-        logger.info("Step 1c: Filtering target files via %s …", filter_json)
-
-        # Keep only matches where file A is in the target list
-        matches = [m for m in matches if m.rel_path_a in target_files]
-        # Clear out unmatched since we are selectively rendering
-        unmatched_a = [fa for fa in unmatched_a if fa in target_files]
-        unmatched_b = []  # Omit from selective report
-        logger.info("  Filtered down to %d target pair(s)", len(matches))
-
-    analysis_status.diff_requested_pair_count = len(matches)
-
-    unit = "word" if by_word else "line"
-
-    # Steps 2-4 — read, preprocess, diff, collect line counts (PARALLEL)
-    results: list[DiffResult] = []
-    all_line_counts: list[int] = []
-
-    num_workers = min(workers, len(matches)) if workers > 1 else 1
-    if num_workers <= 1:
-        req, lines, errs = _process_match_chunk(
-            1,
-            matches,
-            analysis_dir_a,
-            analysis_dir_b,
-            encoding,
-            binary_handling,
-            strip_comments,
-            squash_blanks,
-            by_word,
-            autojunk,
-            metrics_only,
-            collapse_identical,
-            detect_moved,
-            max_file_size_mb,
-            normalize_ws=normalize_ws,
-            max_diff_html_size_mb=max_diff_html_size_mb,
+    # Until _OutputTransaction owns this directory, remove the plaintext source
+    # copy here: on failure it must not wait for garbage collection.
+    try:
+        analysis_dir_a = create_immutable_snapshot(
+            dir_a,
+            files_a,
+            hashes_a,
+            str(snapshot_base / "source_a"),
         )
-        results.extend(req)
-        all_line_counts.extend(lines)
-        unreadable_errors.extend(errs)
-    else:
-        logger.info("Spawning ProcessPoolExecutor with %d workers for rendering.", num_workers)
-        import concurrent.futures
-
-        chunk_size = max(1, len(matches) // num_workers)
-        chunks = [matches[i : i + chunk_size] for i in range(0, len(matches), chunk_size)]
-
-        with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
-            futures = []
-            chunk_file_counts = []  # track how many files each worker was assigned
-            for i, chunk in enumerate(chunks):
-                chunk_file_counts.append(len(chunk))
-                futures.append(
-                    executor.submit(
-                        _process_match_chunk,
-                        i + 1,
-                        chunk,
-                        analysis_dir_a,
-                        analysis_dir_b,
-                        encoding,
-                        binary_handling,
-                        strip_comments,
-                        squash_blanks,
-                        by_word,
-                        autojunk,
-                        metrics_only,
-                        collapse_identical,
-                        detect_moved,
-                        max_file_size_mb,
-                        normalize_ws,
-                        max_diff_html_size_mb,
-                    )
-                )
-
-            crashed_workers = 0
-            lost_file_count = 0
-            for idx, future in enumerate(futures):
-                try:
-                    req, lines, errs = future.result()
-                    results.extend(req)
-                    all_line_counts.extend(lines)
-                    unreadable_errors.extend(errs)
-                except Exception as exc:
-                    crashed_workers += 1
-                    lost = chunk_file_counts[idx]
-                    lost_file_count += lost
-                    logger.error(
-                        "⚠ Worker %d CRASHED — %d file pair(s) lost from report: %s",
-                        idx + 1,
-                        lost,
-                        exc,
-                    )
-                    for match in chunks[idx]:
-                        analysis_status.diff_failed_pairs.append(
-                            {
-                                "file_a": match.rel_path_a,
-                                "file_b": match.rel_path_b,
-                                "reason": f"worker-failure: {exc}",
-                            }
-                        )
-
-            if lost_file_count > 0:
-                analysis_status.mark_incomplete("diff-worker-failure")
-                logger.warning(
-                    "⚠ INTEGRITY WARNING: %d worker(s) crashed, "
-                    "%d of %d file pair(s) are MISSING from the final report.",
-                    crashed_workers,
-                    lost_file_count,
-                    len(matches),
-                )
-            if crashed_workers and not allow_partial:
-                raise RuntimeError(
-                    f"{crashed_workers} rendering worker(s) crashed and "
-                    f"{lost_file_count} pair(s) are missing; refusing a partial report. "
-                    "Use --allow-partial to emit an explicitly incomplete report."
-                )
-
-    total_files = len(results)
-    # A policy-excluded binary/oversized pair was still processed successfully;
-    # only worker-crashed pairs are absent from the processing count.
-    analysis_status.diff_successful_pair_count = analysis_status.diff_requested_pair_count - len(
-        analysis_status.diff_failed_pairs
-    )
-    analysis_status.diff_truncated_count = sum(
-        1 for result in results if result.html_diff_truncated
-    )
-    if analysis_status.diff_truncated_count:
-        analysis_status.mark_incomplete("diff-payload-truncated")
-
-    if not metrics_only:
-        # Diagnostic only: each HTML diff page sizes its own line-number column
-        # in the worker, so there is no single applied width to thread here.
-        logger.info("  Max line-number column width: %dpx", _compute_ln_col_width(all_line_counts))
-
-    # ── Sort results ──────────────────────────────────────────────
-    if sort_by:
-        reverse = sort_order == "desc"
-        if sort_by == "filename":
-            results.sort(
-                key=lambda r: _natural_sort_key(PurePosixPath(r.match.rel_path_a).name),
-                reverse=reverse,
-            )
-        elif sort_by == "path":
-            results.sort(key=lambda r: _natural_sort_key(r.match.rel_path_a), reverse=reverse)
-        elif sort_by == "similarity":
-            results.sort(key=lambda r: r.match.similarity, reverse=reverse)
-        elif sort_by == "ratio":
-            results.sort(key=lambda r: r.ratio, reverse=reverse)
-        logger.info("  Sorted by %s (%s)", sort_by, sort_order)
-
-    # Deep Compare (only in deep mode)
-    deep_results = None
-    if exec_mode == "deep":
-        logger.info("Step 4b: Running Deep Compare (N:M cross-matching) …")
-        deep_status: dict = {}
-        deep_files_a = (
-            files_a if target_files is None else [path for path in files_a if path in target_files]
+        analysis_dir_b = create_immutable_snapshot(
+            dir_b,
+            files_b,
+            hashes_b,
+            str(snapshot_base / "source_b"),
         )
-        if deep_files_a or target_files is None:
-            deep_results = run_deep_compare(
+        verify_snapshot_matches_manifest(analysis_dir_a, hashes_a, side="A")
+        verify_snapshot_matches_manifest(analysis_dir_b, hashes_b, side="B")
+
+        # Build hash table HTML if --hash requested
+        hash_table_html: str | None = None
+        if embed_hash:
+            hash_table_html = build_hash_table_html(hashes_a, hashes_b)
+
+        # --- Restrict the analysis to the files named by --filter-json ---
+        if target_files is not None:
+            logger.info("Step 1c: Filtering target files via %s …", filter_json)
+
+            # Keep only matches where file A is in the target list
+            matches = [m for m in matches if m.rel_path_a in target_files]
+            # Clear out unmatched since we are selectively rendering
+            unmatched_a = [fa for fa in unmatched_a if fa in target_files]
+            unmatched_b = []  # Omit from selective report
+            logger.info("  Filtered down to %d target pair(s)", len(matches))
+
+        analysis_status.diff_requested_pair_count = len(matches)
+
+        unit = "word" if by_word else "line"
+
+        # Steps 2-4 — read, preprocess, diff, collect line counts (PARALLEL)
+        results: list[DiffResult] = []
+        all_line_counts: list[int] = []
+
+        num_workers = min(workers, len(matches)) if workers > 1 else 1
+        if num_workers <= 1:
+            req, lines, errs = _process_match_chunk(
+                1,
+                matches,
                 analysis_dir_a,
                 analysis_dir_b,
-                deep_files_a,
-                files_b,
-                k=kgram_size,
-                w=window_size,
-                workers=workers,
-                min_jaccard=min_jaccard,
-                normalize=normalize,
-                lang_aware=lang_aware,
-                max_index_entries=max_index_entries,
-                max_file_size_mb=max_file_size_mb,
-                strip_comments=strip_comments,
-                encoding=encoding,
-                allow_partial=allow_partial,
-                status=deep_status,
+                encoding,
+                binary_handling,
+                strip_comments,
+                squash_blanks,
+                by_word,
+                autojunk,
+                metrics_only,
+                collapse_identical,
+                detect_moved,
+                max_file_size_mb,
+                normalize_ws=normalize_ws,
+                max_diff_html_size_mb=max_diff_html_size_mb,
             )
+            results.extend(req)
+            all_line_counts.extend(lines)
+            unreadable_errors.extend(errs)
         else:
-            deep_results = []
-            deep_status.update(
-                {
-                    "requested_file_count": 0,
-                    "successful_file_count": 0,
-                    "failed_files": [],
-                    "index_truncated": False,
-                }
+            logger.info("Spawning ProcessPoolExecutor with %d workers for rendering.", num_workers)
+            import concurrent.futures
+
+            chunk_size = max(1, len(matches) // num_workers)
+            chunks = [matches[i : i + chunk_size] for i in range(0, len(matches), chunk_size)]
+
+            with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
+                futures = []
+                chunk_file_counts = []  # track how many files each worker was assigned
+                for i, chunk in enumerate(chunks):
+                    chunk_file_counts.append(len(chunk))
+                    futures.append(
+                        executor.submit(
+                            _process_match_chunk,
+                            i + 1,
+                            chunk,
+                            analysis_dir_a,
+                            analysis_dir_b,
+                            encoding,
+                            binary_handling,
+                            strip_comments,
+                            squash_blanks,
+                            by_word,
+                            autojunk,
+                            metrics_only,
+                            collapse_identical,
+                            detect_moved,
+                            max_file_size_mb,
+                            normalize_ws,
+                            max_diff_html_size_mb,
+                        )
+                    )
+
+                crashed_workers = 0
+                lost_file_count = 0
+                for idx, future in enumerate(futures):
+                    try:
+                        req, lines, errs = future.result()
+                        results.extend(req)
+                        all_line_counts.extend(lines)
+                        unreadable_errors.extend(errs)
+                    except Exception as exc:
+                        crashed_workers += 1
+                        lost = chunk_file_counts[idx]
+                        lost_file_count += lost
+                        logger.error(
+                            "⚠ Worker %d CRASHED — %d file pair(s) lost from report: %s",
+                            idx + 1,
+                            lost,
+                            exc,
+                        )
+                        for match in chunks[idx]:
+                            analysis_status.diff_failed_pairs.append(
+                                {
+                                    "file_a": match.rel_path_a,
+                                    "file_b": match.rel_path_b,
+                                    "reason": f"worker-failure: {exc}",
+                                }
+                            )
+
+                if lost_file_count > 0:
+                    analysis_status.mark_incomplete("diff-worker-failure")
+                    logger.warning(
+                        "⚠ INTEGRITY WARNING: %d worker(s) crashed, "
+                        "%d of %d file pair(s) are MISSING from the final report.",
+                        crashed_workers,
+                        lost_file_count,
+                        len(matches),
+                    )
+                if crashed_workers and not allow_partial:
+                    raise RuntimeError(
+                        f"{crashed_workers} rendering worker(s) crashed and "
+                        f"{lost_file_count} pair(s) are missing; refusing a partial report. "
+                        "Use --allow-partial to emit an explicitly incomplete report."
+                    )
+
+        total_files = len(results)
+        # A policy-excluded binary/oversized pair was still processed successfully;
+        # only worker-crashed pairs are absent from the processing count.
+        analysis_status.diff_successful_pair_count = analysis_status.diff_requested_pair_count - len(
+            analysis_status.diff_failed_pairs
+        )
+        analysis_status.diff_truncated_count = sum(
+            1 for result in results if result.html_diff_truncated
+        )
+        if analysis_status.diff_truncated_count:
+            analysis_status.mark_incomplete("diff-payload-truncated")
+
+        if not metrics_only:
+            # Diagnostic only: each HTML diff page sizes its own line-number column
+            # in the worker, so there is no single applied width to thread here.
+            logger.info("  Max line-number column width: %dpx", _compute_ln_col_width(all_line_counts))
+
+        # ── Sort results ──────────────────────────────────────────────
+        if sort_by:
+            reverse = sort_order == "desc"
+            if sort_by == "filename":
+                results.sort(
+                    key=lambda r: _natural_sort_key(PurePosixPath(r.match.rel_path_a).name),
+                    reverse=reverse,
+                )
+            elif sort_by == "path":
+                results.sort(key=lambda r: _natural_sort_key(r.match.rel_path_a), reverse=reverse)
+            elif sort_by == "similarity":
+                results.sort(key=lambda r: r.match.similarity, reverse=reverse)
+            elif sort_by == "ratio":
+                results.sort(key=lambda r: r.ratio, reverse=reverse)
+            logger.info("  Sorted by %s (%s)", sort_by, sort_order)
+
+        # Deep Compare (only in deep mode)
+        deep_results = None
+        if exec_mode == "deep":
+            logger.info("Step 4b: Running Deep Compare (N:M cross-matching) …")
+            deep_status: dict = {}
+            deep_files_a = (
+                files_a if target_files is None else [path for path in files_a if path in target_files]
             )
-        analysis_status.deep_requested_file_count = deep_status.get(
-            "requested_file_count", len(deep_files_a) + len(files_b)
-        )
-        analysis_status.deep_successful_file_count = deep_status.get(
-            "successful_file_count", analysis_status.deep_requested_file_count
-        )
-        analysis_status.deep_failed_files.extend(deep_status.get("failed_files", []))
-        analysis_status.deep_skipped_binary_files.extend(
-            deep_status.get("skipped_binary_files", [])
-        )
-        if analysis_status.deep_failed_files:
-            analysis_status.mark_incomplete("deep-file-or-worker-failure")
-        # Surface index truncation so a capped run is not read as complete.
-        if deep_status.get("index_truncated") and metadata is not None:
-            metadata = dataclasses.replace(metadata, deep_index_truncated=True)
-            analysis_status.deep_index_truncated = True
-            analysis_status.mark_incomplete("deep-index-truncated")
-    elif exec_mode == "simple":
-        logger.info("Step 4b: Skipped (simple mode — no Winnowing)")
+            if deep_files_a or target_files is None:
+                deep_results = run_deep_compare(
+                    analysis_dir_a,
+                    analysis_dir_b,
+                    deep_files_a,
+                    files_b,
+                    k=kgram_size,
+                    w=window_size,
+                    workers=workers,
+                    min_jaccard=min_jaccard,
+                    normalize=normalize,
+                    lang_aware=lang_aware,
+                    max_index_entries=max_index_entries,
+                    max_file_size_mb=max_file_size_mb,
+                    strip_comments=strip_comments,
+                    encoding=encoding,
+                    allow_partial=allow_partial,
+                    status=deep_status,
+                )
+            else:
+                deep_results = []
+                deep_status.update(
+                    {
+                        "requested_file_count": 0,
+                        "successful_file_count": 0,
+                        "failed_files": [],
+                        "index_truncated": False,
+                    }
+                )
+            analysis_status.deep_requested_file_count = deep_status.get(
+                "requested_file_count", len(deep_files_a) + len(files_b)
+            )
+            analysis_status.deep_successful_file_count = deep_status.get(
+                "successful_file_count", analysis_status.deep_requested_file_count
+            )
+            analysis_status.deep_failed_files.extend(deep_status.get("failed_files", []))
+            analysis_status.deep_skipped_binary_files.extend(
+                deep_status.get("skipped_binary_files", [])
+            )
+            if analysis_status.deep_failed_files:
+                analysis_status.mark_incomplete("deep-file-or-worker-failure")
+            # Surface index truncation so a capped run is not read as complete.
+            if deep_status.get("index_truncated") and metadata is not None:
+                metadata = dataclasses.replace(metadata, deep_index_truncated=True)
+                analysis_status.deep_index_truncated = True
+                analysis_status.mark_incomplete("deep-index-truncated")
+        elif exec_mode == "simple":
+            logger.info("Step 4b: Skipped (simple mode — no Winnowing)")
+    except BaseException:
+        snapshot_tmp.cleanup()
+        raise
 
     # ── Output generation ─────────────────────────────────────────────
     output_transaction = _OutputTransaction(

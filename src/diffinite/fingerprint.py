@@ -6,8 +6,9 @@ Flow: Tokenize → K-gram → Rolling Hash → Winnow → Fingerprint Set
 Core guarantee:
     **Density guarantee** -- if two documents share a common substring of
     >= (W + K - 1) tokens, at least one common fingerprint is produced.
-    With the current settings (K=5, W=4), any shared run of >= 8 tokens is
-    guaranteed to be detected.
+    With the current settings (K=5, W=4), any shared run of >= 8 tokens yields
+    a shared fingerprint. Whether the file pair is *reported* still depends on
+    the Deep Compare threshold.
 
 Reference:
     Schleimer, Wilkerson, Aiken. "Winnowing: Local Algorithms for Document
@@ -239,8 +240,8 @@ def tokenize(
         문자는 일반 식별자/리터럴로 토큰화된다. 따라서 문자열 값만 바뀐 클론은
         정규화 후에도 서로 다른 핑거프린트를 가질 수 있다(식별자 변경에는 둔감).
 
-        입력 ``source``는 이미 주석이 제거된 텍스트여야 한다.
-        ``parser.strip_comments()``를 먼저 호출할 것.
+        주석은 여기서 제거하지 않는다. 입력에 남은 주석은 코드처럼 지문에 포함되므로,
+        제외하려면 ``parser.strip_comments()``를 먼저 호출할 것.
     """
     raw_tokens = TOKEN_RE.findall(source)
     if not normalize:
@@ -355,7 +356,7 @@ def extract_fingerprints(
     ``tokenize → rolling_hash → winnow`` 파이프라인을 실행한다.
 
     Args:
-        source: 주석 제거된 소스코드.
+        source: 소스코드 (주석 제거 여부는 호출자가 결정한다).
         k: K-gram 크기 (>= 1).
         w: Winnowing 윈도우 크기 (>= 1).
         normalize: True이면 Type-2 클론 탐지용 토큰 정규화 적용.

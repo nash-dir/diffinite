@@ -1,4 +1,8 @@
-"""Small CI smoke test from the public Karnalim IR-Plag case-01 fixture."""
+"""Identity smoke test using one public Karnalim IR-Plag case-01 file.
+
+Both sides hold the same text, so this proves only that an identical file clears
+the normalize auto threshold. It is not evidence about real L1 modifications.
+"""
 
 from pathlib import Path
 
@@ -23,7 +27,7 @@ public class T1 {
 
 
 def test_ir_plag_case01_near_verbatim_smoke(tmp_path: Path):
-    """Current normalize auto operating point still surfaces an L1 copy."""
+    """An identical file still clears the normalize auto operating point."""
     original = tmp_path / "original"
     candidate = tmp_path / "plagiarized" / "L1" / "04"
     original.mkdir()

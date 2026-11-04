@@ -6,6 +6,7 @@ import json
 import hashlib
 import os
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -1103,3 +1104,43 @@ def test_manifest_digest_failure_restores_old_and_removes_new_outputs(
     assert not manifest.exists()
     assert snapshot_roots
     assert not snapshot_roots[0].parent.exists()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="NTFS junctions are Windows-only")
+def test_real_windows_junction_is_detected_on_every_python(tmp_path):
+    """Path.is_junction needs Python 3.12; detection must not depend on it."""
+    import _winapi
+
+    from diffinite.evidence import _path_is_redirect
+
+    target = tmp_path / "target"
+    target.mkdir()
+    junction = tmp_path / "junction"
+    _winapi.CreateJunction(str(target), str(junction))
+    assert _path_is_redirect(junction) is True
+    assert _path_is_redirect(target) is False
+    assert _path_is_redirect(tmp_path / "missing") is False
+
+
+def test_failed_analysis_removes_the_plaintext_snapshot_immediately(tmp_path, monkeypatch):
+    """A failure before the output transaction must not leave source copies in temp."""
+    import tempfile
+
+    import diffinite.pipeline as pipeline
+
+    temp_root = tmp_path / "temp"
+    temp_root.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(temp_root))
+    left, right = _paired_dirs(tmp_path)
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("forced analysis failure")
+
+    monkeypatch.setattr(pipeline, "run_deep_compare", fail)
+    with pytest.raises(RuntimeError, match="forced analysis failure") as caught:
+        pipeline.run_pipeline(
+            dir_a=str(left), dir_b=str(right), report_json=str(tmp_path / "r.json"), workers=1
+        )
+    # `caught` keeps the traceback alive, so only an explicit cleanup can pass this.
+    assert caught.value
+    assert list(temp_root.glob("diffinite_snapshot_*")) == []

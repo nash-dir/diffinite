@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import shutil
+import stat
 import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -63,8 +64,16 @@ def _validate_archive_path(path: str, *, label: str) -> None:
 
 def _path_is_redirect(path: Path) -> bool:
     """Return whether *path* is a symlink or a Windows junction."""
-    is_junction = getattr(path, "is_junction", None)
-    return path.is_symlink() or bool(is_junction and is_junction())
+    if path.is_symlink():
+        return True
+    # Path.is_junction() exists only from Python 3.12. The reparse tag gives the
+    # same answer on every supported version, and matching the mount-point tag
+    # exactly keeps other reparse points (e.g. OneDrive placeholders) allowed.
+    try:
+        reparse_tag = getattr(os.lstat(path), "st_reparse_tag", 0)
+    except OSError:
+        return False
+    return reparse_tag != 0 and reparse_tag == getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", None)
 
 
 def _lexical_absolute(path: str | Path) -> Path:

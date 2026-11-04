@@ -4,8 +4,9 @@
 ``Pygments``로 구문 강조된 side-by-side HTML diff 테이블을 생성한다.
 
 성능 특성:
-    ``autojunk=True``를 사용하여 12K-line 파일에서 **1,824× 성능 향상**,
-    정확도 손실 < 0.03%.  대규모 소스코드 쌍에서도 초 단위 처리.
+    ``autojunk=True``(기본값)는 대규모 파일 비교를 크게 빠르게 한다. 다만 200줄
+    이상 파일에서 1%를 넘게 등장하는 줄을 매칭에서 제외하므로, 같은 줄이 반복되는
+    파일의 일치율을 낮출 수 있다. 정확한 비율이 필요하면 ``--no-autojunk``를 쓴다.
 
 의존:
     - ``difflib``:  표준 라이브러리 (SequenceMatcher)
@@ -28,7 +29,7 @@ from typing import Optional, Tuple
 
 from pygments import highlight as _pygments_highlight
 from pygments.formatters import HtmlFormatter
-from pygments.lexers import get_lexer_by_name, get_lexer_for_filename, TextLexer
+from pygments.lexers import get_lexer_for_filename, TextLexer
 from pygments.util import ClassNotFound
 
 from charset_normalizer import from_bytes
@@ -69,7 +70,7 @@ def normalize_whitespace(text: str) -> str:
     normalized = []
     for line in lines:
         # 탭 → 4-스페이스 후, 본문/개행 분리 → 연속 공백 축소 + 선행 들여쓰기 제거
-        line = line.expandtabs(4)
+        line = line.expandtabs(4)  # 표시·공백 정규화 규약값: 측정값이 아니며 탭 폭만 통일한다
         for eol in ("\r\n", "\n", "\r"):
             if line.endswith(eol):
                 body = line[:-len(eol)]
@@ -103,6 +104,10 @@ def detect_moved_blocks(
     gap_tolerance: int = 1,
 ) -> list[MovedBlock]:
     """delete/insert 블록 간 이동된 코드 블록을 탐지한다.
+
+    세 기본값은 표시용 휴리스틱이다(측정으로 보정된 값이 아니며 유사도 점수에
+    영향을 주지 않는다): 3줄 미만·3회 초과 반복 줄은 이동으로 표시하지 않고,
+    1줄 틈까지는 한 블록으로 묶는다.
 
     알고리즘:
         1. opcodes에서 delete/insert 줄들을 수집 (replace의 잔여줄 포함)
@@ -139,10 +144,6 @@ def detect_moved_blocks(
 
     if not deleted_lines or not inserted_lines:
         return []
-
-    # deleted/inserted 줄 집합 (빠른 lookup용)
-    del_set = set(deleted_lines)
-    ins_set = set(inserted_lines)
 
     # Step 2: deleted 줄의 정규화 해시 인덱스 구축
     # 보일러플레이트도 인덱스에 포함 — 블록 내에서 연속성을 유지하기 위함.
@@ -301,7 +302,8 @@ def read_file(path: str, encoding: str | None = None) -> Optional[str]:
     result = from_bytes(raw).best()
     if result is not None:
         # M3: 신뢰도 검증 — chaos가 높으면 오탐 가능성이 높으므로 fallback 사용
-        if result.chaos > 0.3:  # 30% 이상 비정합 문자 → 인코딩 오탐 가능성
+        # 운영 휴리스틱(측정으로 보정한 값 아님): 비정합 문자 30% 초과면 다른 인코딩을 시도
+        if result.chaos > 0.3:
             logger.debug(
                 "charset_normalizer detected %s for %s but chaos=%.2f — trying fallback",
                 result.encoding, path, result.chaos,

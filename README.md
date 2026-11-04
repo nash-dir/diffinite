@@ -66,7 +66,7 @@ pip install -e ".[dev]"
 | **CLI** (`pip install diffinite`) | ✅ supported | ✅ tested in CI | ◯ expected to work (pure Python; not in CI) |
 | **VS Code extension** | ✅ bundles an embedded Python runtime; primary tested target | △ via system Python (`pip install diffinite` + `diffinite.pythonPath`); not officially tested | △ same as Linux; not officially tested |
 
-The published VS Code extension is packaged for **Windows** (`win32-x64`) and ships the embedded runtime. On macOS/Linux, use the CLI directly, or point the extension at your own interpreter via the `diffinite.pythonPath` setting. The CLI itself is pure Python and platform-independent.
+The VS Code extension is published for `win32-x64`, `linux-x64` and `darwin-arm64`, but only the **Windows** package ships the embedded runtime. On macOS/Linux, use the CLI directly, or point the extension at your own interpreter via the `diffinite.pythonPath` setting. The CLI itself is pure Python and platform-independent.
 
 ---
 
@@ -573,6 +573,8 @@ Diffinite implements the paper's basic winnowing (rightmost minimal hash per win
 - **Normalization is language-agnostic**: `--normalize` keeps a single, shared keyword list verbatim (including primitive types such as `int`/`double` and words such as `from`/`in`). Changing a Java `double` to `long`, or renaming a variable to a word that is a keyword in another language, therefore still lowers the normalized score; string contents are tokenized rather than replaced. `--lang-aware` handles these per language but is not the calibrated profile.
 - **Order-insensitive deep score**: the fingerprint *set* ignores global order, so reordering whole functions barely changes Jaccard (token order *within* each K-token gram still matters). The line-level diff, by contrast, drops sharply under reordering.
 - **Deep channel gives "how much", not "where"**: Deep Compare reports file-level scores only. Line-level locations come from the 1:1 diff of name-paired files; an N:M match between differently named files has no line ranges.
+- **Temporary copy of the sources**: each run copies both source trees (and any prior evidence bundle) in plaintext to the system temp directory so it can verify them before and after analysis. The copy is removed afterwards, but this matters under confidentiality obligations; point `TEMP`/`TMPDIR` at an approved location if needed.
+- **CSV escaping**: a leading apostrophe on a CSV cell (e.g. `'-foo.c`) is a formula-injection escape, not part of the file name.
 - **Comments and docstrings**: without `--strip-comments`, comments and license headers are fingerprinted (a shared license header alone can produce a substantial Jaccard). Python docstrings are string literals and are kept even with `--strip-comments`.
 - **No corpus-based analysis**: Each comparison is pairwise. There is no built-in corpus-wide frequency weighting (e.g., TF-IDF) to down-weight common idioms.
 - **Binary and obfuscated code**: Not supported. Diffinite operates on source code text only.

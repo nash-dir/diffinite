@@ -29,6 +29,8 @@ const activeProcesses = new ActiveProcessRegistry<DiffiniteProcess>();
 // VS Code caps deactivation at 5s; 4s leaves its final second for cleanup and log flushing.
 // Source: microsoft/vscode extHostExtensionService.ts (`Promise.race([timeout(5000), ...])`).
 const PROCESS_TERMINATION_TIMEOUT_MS = 4_000;
+// Display limit only: enough for a full Python traceback, small enough to bound memory.
+const STDERR_TAIL_CHARS = 8_192;
 
 interface ProcessTerminationResult {
   closed: boolean;
@@ -301,9 +303,9 @@ export async function runAnalysis(
     };
 
     proc.stderr?.on("data", (chunk: Buffer) => {
-      // Keep only the latest stream chunk so a noisy child cannot exhaust the
-      // extension host. Python tracebacks place the final exception last.
-      stderrData = chunk.toString();
+      // Keep a bounded tail so a noisy child cannot exhaust the extension host.
+      // Python tracebacks place the final exception last.
+      stderrData = (stderrData + chunk.toString()).slice(-STDERR_TAIL_CHARS);
     });
 
     proc.stdout?.on("data", (chunk: Buffer) => {

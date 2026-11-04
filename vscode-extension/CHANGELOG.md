@@ -25,6 +25,10 @@
 - When one file of a pair has an unregistered extension (`Foo.java` vs `Foo.java.orig`), `--strip-comments` now applies the registered partner's rules to both sides.
 - `example/download_examples.py` could not fetch IR-Plag (upstream now ships a nested zip) and only targeted case-01. It now fetches all 7 cases from a pinned commit and verifies SHA-256, so the calibration corpus is reproducible.
 - Tests importing `tomllib` no longer break collection on Python 3.10.
+- Windows junctions are now detected on Python 3.10 and 3.11 too (the check relied on `Path.is_junction`, which only exists from 3.12), so an output path through a junction is refused on every supported version.
+- A failure before report writing no longer leaves the plaintext source snapshot in the temp directory until garbage collection; it is removed immediately.
+- Extension error messages keep the last 8 KB of stderr instead of only the last chunk, so a traceback is not cut mid-line.
+- `calibration.json`: the `fp_le_5` point mixed two denominators; its count and confidence interval now use the same negatives as its rate. The shipped `fp_le_1` point is unchanged, and a new test ties the constants quoted in reports to this file.
 
 ### Docs
 

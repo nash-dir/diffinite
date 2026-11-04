@@ -123,3 +123,21 @@ def test_measured_rate_is_withheld_for_unvalidated_profiles(override, mismatch):
     assert "does not apply" in disclosure.lower()
     assert f"{NORMALIZE_FP_RATE_PCT:.2g}%" not in disclosure
     assert "wilson 95% ci" not in disclosure.lower()
+
+
+def test_shipped_constants_match_the_committed_calibration_artifact():
+    """The numbers quoted in every report must equal the published artifact."""
+    import json
+    from pathlib import Path
+
+    from diffinite import calibration as c
+
+    artifact = Path(__file__).resolve().parents[1] / "example" / "validation" / "calibration.json"
+    point = json.loads(artifact.read_text(encoding="utf-8"))["fp_le_1"]
+    assert point["threshold"] == c.NORMALIZE_DEFAULT_THRESHOLD
+    assert point["floor_tokens"] == c.INCONCLUSIVE_TOKEN_FLOOR
+    assert point["fp_rate"] == c.NORMALIZE_FP_RATE_PCT
+    assert tuple(point["fp_ci95"]) == c.NORMALIZE_FP_CI95
+    assert round(point["recall"], 1) == c.NORMALIZE_RECALL_PCT
+    assert point["recall_by_level"]["L1"] == c.NORMALIZE_RECALL_NEAR_VERBATIM_PCT
+    assert point["fp_observed"] == [1, 105]  # quoted literally in the disclosure

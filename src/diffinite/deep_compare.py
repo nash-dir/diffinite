@@ -1,7 +1,7 @@
 """N:M deep cross-matching engine.
 
-Uses an **inverted index** over Winnowing fingerprints to efficiently detect
-similar code even when it has been split across or merged from multiple files.
+Uses an **inverted index** over Winnowing fingerprints to compare every A file
+with every B file, so similar code is found even when file names differ.
 
 Architecture:
     1. Extract fingerprints for all files **in parallel** via
@@ -42,7 +42,7 @@ from pathlib import Path
 from typing import Optional
 
 from diffinite.differ import read_file
-from diffinite.calibration import INCONCLUSIVE_TOKEN_FLOOR
+from diffinite.calibration import INCONCLUSIVE_TOKEN_FLOOR, RAW_LEGACY_THRESHOLD
 from diffinite.fingerprint import (
     DEFAULT_K,
     DEFAULT_W,
@@ -214,10 +214,11 @@ def run_deep_compare(
     *,
     k: int = DEFAULT_K,
     w: int = DEFAULT_W,
-    workers: int = 4,
-    min_jaccard: float = 0.05,
+    workers: int = 4,  # Operational limit, not a similarity judgment.
+    min_jaccard: float = RAW_LEGACY_THRESHOLD / 100.0,
     normalize: bool = False,
     lang_aware: bool = False,
+    # Operational limits (memory and hang protection), not similarity judgments.
     max_index_entries: int = 10_000_000,
     max_file_size_mb: float = 10.0,
     strip_comments: bool = False,

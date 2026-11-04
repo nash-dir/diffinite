@@ -145,6 +145,7 @@ All options are configurable through the built-in GUI panel:
 | **Encoding** | `auto` | Force file encoding (`euc-kr`, `utf-8`, etc.) or auto-detect |
 | **Uncompared Mode** | `inline` | How unmatched files appear: `inline`, `separate`, or `none` |
 | **Threshold** | `60` | Fuzzy file-name matching threshold (0–100) |
+| **Language-aware fingerprints** | — | Not exposed here: `--lang-aware` is available from the CLI only. |
 | **K-gram** | `5` | Winnowing K-gram size. K=5 is the value frozen in the measured calibration profile; the paper prescribes no k for source code (Schleimer 2003, §5). |
 | **Window** | `4` | Winnowing window size. Shared runs of ≥ K+W−1 tokens always share at least one fingerprint; whether the pair is listed depends on the Deep threshold. |
 | **Deep Threshold Mode** | `Auto` | Auto omits `--threshold-deep`, so Python remains the source of truth. Manual passes only the value explicitly entered by the user and is shown with `user` provenance. |

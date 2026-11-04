@@ -5,12 +5,12 @@
     "threshold": 78,
     "fp_rate": 4.65,
     "fp_ci95": [
-      1.49,
-      9.39
+      1.82,
+      11.36
     ],
     "fp_observed": [
       4,
-      105
+      86
     ],
     "recall": 34.9,
     "recall_by_level": {
