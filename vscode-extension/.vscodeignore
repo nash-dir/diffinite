@@ -14,6 +14,7 @@ tsconfig.json
 **/*.pyc
 **/*.pyo
 bin/python/Scripts/
+bin/python/Lib/site-packages/bin/**
 bin/python/Lib/site-packages/pip/
 bin/python/Lib/site-packages/pip-*/
 bin/python/Lib/site-packages/pip_licenses*/

@@ -316,6 +316,14 @@ Get-ChildItem -Path $sitePackages -ErrorAction SilentlyContinue |
     Where-Object { $name = $_.Name; $buildOnlyPatterns | Where-Object { $name -like $_ } } |
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 if (Test-Path "$binPythonDir\Scripts") { Remove-Item "$binPythonDir\Scripts" -Recurse -Force }
+# pip --target / --prefix installs put console-script launchers (pygmentize.exe,
+# xhtml2pdf.exe, ...) in site-packages\bin. The extension never runs them; it
+# only calls python.exe -m diffinite. Ship no stray executables.
+if (Test-Path "$sitePackages\bin") { Remove-Item "$sitePackages\bin" -Recurse -Force }
+$strayExe = @(Get-ChildItem -Path $sitePackages -Recurse -File -Filter "*.exe" -ErrorAction SilentlyContinue)
+if ($strayExe.Count -gt 0) {
+    throw "Unexpected .exe files remain in site-packages after pruning: $($strayExe.FullName -join ', ')"
+}
 
 # -------------------------------------------------------------------------
 # 8. Post-prune Version & Tiny Report Verification
