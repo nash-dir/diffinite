@@ -119,8 +119,10 @@ export function buildCoreArgs(opts: DiffiniteOptions): string[] {
   if (opts.hash) { args.push("--hash"); }
   if (opts.encoding && opts.encoding !== "auto") { args.push("--encoding", opts.encoding); }
   if (opts.sortBy) { args.push("--sort-by", opts.sortBy, "--sort-order", opts.sortOrder || "asc"); }
-  if (opts.batesPrefix) { args.push("--bates-prefix", opts.batesPrefix); }
-  if (opts.batesSuffix) { args.push("--bates-suffix", opts.batesSuffix); }
+  // "--flag=value" form: argparse would read a value such as "-CONFIDENTIAL"
+  // (the suffix example shown in the Options panel) as an unknown option.
+  if (opts.batesPrefix) { args.push(`--bates-prefix=${opts.batesPrefix}`); }
+  if (opts.batesSuffix) { args.push(`--bates-suffix=${opts.batesSuffix}`); }
   if (opts.batesStart > 1) { args.push("--bates-start", String(opts.batesStart)); }
   if (opts.uncomparedFiles !== "inline") { args.push("--uncompared-files", opts.uncomparedFiles); }
   if (opts.binaryHandling !== "hash") { args.push("--binary-handling", opts.binaryHandling); }
@@ -281,6 +283,7 @@ function validateLiveStatus(
   resultCount: number,
   actualDiffTruncatedCount: number,
   metadataDeepIndexTruncated: boolean,
+  binaryHandling: string,
 ): void {
   const status = requireRecord(source.analysis_status, "analysis_status");
   const state = requireString(status.state, "analysis_status.state");
@@ -338,7 +341,14 @@ function validateLiveStatus(
     status.deep, "analysis_status.deep",
     "requested_file_count", "successful_file_count", "failed_file_count", "failed_files",
   );
-  if (diff.successful !== resultCount) {
+  // pipeline.py counts a pair dropped by --binary-handling exclude as processed
+  // successfully but writes no result row for it. Only that policy may leave
+  // fewer rows than successful pairs; every other mode must match exactly.
+  if (binaryHandling === "exclude") {
+    if (resultCount > diff.successful) {
+      liveReportError("analysis_status.diff.successful_pair_count", "must be at least results.length");
+    }
+  } else if (diff.successful !== resultCount) {
     liveReportError("analysis_status.diff.successful_pair_count", "must equal results.length");
   }
 
@@ -419,6 +429,8 @@ export function parseLiveReport(raw: unknown): DiffiniteReport {
   requireBoolean(metadata.lang_aware, "metadata.lang_aware");
   requireBoolean(metadata.deep_index_truncated, "metadata.deep_index_truncated");
   requireNullableString(metadata.calibration_disclosure, "metadata.calibration_disclosure");
+  // Absent in older v2 writers: fall back to the strict equality check.
+  const binaryHandling = text(metadata.binary_handling);
 
   const results = requireArray(source.results, "results");
   results.forEach((value, index) => {
@@ -476,6 +488,7 @@ export function parseLiveReport(raw: unknown): DiffiniteReport {
     results.length,
     actualDiffTruncatedCount,
     metadata.deep_index_truncated as boolean,
+    binaryHandling,
   );
   return parseReport(source);
 }
@@ -556,6 +569,18 @@ export function parseReport(raw: unknown): DiffiniteReport {
     results, deep_results: deepResults,
     unmatched_a: strings(source.unmatched_a), unmatched_b: strings(source.unmatched_b),
   };
+}
+
+/**
+ * Display text for a pair's similarity value. Hash-only pairs (binary, or
+ * over --max-file-size) carry ratio 1.0/0.0 from a SHA-256 comparison
+ * (pipeline.py), and pairs with an error were not compared at all, so
+ * neither is shown as a content percentage.
+ */
+export function similarityText(result: ReportResult): string {
+  if (result.error !== null) { return "not compared"; }
+  if (result.binary) { return result.ratio >= 1 ? "identical (SHA-256)" : "differs (SHA-256)"; }
+  return `${(result.ratio * 100).toFixed(1)}%`;
 }
 
 export interface ReportBanner { kind: "warning" | "info"; title: string; message: string; }

@@ -7,6 +7,7 @@ import { TreeViewerPanel } from "./treeViewer";
 import { scanAndEstimate, estimatePhase2Time } from "./dirScanner";
 import { createTempJsonFile } from "./tempFiles";
 import { RunGate } from "./runGate";
+import { showFailure } from "./failureNotice";
 
 const phase1RunGate = new RunGate();
 
@@ -59,15 +60,18 @@ export async function executePipeline(
     const scan = scanAndEstimate(dirA, dirB);
     scanMsg.dispose();
   
+    // 5 MB: rough heuristic for "a side-by-side HTML diff gets slow", not measured.
+    // Non-blocking notice only; memory protection is the CLI's --max-file-size.
     if (scan.maxPairSizeMB >= 5) {
       vscode.window.showWarningMessage(
-        `Diffinite OOM Risk: Found massive file pairs (max ${scan.maxPairSizeMB.toFixed(1)}MB). ` +
-        `Rendering HTML Diff tables for files this large may take very long or exhaust memory. ` +
-        `(Est. Simple: ${scan.simpleTimeSeconds}s | Deep: ${scan.deepTimeSeconds}s)`
+        `Diffinite large-file notice: a same-path file pair is ${scan.maxPairSizeMB.toFixed(1)}MB. ` +
+        `Rendering HTML diff tables for files this large may be slow. Analysis continues. ` +
+        `(Rough est. Simple: ~${scan.simpleTimeSeconds}s | Deep: ~${scan.deepTimeSeconds}s)`
       );
     } else {
       vscode.window.showInformationMessage(
-        `Diffinite Estimate: Computed from ${scan.matchedPairsCount} matched pairs. ` +
+        `Diffinite rough estimate (${scan.matchedPairsCount} files share an identical relative path; ` +
+        `actual pairing is done by the analyzer): ` +
         `[Simple Mode: ~${scan.simpleTimeSeconds}s] [Deep Mode: ~${scan.deepTimeSeconds}s]`
       );
     }
@@ -93,7 +97,7 @@ export async function executePipeline(
     const cpuMultiplier = actualPhase1Secs / safeExpectedSecs;
 
     // Show Tree Viewer instead of Result Viewer
-      TreeViewerPanel.createOrShow(report1, async (selectedFiles) => {
+      TreeViewerPanel.createOrShow(report1, { dirA, dirB }, async (selectedFiles) => {
         // Phase 2 callback: when user clicks "Generate Final Report"
         if (selectedFiles.length === 0) {
           vscode.window.showInformationMessage("Diffinite: No files selected. Aborting.");
@@ -111,7 +115,7 @@ export async function executePipeline(
           const report2 = await vscode.window.withProgress(
           {
             location: vscode.ProgressLocation.Notification,
-            title: `Diffinite (Phase 2): Rendering targeted report (${selectedFiles.length} files, Calibrated Est. ~${phase2EstSecs}s)…`,
+            title: `Diffinite (Phase 2): Rendering targeted report (${selectedFiles.length} files, rough est. ~${phase2EstSecs}s)…`,
             cancellable: true,
           },
           (progress, token) => runAnalysis(dirA, dirB, phase2Opts, progress, token)
@@ -128,16 +132,14 @@ export async function executePipeline(
           );
 
         } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-          vscode.window.showErrorMessage("Diffinite Phase 2 failed: " + msg);
+          void showFailure("report rendering (Phase 2)", err);
         } finally {
           temporaryFilter?.cleanup();
         }
       });
 
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      vscode.window.showErrorMessage("Diffinite Phase 1 failed: " + msg);
+      void showFailure("analysis (Phase 1)", err);
     }
   } finally {
     phase1RunGate.leave();

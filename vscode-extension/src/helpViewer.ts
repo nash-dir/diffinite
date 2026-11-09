@@ -2,6 +2,7 @@
  * Help Viewer — renders a detailed English manual for Diffinite options.
  */
 import * as vscode from "vscode";
+import { THEME_CSS } from "./webviewUtils";
 
 export function showHelp(context: vscode.ExtensionContext): void {
   const panel = vscode.window.createWebviewPanel(
@@ -17,38 +18,27 @@ export function showHelp(context: vscode.ExtensionContext): void {
   <meta charset="utf-8">
   <title>Diffinite Help</title>
   <style>
-    :root {
-      --bg: #1e1e1e;
-      --bg-surface: #252526;
-      --fg: #cccccc;
-      --fg-dim: #888;
-      --accent: #0078d4;
-      --red: #f14c4c;
-      --border: #3c3c3c;
-    }
+    ${THEME_CSS}
     body {
-      font-family: "Segoe UI", -apple-system, sans-serif;
       font-size: 14px;
-      color: var(--fg);
-      background: var(--bg);
       padding: 24px;
       line-height: 1.6;
       max-width: 800px;
       margin: 0 auto;
     }
     h1 { color: var(--accent); border-bottom: 2px solid var(--accent); padding-bottom: 8px; }
-    h2 { color: #fff; margin-top: 30px; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+    h2 { color: var(--fg); margin-top: 30px; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
     h3 { color: var(--accent); margin-top: 20px; }
     ul { padding-left: 20px; list-style-type: square; }
     li { margin-bottom: 8px; }
-    code { background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px; font-family: "Consolas", monospace; font-size: 13px; color: #dcdcaa; }
-    .important { border-left: 4px solid var(--red); padding-left: 12px; background: rgba(241, 76, 76, 0.1); margin: 16px 0; padding-top: 8px; padding-bottom: 8px; }
-    .param { font-weight: bold; color: #fff; }
+    code { background: var(--vscode-textCodeBlock-background, rgba(128,128,128,.15)); padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+    .important { border-left: 4px solid var(--error); padding-left: 12px; background: var(--vscode-inputValidation-errorBackground, rgba(241, 76, 76, 0.1)); margin: 16px 0; padding-top: 8px; padding-bottom: 8px; }
+    .param { font-weight: bold; color: var(--fg); }
   </style>
 </head>
 <body>
   <h1>Diffinite User Manual</h1>
-  <p>Diffinite is a forensic source-code comparison tool designed for IP litigation and code audits. This guide explains how to configure parameters to ensure your results are accurate, explainable, and legally sound.</p>
+  <p>Diffinite is a forensic source-code comparison tool designed for IP litigation and code audits. This guide explains how to configure parameters and how each setting is recorded in the report, so the results can be explained. It reports how much and where code is similar; it does not decide whether copying occurred or what kind.</p>
 
   <h2>1. Execution Modes</h2>
   <p>Diffinite operates in two primary modes:</p>
@@ -74,15 +64,15 @@ export function showHelp(context: vscode.ExtensionContext): void {
   <p>These settings govern which N:M fingerprint similarities are surfaced as candidates. The effective values and provenance are recorded so they can be explained.</p>
   <ul>
     <li><span class="param">Normalize identifiers:</span> Converts identifiers to <code>ID</code> and literals to <code>LIT</code> before fingerprinting, making the channel less sensitive to renamed identifiers while also increasing false-positive risk.</li>
-    <li><span class="param">K-gram size:</span> (Default: 5). The sliding window size for token generation. A smaller K-gram finds more matches (higher recall) but increases noise. K=5 is academically cited (Schleimer 2003) as optimal for source code.</li>
-    <li><span class="param">Window size:</span> (Default: 4). The Winnowing density guarantee. A window of 4 means that any shared sequence of <code>(W + K - 1) = 8</code> tokens is <strong>mathematically guaranteed</strong> to be detected. </li>
+    <li><span class="param">K-gram size:</span> (Default: 5). The sliding window size for token generation. A smaller K-gram finds more matches (higher recall) but increases noise. K=5 is the value frozen in the measured calibration profile; the Winnowing paper (Schleimer 2003) prescribes no K for source code.</li>
+    <li><span class="param">Window size:</span> (Default: 4). With W=4 and K=5, any shared run of at least <code>(W + K - 1) = 8</code> tokens always yields at least one shared fingerprint. Whether the pair is listed still depends on the Deep threshold.</li>
     <li><span class="param">Min Jaccard threshold:</span> Auto mode does not send a numeric override; Python selects and records the effective threshold and provenance. The historical raw default is uncalibrated, and low-threshold results are manual-review similarity candidates rather than legal copying determinations.</li>
   </ul>
 
   <h2>4. Integrity Checks & Reporting</h2>
   <ul>
     <li><span class="param">Embed SHA-256 file hashes:</span> Records a reproducible digest of every analyzed source file. It can reveal a byte mismatch against the manifest, but by itself does not prove custody history or absence of prior tampering.</li>
-    <li><span class="param">Bates numbers:</span> Automatically stamps unique, sequential alphanumeric identifiers at the bottom of every page (e.g., <code>PLAINTIFF-0001-CONFIDENTIAL</code>). You can save format presets for different cases directly in the VS Code settings (Settings &gt; Diffinite &gt; Bates Presets).</li>
+    <li><span class="param">Bates numbers:</span> Stamps sequential identifiers at the bottom of every page (e.g., <code>PLAINTIFF-0001-CONFIDENTIAL</code>). You can save format presets for different cases directly in the VS Code settings (Settings &gt; Diffinite &gt; Bates Presets). A preset pre-fills the start number; it is not updated after export, so set the next unused number yourself before each export.</li>
   </ul>
 </body>
 </html>`;

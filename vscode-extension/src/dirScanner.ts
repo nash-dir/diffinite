@@ -73,14 +73,17 @@ export function scanAndEstimate(dirA: string, dirB: string): ScanResult {
     }
   }
 
-  // Heuristics (Approximate)
+  // Rough progress-message heuristics only. None of the constants below was
+  // measured or benchmarked; they only size the "~N s" hint shown before a
+  // run and never affect analysis results. Pairs are counted by identical
+  // relative path only (Python's fuzzy pairing and N:M cost are not modelled).
   // Phase 1 (Metrics only)
-  // Simple: very fast ratio matching.
+  // Simple: 0.05 s per same-path pair — rough guess, not measured.
   let simplePhase1Secs = Math.max(1, Math.ceil(matchedPairsCount * 0.05));
-  // Deep: Simple + full token hashing
-  let deepPhase1Secs = simplePhase1Secs + Math.ceil((totalSizeA + totalSizeB) / (1024 * 1024 * 20)); // ~20MB/s hashing
+  // Deep: Simple + token hashing at an assumed 20 MB/s — rough guess, not measured.
+  let deepPhase1Secs = simplePhase1Secs + Math.ceil((totalSizeA + totalSizeB) / (1024 * 1024 * 20));
 
-  // Phase 2 (HTML rendering)
+  // Phase 2 (HTML rendering): 8 s per MB(A)*MB(B) plus 0.1 s per pair — rough guesses, not measured.
   let phase2BaseSecs = Math.ceil((complexityScore * 8) + (matchedPairsCount * 0.1));
 
   let simpleTimeSeconds = simplePhase1Secs + phase2BaseSecs;
@@ -102,7 +105,8 @@ export function scanAndEstimate(dirA: string, dirB: string): ScanResult {
 }
 
 /**
- * Recalculate estimated Phase 2 time for a subset of files, then apply the dynamic CPU multiplier.
+ * Rough Phase 2 time hint for a subset of files, scaled by the ratio of actual
+ * to guessed Phase 1 time. Display-only; not a measured or calibrated model.
  */
 export function estimatePhase2Time(selectedFiles: string[], dirA: string, dirB: string, cpuMultiplier: number): number {
   let complexityScore = 0;
@@ -120,7 +124,9 @@ export function estimatePhase2Time(selectedFiles: string[], dirA: string, dirB: 
     }
   }
 
+  // Same unmeasured per-MB^2 / per-pair guesses as scanAndEstimate().
   const baseSecs = Math.ceil((complexityScore * 8) + (selectedFiles.length * 0.1));
-  const mult = Math.max(0.2, Math.min(cpuMultiplier, 5.0)); // Clamp between 0.2 and 5.0
+  // Clamp 0.2-5.0: arbitrary bound so one odd Phase 1 timing cannot make the hint absurd; not measured.
+  const mult = Math.max(0.2, Math.min(cpuMultiplier, 5.0));
   return Math.max(1, Math.ceil(baseSecs * mult));
 }

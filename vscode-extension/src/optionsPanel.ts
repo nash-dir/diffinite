@@ -8,7 +8,7 @@ import * as vscode from "vscode";
 import { DiffiniteOptions, defaultOptions } from "./runner";
 import { migratePersistedOptions } from "./analysisModel";
 import { getDefaultMode, getBatesPresets, BatesPreset, getPdfFont, getPdfLang } from "./config";
-import { escHtml, getNonce } from "./webviewUtils";
+import { escHtml, getNonce, THEME_CSS } from "./webviewUtils";
 
 export interface TaskHistoryEntry {
   id: string;
@@ -159,7 +159,7 @@ function buildOptionsHtml(
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <title>Diffinite Options</title>
-  <style>${OPTIONS_CSS}</style>
+  <style>${THEME_CSS}${OPTIONS_CSS}</style>
 </head>
 <body>
   <h1>Diffinite — Code Comparison</h1>
@@ -396,23 +396,11 @@ function buildOptionsHtml(
 }
 
 const OPTIONS_CSS = `
-  :root {
-    --bg: #1e1e1e;
-    --bg-surface: #252526;
-    --fg: #cccccc;
-    --fg-dim: #888;
-    --accent: #0078d4;
-    --border: #3c3c3c;
-    --error: #f48771;
-  }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
   body {
-    font-family: "Segoe UI", "Noto Sans KR", sans-serif;
     font-size: 13px;
-    color: var(--fg);
-    background: var(--bg);
     padding: 24px;
     max-width: 600px;
     margin: 0 auto;
@@ -463,10 +451,7 @@ const OPTIONS_CSS = `
   }
 
   select, input[type="number"], input[type="text"] {
-    background: var(--bg);
-    color: var(--fg);
-    border: 1px solid var(--border);
-    border-radius: 4px;
+    border-radius: 2px;
     padding: 6px 10px;
     font-size: 13px;
     width: 100%;
@@ -479,8 +464,8 @@ const OPTIONS_CSS = `
   }
 
   select:focus, input[type="number"]:focus, input[type="text"]:focus {
-    outline: none;
-    border-color: var(--accent);
+    outline: 1px solid var(--focus);
+    border-color: var(--focus);
   }
 
   input[type="checkbox"] {
@@ -506,19 +491,19 @@ const OPTIONS_CSS = `
   }
 
   .btn-primary {
-    background: var(--accent);
-    color: #fff;
+    background: var(--btn-bg);
+    color: var(--btn-fg);
   }
 
-  .btn-primary:hover { background: #005fa3; }
+  .btn-primary:hover { background: var(--btn-hover); }
 
   .btn-secondary {
-    background: var(--bg-surface);
-    color: var(--fg);
+    background: var(--btn2-bg);
+    color: var(--btn2-fg);
     border: 1px solid var(--border);
   }
 
-  .btn-secondary:hover { background: var(--border); }
+  .btn-secondary:hover { background: var(--btn2-hover); }
 
   .hidden { display: none; }
   .deep-section.hidden { display: none; }
@@ -531,7 +516,7 @@ const OPTIONS_CSS = `
   }
 
   .bates-details.hidden { display: none; }
-  .warning-text { color: #f0ad4e; font-size: 11px; margin-top: 5px; }
+  .warning-text { color: var(--warning); font-size: 11px; margin-top: 5px; }
 `;
 
 const OPTIONS_JS = `

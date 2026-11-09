@@ -491,7 +491,9 @@ export async function runExport(
 
     proc.stderr?.on("data", (chunk: Buffer) => {
       // See runAnalysis: retain useful terminal context without unbounded growth.
-      stderr = chunk.toString();
+      // Append (bounded) so the final exception line is not lost when stderr
+      // arrives in several chunks.
+      stderr = (stderr + chunk.toString()).slice(-STDERR_TAIL_CHARS);
     });
 
     proc.stdout?.on("data", (chunk: Buffer) => {

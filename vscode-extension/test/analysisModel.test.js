@@ -225,3 +225,42 @@ test("help text does not overstate checksums or classify copying", () => {
   assert.doesNotMatch(helpSource, /identified as a ["']clone["']/i);
   assert.doesNotMatch(helpSource, /if the plagiarist/i);
 });
+
+function excludeReport({ binaryHandling, requested, results }) {
+  const raw = fixture("report-v2.json");
+  const rows = Array.from({ length: results }, (_, i) => ({
+    file_a: `f${i}.py`, file_b: `f${i}.py`, name_similarity: 100, ratio: 1, additions: 0, deletions: 0,
+    html_diff: "", error: null, binary: false,
+    truncation: { truncated: false, reason: null, original_bytes: null, omitted_bytes: null },
+  }));
+  return {
+    ...raw,
+    metadata: { ...raw.metadata, ...(binaryHandling ? { binary_handling: binaryHandling } : {}) },
+    results: rows,
+    summary: { ...raw.summary, matched_pairs: results },
+    analysis_status: {
+      ...raw.analysis_status,
+      diff: { requested_pair_count: requested, successful_pair_count: requested, failed_pair_count: 0, failed_pairs: [] },
+    },
+  };
+}
+
+test("binary-handling exclude may leave fewer result rows than processed pairs", () => {
+  // pipeline.py counts an excluded binary pair as processed but writes no row.
+  const report = model.parseLiveReport(excludeReport({ binaryHandling: "exclude", requested: 2, results: 1 }));
+  assert.equal(report.results.length, 1);
+  assert.throws(
+    () => model.parseLiveReport(excludeReport({ binaryHandling: "exclude", requested: 1, results: 2 })),
+    /at least results\.length/,
+  );
+});
+
+test("every other binary policy still requires one row per processed pair", () => {
+  for (const binaryHandling of ["hash", "error", undefined]) {
+    assert.throws(
+      () => model.parseLiveReport(excludeReport({ binaryHandling, requested: 2, results: 1 })),
+      /must equal results\.length/,
+      String(binaryHandling),
+    );
+  }
+});
