@@ -1,12 +1,5 @@
 # Diffinite — Source Code Diff Report
 
-> **Reproduction record (2026-07-19):** generated on Windows with Python 3.13.5,
-> Diffinite 0.13.1 working tree based on commit
-> `f988a63f380b5c01fa198f732e425141a593430f`, using the repository's public
-> `example/plagiarism/case-01` fixture and:
-> `python -m diffinite example/plagiarism/case-01/original example/plagiarism/case-01/plagiarized --normalize --strip-comments --report-md example/benchmark/plagiarism_case01.md --workers 1`.
-> The corpus limitations and Wilson interval are part of the disclosure below.
-
 ## Analysis Configuration
 
 | Parameter | Value |
@@ -18,12 +11,15 @@
 | **Threshold provenance** | `normalize-default` |
 | **Normalize fingerprints** | `on` |
 | **Line diff autojunk** | `on` |
+| **Ignore policy** | `0 rule(s); SHA-256=none` |
+| **Selection filter** | `none; 0 path(s); SHA-256=none` |
 | **Analysis status** | `complete` |
+| **Completeness detail** | Collection: 0 file/directory failure(s) |
 | **Completeness detail** | Diff pairs: 1/1 processed; 0 worker failure(s) |
-| **Completeness detail** | Deep files: 41/41 processed; 0 file/worker failure(s) |
+| **Completeness detail** | Deep files: 41/41 processed; 0 file/worker failure(s); 0 skipped as binary content |
 | **Completeness detail** | Truncation: 0 inline diff payload(s); deep index complete |
 
-> ℹ **Threshold disclosure:** Normalize (identifier-flattening) inflates the false-positive rate on independent same-domain code; matches below the 45-token floor are reported as inconclusive. At the shipped operating point (threshold 93, calibrated for false-positive ≤ 1%), the measured false-positive rate is 0.95% (Wilson 95% CI 0.17–5.2%, 1/105 file pairs) on the IR-Plag corpus (files ≤212 tokens). Recall is non-uniform: ~65% for near-verbatim copies but ~0% for heavily restructured ones — flagged matches indicate near-verbatim similarity, not a general copy verdict.
+> ℹ **Threshold disclosure:** Normalize (identifier-flattening) inflates the false-positive rate on independent same-domain code; matches below the conservative 45-token guard are reported as inconclusive. The calibration corpus did not measure a separate precision benefit from that guard. At the shipped operating point (threshold 93, calibrated for false-positive ≤ 1%), the measured false-positive rate is 0.95% (Wilson 95% CI 0.17–5.2%, 1/105 file pairs) on the IR-Plag Java corpus (file pairs whose smaller file has ≤212 tokens; largest file 307; other languages and larger files were not measured, and this run's language and file sizes are not checked against that scope). The pairs cluster in 7 assignments, so the true uncertainty is wider than this interval, and the one false positive scored 100%, which no threshold excludes. Recall is non-uniform: ~65% for near-verbatim copies but ~0% for heavily restructured ones — flagged matches indicate near-verbatim similarity, not a general copy verdict.
 
 - **Dir A:** `original`
 - **Dir B:** `plagiarized`
@@ -85,23 +81,25 @@
 
 ## Deep Compare — N:M Cross-Match Results
 
-| A File | B File(s) | Shared Hashes | Jaccard |
-|--------|-----------|:-------------:|:-------:|
-| `T1.java` | `L1/01/L1.java` | 10 | 100.00% |
-| `T1.java` | `L1/02/Main.java` | 10 | 100.00% |
-| `T1.java` | `L1/03/Main.java` | 10 | 100.00% |
-| `T1.java` | `L1/04/T1.java` | 10 | 100.00% |
-| `T1.java` | `L1/05/HelloWorld.java` | 10 | 100.00% |
-| `T1.java` | `L1/06/HelloWorld.java` | 10 | 100.00% |
-| `T1.java` | `L1/07/Main.java` | 10 | 100.00% |
-| `T1.java` | `L1/08/Kasus1L1.java` | 10 | 100.00% |
-| `T1.java` | `L1/09/Level1.java` | 10 | 100.00% |
-| `T1.java` | `L2/01/L2.java` | 10 | 100.00% |
-| `T1.java` | `L2/02/Main.java` | 10 | 100.00% |
-| `T1.java` | `L2/04/hellow.java` | 10 | 100.00% |
-| `T1.java` | `L2/05/PrintJava.java` | 10 | 100.00% |
-| `T1.java` | `L3/01/L3.java` | 10 | 100.00% |
-| `T1.java` | `L3/02/Main.java` | 10 | 100.00% |
-| `T1.java` | `L3/03/HelloWorld.java` | 10 | 100.00% |
-| `T1.java` | `L3/04/hellow.java` | 10 | 100.00% |
-| `T1.java` | `L3/06/Level3.java` | 10 | 100.00% |
+| A File | B File(s) | Shared Hashes | Jaccard | A in B | B in A |
+|--------|-----------|:-------------:|:-------:|:------:|:------:|
+| `T1.java` | `L1/01/L1.java` | 10 | 100.00% | 100.00% | 100.00% |
+| `T1.java` | `L1/02/Main.java` | 10 | 100.00% | 100.00% | 100.00% |
+| `T1.java` | `L1/03/Main.java` | 10 | 100.00% | 100.00% | 100.00% |
+| `T1.java` | `L1/04/T1.java` | 10 | 100.00% | 100.00% | 100.00% |
+| `T1.java` | `L1/05/HelloWorld.java` | 10 | 100.00% | 100.00% | 100.00% |
+| `T1.java` | `L1/06/HelloWorld.java` | 10 | 100.00% | 100.00% | 100.00% |
+| `T1.java` | `L1/07/Main.java` | 10 | 100.00% | 100.00% | 100.00% |
+| `T1.java` | `L1/08/Kasus1L1.java` | 10 | 100.00% | 100.00% | 100.00% |
+| `T1.java` | `L1/09/Level1.java` | 10 | 100.00% | 100.00% | 100.00% |
+| `T1.java` | `L2/01/L2.java` | 10 | 100.00% | 100.00% | 100.00% |
+| `T1.java` | `L2/02/Main.java` | 10 | 100.00% | 100.00% | 100.00% |
+| `T1.java` | `L2/04/hellow.java` | 10 | 100.00% | 100.00% | 100.00% |
+| `T1.java` | `L2/05/PrintJava.java` | 10 | 100.00% | 100.00% | 100.00% |
+| `T1.java` | `L3/01/L3.java` | 10 | 100.00% | 100.00% | 100.00% |
+| `T1.java` | `L3/02/Main.java` | 10 | 100.00% | 100.00% | 100.00% |
+| `T1.java` | `L3/03/HelloWorld.java` | 10 | 100.00% | 100.00% | 100.00% |
+| `T1.java` | `L3/04/hellow.java` | 10 | 100.00% | 100.00% | 100.00% |
+| `T1.java` | `L3/06/Level3.java` | 10 | 100.00% | 100.00% | 100.00% |
+
+> **A in B** = shared ÷ unique fingerprints of the A file; **B in A** = shared ÷ unique fingerprints of the B file. Rows are selected by the Jaccard threshold only; the containment columns are descriptive and have no calibrated threshold.

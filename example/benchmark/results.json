@@ -1,0 +1,948 @@
+{
+  "environment": {
+    "diffinite_version": "0.14.0",
+    "git_commit": "26ebc7e",
+    "git_dirty": true,
+    "python": "3.13.5",
+    "platform": "Windows-11",
+    "generated_utc": "2026-11-09 15:36 UTC"
+  },
+  "cases": {
+    "case_oracle": {
+      "title": "Google v. Oracle — API declarations (AOSP libcore vs OpenJDK)",
+      "command": "python -m diffinite --mode deep --strip-comments --workers 1 --report-md example/benchmark/case_oracle.md -- example/Case-Oracle/AOSP_Google example/Case-Oracle/OpenJDK_Oracle",
+      "input_digest": "2c46e29f34caaf8f79b78bfa686673df90b7a09331a2e33a45e384798862a0a7",
+      "unmatched_a": 0,
+      "unmatched_b": 0,
+      "analysis_state": "incomplete",
+      "threshold_pct": 5.0,
+      "threshold_provenance": "legacy-uncalibrated",
+      "comment_mode": "stripped",
+      "pairs": [
+        {
+          "file_a": "ArrayList.java",
+          "file_b": "ArrayList.java",
+          "line_match_pct": 7.02,
+          "added": 1069,
+          "deleted": 601,
+          "binary": false,
+          "error": null
+        },
+        {
+          "file_a": "Collections.java",
+          "file_b": "Collections.java",
+          "line_match_pct": 2.37,
+          "added": 3878,
+          "deleted": 3362,
+          "binary": false,
+          "error": null
+        },
+        {
+          "file_a": "List.java",
+          "file_b": "List.java",
+          "line_match_pct": 6.3,
+          "added": 570,
+          "deleted": 323,
+          "binary": false,
+          "error": null
+        },
+        {
+          "file_a": "Math.java",
+          "file_b": "Math.java",
+          "line_match_pct": 7.43,
+          "added": 1421,
+          "deleted": 1197,
+          "binary": false,
+          "error": null
+        },
+        {
+          "file_a": "String.java",
+          "file_b": "String.java",
+          "line_match_pct": 3.44,
+          "added": 2989,
+          "deleted": 1958,
+          "binary": false,
+          "error": null
+        }
+      ],
+      "deep": [
+        {
+          "file_a": "Collections.java",
+          "file_b": "Collections.java",
+          "jaccard_pct": 22.0,
+          "a_in_b_pct": 37.83,
+          "b_in_a_pct": 34.47,
+          "inconclusive": false
+        },
+        {
+          "file_a": "List.java",
+          "file_b": "List.java",
+          "jaccard_pct": 11.64,
+          "a_in_b_pct": 20.48,
+          "b_in_a_pct": 21.25,
+          "inconclusive": false
+        },
+        {
+          "file_a": "String.java",
+          "file_b": "String.java",
+          "jaccard_pct": 8.78,
+          "a_in_b_pct": 16.34,
+          "b_in_a_pct": 15.94,
+          "inconclusive": false
+        },
+        {
+          "file_a": "ArrayList.java",
+          "file_b": "ArrayList.java",
+          "jaccard_pct": 7.96,
+          "a_in_b_pct": 16.46,
+          "b_in_a_pct": 13.36,
+          "inconclusive": false
+        },
+        {
+          "file_a": "Math.java",
+          "file_b": "Math.java",
+          "jaccard_pct": 7.19,
+          "a_in_b_pct": 9.87,
+          "b_in_a_pct": 20.91,
+          "inconclusive": false
+        }
+      ]
+    },
+    "case_negative": {
+      "title": "Eclipse Collections v. OpenJDK — negative control",
+      "command": "python -m diffinite --mode deep --strip-comments --workers 1 --report-md example/benchmark/case_negative.md -- example/Case-NegativeControl/Eclipse_Collections example/Case-NegativeControl/OpenJDK",
+      "input_digest": "762bd977f3e5fdfd537824d6ba126a04f8bf91b5d17e364580b7fc35d940eaa5",
+      "unmatched_a": 3,
+      "unmatched_b": 3,
+      "analysis_state": "complete",
+      "threshold_pct": 5.0,
+      "threshold_provenance": "legacy-uncalibrated",
+      "comment_mode": "stripped",
+      "pairs": [
+        {
+          "file_a": "StringIterate.java",
+          "file_b": "String.java",
+          "line_match_pct": 1.05,
+          "added": 3054,
+          "deleted": 1276,
+          "binary": false,
+          "error": null
+        },
+        {
+          "file_a": "FastList.java",
+          "file_b": "ArrayList.java",
+          "line_match_pct": 1.52,
+          "added": 1111,
+          "deleted": 1619,
+          "binary": false,
+          "error": null
+        }
+      ],
+      "deep": []
+    },
+    "plagiarism_case01": {
+      "title": "IR-Plag case-01 — labelled plagiarism, calibrated normalize profile",
+      "command": "python -m diffinite --mode deep --normalize --strip-comments --workers 1 --report-md example/benchmark/plagiarism_case01.md -- example/plagiarism/case-01/original example/plagiarism/case-01/plagiarized",
+      "input_digest": "ee548b1dae9e917672b84a31ab1525d5c23e4845046697a49daad3ea54d20d3e",
+      "unmatched_a": 0,
+      "unmatched_b": 39,
+      "analysis_state": "complete",
+      "threshold_pct": 93.0,
+      "threshold_provenance": "normalize-default",
+      "comment_mode": "stripped",
+      "pairs": [
+        {
+          "file_a": "T1.java",
+          "file_b": "L1/04/T1.java",
+          "line_match_pct": 100.0,
+          "added": 0,
+          "deleted": 0,
+          "binary": false,
+          "error": null
+        }
+      ],
+      "deep": [
+        {
+          "file_a": "T1.java",
+          "file_b": "L1/01/L1.java",
+          "jaccard_pct": 100.0,
+          "a_in_b_pct": 100.0,
+          "b_in_a_pct": 100.0,
+          "inconclusive": false
+        },
+        {
+          "file_a": "T1.java",
+          "file_b": "L1/02/Main.java",
+          "jaccard_pct": 100.0,
+          "a_in_b_pct": 100.0,
+          "b_in_a_pct": 100.0,
+          "inconclusive": false
+        },
+        {
+          "file_a": "T1.java",
+          "file_b": "L1/03/Main.java",
+          "jaccard_pct": 100.0,
+          "a_in_b_pct": 100.0,
+          "b_in_a_pct": 100.0,
+          "inconclusive": false
+        },
+        {
+          "file_a": "T1.java",
+          "file_b": "L1/04/T1.java",
+          "jaccard_pct": 100.0,
+          "a_in_b_pct": 100.0,
+          "b_in_a_pct": 100.0,
+          "inconclusive": false
+        },
+        {
+          "file_a": "T1.java",
+          "file_b": "L1/05/HelloWorld.java",
+          "jaccard_pct": 100.0,
+          "a_in_b_pct": 100.0,
+          "b_in_a_pct": 100.0,
+          "inconclusive": false
+        },
+        {
+          "file_a": "T1.java",
+          "file_b": "L1/06/HelloWorld.java",
+          "jaccard_pct": 100.0,
+          "a_in_b_pct": 100.0,
+          "b_in_a_pct": 100.0,
+          "inconclusive": false
+        },
+        {
+          "file_a": "T1.java",
+          "file_b": "L1/07/Main.java",
+          "jaccard_pct": 100.0,
+          "a_in_b_pct": 100.0,
+          "b_in_a_pct": 100.0,
+          "inconclusive": false
+        },
+        {
+          "file_a": "T1.java",
+          "file_b": "L1/08/Kasus1L1.java",
+          "jaccard_pct": 100.0,
+          "a_in_b_pct": 100.0,
+          "b_in_a_pct": 100.0,
+          "inconclusive": false
+        },
+        {
+          "file_a": "T1.java",
+          "file_b": "L1/09/Level1.java",
+          "jaccard_pct": 100.0,
+          "a_in_b_pct": 100.0,
+          "b_in_a_pct": 100.0,
+          "inconclusive": false
+        },
+        {
+          "file_a": "T1.java",
+          "file_b": "L2/01/L2.java",
+          "jaccard_pct": 100.0,
+          "a_in_b_pct": 100.0,
+          "b_in_a_pct": 100.0,
+          "inconclusive": false
+        },
+        {
+          "file_a": "T1.java",
+          "file_b": "L2/02/Main.java",
+          "jaccard_pct": 100.0,
+          "a_in_b_pct": 100.0,
+          "b_in_a_pct": 100.0,
+          "inconclusive": false
+        },
+        {
+          "file_a": "T1.java",
+          "file_b": "L2/04/hellow.java",
+          "jaccard_pct": 100.0,
+          "a_in_b_pct": 100.0,
+          "b_in_a_pct": 100.0,
+          "inconclusive": false
+        },
+        {
+          "file_a": "T1.java",
+          "file_b": "L2/05/PrintJava.java",
+          "jaccard_pct": 100.0,
+          "a_in_b_pct": 100.0,
+          "b_in_a_pct": 100.0,
+          "inconclusive": false
+        },
+        {
+          "file_a": "T1.java",
+          "file_b": "L3/01/L3.java",
+          "jaccard_pct": 100.0,
+          "a_in_b_pct": 100.0,
+          "b_in_a_pct": 100.0,
+          "inconclusive": false
+        },
+        {
+          "file_a": "T1.java",
+          "file_b": "L3/02/Main.java",
+          "jaccard_pct": 100.0,
+          "a_in_b_pct": 100.0,
+          "b_in_a_pct": 100.0,
+          "inconclusive": false
+        },
+        {
+          "file_a": "T1.java",
+          "file_b": "L3/03/HelloWorld.java",
+          "jaccard_pct": 100.0,
+          "a_in_b_pct": 100.0,
+          "b_in_a_pct": 100.0,
+          "inconclusive": false
+        },
+        {
+          "file_a": "T1.java",
+          "file_b": "L3/04/hellow.java",
+          "jaccard_pct": 100.0,
+          "a_in_b_pct": 100.0,
+          "b_in_a_pct": 100.0,
+          "inconclusive": false
+        },
+        {
+          "file_a": "T1.java",
+          "file_b": "L3/06/Level3.java",
+          "jaccard_pct": 100.0,
+          "a_in_b_pct": 100.0,
+          "b_in_a_pct": 100.0,
+          "inconclusive": false
+        }
+      ]
+    },
+    "aosp": {
+      "title": "AOSP Handler/Looper/Message — same codebase, minor edits (comments stripped)",
+      "command": "python -m diffinite --mode deep --strip-comments --workers 1 --report-md example/benchmark/aosp.md -- example/aosp/left example/aosp/right",
+      "input_digest": "1ca614de94bb73dc8539d36d94f0a2ae52419eb8afcc77f1f6a7237fb7681436",
+      "unmatched_a": 0,
+      "unmatched_b": 0,
+      "analysis_state": "complete",
+      "threshold_pct": 5.0,
+      "threshold_provenance": "legacy-uncalibrated",
+      "comment_mode": "stripped",
+      "pairs": [
+        {
+          "file_a": "Handler.java",
+          "file_b": "Handler.java",
+          "line_match_pct": 88.61,
+          "added": 144,
+          "deleted": 76,
+          "binary": false,
+          "error": null
+        },
+        {
+          "file_a": "Looper.java",
+          "file_b": "Looper.java",
+          "line_match_pct": 90.03,
+          "added": 82,
+          "deleted": 5,
+          "binary": false,
+          "error": null
+        },
+        {
+          "file_a": "Message.java",
+          "file_b": "Message.java",
+          "line_match_pct": 96.29,
+          "added": 42,
+          "deleted": 6,
+          "binary": false,
+          "error": null
+        }
+      ],
+      "deep": [
+        {
+          "file_a": "Message.java",
+          "file_b": "Message.java",
+          "jaccard_pct": 83.05,
+          "a_in_b_pct": 93.63,
+          "b_in_a_pct": 88.02,
+          "inconclusive": false
+        },
+        {
+          "file_a": "Looper.java",
+          "file_b": "Looper.java",
+          "jaccard_pct": 76.08,
+          "a_in_b_pct": 93.66,
+          "b_in_a_pct": 80.21,
+          "inconclusive": false
+        },
+        {
+          "file_a": "Handler.java",
+          "file_b": "Handler.java",
+          "jaccard_pct": 75.1,
+          "a_in_b_pct": 89.5,
+          "b_in_a_pct": 82.35,
+          "inconclusive": false
+        }
+      ]
+    },
+    "aosp_comments": {
+      "title": "AOSP Handler/Looper/Message — comments included (default)",
+      "command": "python -m diffinite --mode deep --workers 1 -- example/aosp/left example/aosp/right",
+      "input_digest": "1ca614de94bb73dc8539d36d94f0a2ae52419eb8afcc77f1f6a7237fb7681436",
+      "unmatched_a": 0,
+      "unmatched_b": 0,
+      "analysis_state": "complete",
+      "threshold_pct": 5.0,
+      "threshold_provenance": "legacy-uncalibrated",
+      "comment_mode": "included",
+      "pairs": [
+        {
+          "file_a": "Handler.java",
+          "file_b": "Handler.java",
+          "line_match_pct": 90.58,
+          "added": 125,
+          "deleted": 57,
+          "binary": false,
+          "error": null
+        },
+        {
+          "file_a": "Looper.java",
+          "file_b": "Looper.java",
+          "line_match_pct": 89.12,
+          "added": 86,
+          "deleted": 9,
+          "binary": false,
+          "error": null
+        },
+        {
+          "file_a": "Message.java",
+          "file_b": "Message.java",
+          "line_match_pct": 95.98,
+          "added": 44,
+          "deleted": 8,
+          "binary": false,
+          "error": null
+        }
+      ],
+      "deep": [
+        {
+          "file_a": "Message.java",
+          "file_b": "Message.java",
+          "jaccard_pct": 90.26,
+          "a_in_b_pct": 96.86,
+          "b_in_a_pct": 92.99,
+          "inconclusive": false
+        },
+        {
+          "file_a": "Handler.java",
+          "file_b": "Handler.java",
+          "jaccard_pct": 84.26,
+          "a_in_b_pct": 94.9,
+          "b_in_a_pct": 88.26,
+          "inconclusive": false
+        },
+        {
+          "file_a": "Looper.java",
+          "file_b": "Looper.java",
+          "jaccard_pct": 79.47,
+          "a_in_b_pct": 96.16,
+          "b_in_a_pct": 82.07,
+          "inconclusive": false
+        }
+      ]
+    },
+    "unicode": {
+      "title": "Unicode / i18n — non-ASCII names, identifiers and comments",
+      "command": "python -m diffinite --mode deep --normalize --workers 1 --report-md example/benchmark/unicode.md -- example/unicode/left example/unicode/right",
+      "input_digest": "9543bc9317944c5b3190f464b9e3eb6124b63821d267415bd672756a95d8f283",
+      "unmatched_a": 0,
+      "unmatched_b": 0,
+      "analysis_state": "complete",
+      "threshold_pct": 93.0,
+      "threshold_provenance": "normalize-default",
+      "comment_mode": "included",
+      "pairs": [
+        {
+          "file_a": "mixed.py",
+          "file_b": "mixed.py",
+          "line_match_pct": 0.0,
+          "added": 5,
+          "deleted": 5,
+          "binary": false,
+          "error": null
+        },
+        {
+          "file_a": "日本語.java",
+          "file_b": "日本語.java",
+          "line_match_pct": 37.5,
+          "added": 6,
+          "deleted": 4,
+          "binary": false,
+          "error": null
+        },
+        {
+          "file_a": "계산기.py",
+          "file_b": "계산기.py",
+          "line_match_pct": 43.48,
+          "added": 8,
+          "deleted": 5,
+          "binary": false,
+          "error": null
+        }
+      ],
+      "deep": []
+    }
+  },
+  "cross_language": {
+    "c1_py_to_js/raw": {
+      "input_digest": "d23a570ddbf4bb96200fd033e7f43a09da42ec06c5da9d6658202dcc1f692d3f",
+      "command": "python -m diffinite --mode deep --threshold-deep 0 --workers 1 -- tests/validation/behaviour_corpus/cross-language-and-encoding/c1_py_to_js/left tests/validation/behaviour_corpus/cross-language-and-encoding/c1_py_to_js/right",
+      "unmatched_a": 0,
+      "unmatched_b": 0,
+      "analysis_state": "complete",
+      "threshold_pct": 0.0,
+      "threshold_provenance": "user",
+      "comment_mode": "included",
+      "pairs": [
+        {
+          "file_a": "route_planner.py",
+          "file_b": "route_planner.js",
+          "line_match_pct": 10.6,
+          "added": 149,
+          "deleted": 104,
+          "binary": false,
+          "error": null
+        },
+        {
+          "file_a": "csv_ledger.py",
+          "file_b": "csvLedger.mjs",
+          "line_match_pct": 5.99,
+          "added": 83,
+          "deleted": 74,
+          "binary": false,
+          "error": null
+        }
+      ],
+      "deep": [
+        {
+          "file_a": "route_planner.py",
+          "file_b": "route_planner.js",
+          "jaccard_pct": 2.71,
+          "a_in_b_pct": 6.16,
+          "b_in_a_pct": 4.62,
+          "inconclusive": false
+        },
+        {
+          "file_a": "csv_ledger.py",
+          "file_b": "csvLedger.mjs",
+          "jaccard_pct": 1.37,
+          "a_in_b_pct": 2.96,
+          "b_in_a_pct": 2.48,
+          "inconclusive": false
+        }
+      ]
+    },
+    "c1_py_to_js/normalize": {
+      "input_digest": "d23a570ddbf4bb96200fd033e7f43a09da42ec06c5da9d6658202dcc1f692d3f",
+      "command": "python -m diffinite --mode deep --normalize --strip-comments --threshold-deep 0 --workers 1 -- tests/validation/behaviour_corpus/cross-language-and-encoding/c1_py_to_js/left tests/validation/behaviour_corpus/cross-language-and-encoding/c1_py_to_js/right",
+      "unmatched_a": 0,
+      "unmatched_b": 0,
+      "analysis_state": "complete",
+      "threshold_pct": 0.0,
+      "threshold_provenance": "user",
+      "comment_mode": "stripped",
+      "pairs": [
+        {
+          "file_a": "route_planner.py",
+          "file_b": "route_planner.js",
+          "line_match_pct": 9.19,
+          "added": 151,
+          "deleted": 106,
+          "binary": false,
+          "error": null
+        },
+        {
+          "file_a": "csv_ledger.py",
+          "file_b": "csvLedger.mjs",
+          "line_match_pct": 7.19,
+          "added": 82,
+          "deleted": 73,
+          "binary": false,
+          "error": null
+        }
+      ],
+      "deep": [
+        {
+          "file_a": "csv_ledger.py",
+          "file_b": "csvLedger.mjs",
+          "jaccard_pct": 7.67,
+          "a_in_b_pct": 15.14,
+          "b_in_a_pct": 13.46,
+          "inconclusive": false
+        },
+        {
+          "file_a": "route_planner.py",
+          "file_b": "route_planner.js",
+          "jaccard_pct": 6.06,
+          "a_in_b_pct": 12.55,
+          "b_in_a_pct": 10.49,
+          "inconclusive": false
+        },
+        {
+          "file_a": "csv_ledger.py",
+          "file_b": "route_planner.js",
+          "jaccard_pct": 2.39,
+          "a_in_b_pct": 5.95,
+          "b_in_a_pct": 3.85,
+          "inconclusive": false
+        },
+        {
+          "file_a": "route_planner.py",
+          "file_b": "csvLedger.mjs",
+          "jaccard_pct": 1.82,
+          "a_in_b_pct": 3.35,
+          "b_in_a_pct": 3.85,
+          "inconclusive": false
+        }
+      ]
+    },
+    "c1_py_to_js/normalize+lang-aware": {
+      "input_digest": "d23a570ddbf4bb96200fd033e7f43a09da42ec06c5da9d6658202dcc1f692d3f",
+      "command": "python -m diffinite --mode deep --normalize --lang-aware --strip-comments --threshold-deep 0 --workers 1 -- tests/validation/behaviour_corpus/cross-language-and-encoding/c1_py_to_js/left tests/validation/behaviour_corpus/cross-language-and-encoding/c1_py_to_js/right",
+      "unmatched_a": 0,
+      "unmatched_b": 0,
+      "analysis_state": "complete",
+      "threshold_pct": 0.0,
+      "threshold_provenance": "user",
+      "comment_mode": "stripped",
+      "pairs": [
+        {
+          "file_a": "route_planner.py",
+          "file_b": "route_planner.js",
+          "line_match_pct": 9.19,
+          "added": 151,
+          "deleted": 106,
+          "binary": false,
+          "error": null
+        },
+        {
+          "file_a": "csv_ledger.py",
+          "file_b": "csvLedger.mjs",
+          "line_match_pct": 7.19,
+          "added": 82,
+          "deleted": 73,
+          "binary": false,
+          "error": null
+        }
+      ],
+      "deep": [
+        {
+          "file_a": "csv_ledger.py",
+          "file_b": "csvLedger.mjs",
+          "jaccard_pct": 4.26,
+          "a_in_b_pct": 9.15,
+          "b_in_a_pct": 7.37,
+          "inconclusive": false
+        },
+        {
+          "file_a": "route_planner.py",
+          "file_b": "route_planner.js",
+          "jaccard_pct": 3.88,
+          "a_in_b_pct": 8.7,
+          "b_in_a_pct": 6.55,
+          "inconclusive": false
+        },
+        {
+          "file_a": "csv_ledger.py",
+          "file_b": "route_planner.js",
+          "jaccard_pct": 2.39,
+          "a_in_b_pct": 6.54,
+          "b_in_a_pct": 3.64,
+          "inconclusive": false
+        },
+        {
+          "file_a": "route_planner.py",
+          "file_b": "csvLedger.mjs",
+          "jaccard_pct": 2.32,
+          "a_in_b_pct": 4.35,
+          "b_in_a_pct": 4.74,
+          "inconclusive": false
+        }
+      ]
+    },
+    "c2_java_to_kotlin_csharp/raw": {
+      "input_digest": "b2ae497c3d035b00b7f846db94a801a04ce3e50207ea74a1838b630e99ea30eb",
+      "command": "python -m diffinite --mode deep --threshold-deep 0 --workers 1 -- tests/validation/behaviour_corpus/cross-language-and-encoding/c2_java_to_kotlin_csharp/left tests/validation/behaviour_corpus/cross-language-and-encoding/c2_java_to_kotlin_csharp/right",
+      "unmatched_a": 0,
+      "unmatched_b": 1,
+      "analysis_state": "complete",
+      "threshold_pct": 0.0,
+      "threshold_provenance": "user",
+      "comment_mode": "included",
+      "pairs": [
+        {
+          "file_a": "InventoryLedger.java",
+          "file_b": "InventoryLedger.cs",
+          "line_match_pct": 15.04,
+          "added": 104,
+          "deleted": 88,
+          "binary": false,
+          "error": null
+        }
+      ],
+      "deep": [
+        {
+          "file_a": "InventoryLedger.java",
+          "file_b": "InventoryLedger.cs",
+          "jaccard_pct": 27.95,
+          "a_in_b_pct": 43.12,
+          "b_in_a_pct": 44.27,
+          "inconclusive": false
+        },
+        {
+          "file_a": "InventoryLedger.java",
+          "file_b": "InventoryLedger.kt",
+          "jaccard_pct": 8.24,
+          "a_in_b_pct": 13.38,
+          "b_in_a_pct": 17.65,
+          "inconclusive": false
+        }
+      ]
+    },
+    "c2_java_to_kotlin_csharp/normalize": {
+      "input_digest": "b2ae497c3d035b00b7f846db94a801a04ce3e50207ea74a1838b630e99ea30eb",
+      "command": "python -m diffinite --mode deep --normalize --strip-comments --threshold-deep 0 --workers 1 -- tests/validation/behaviour_corpus/cross-language-and-encoding/c2_java_to_kotlin_csharp/left tests/validation/behaviour_corpus/cross-language-and-encoding/c2_java_to_kotlin_csharp/right",
+      "unmatched_a": 0,
+      "unmatched_b": 1,
+      "analysis_state": "complete",
+      "threshold_pct": 0.0,
+      "threshold_provenance": "user",
+      "comment_mode": "stripped",
+      "pairs": [
+        {
+          "file_a": "InventoryLedger.java",
+          "file_b": "InventoryLedger.cs",
+          "line_match_pct": 14.16,
+          "added": 105,
+          "deleted": 89,
+          "binary": false,
+          "error": null
+        }
+      ],
+      "deep": [
+        {
+          "file_a": "InventoryLedger.java",
+          "file_b": "InventoryLedger.cs",
+          "jaccard_pct": 51.21,
+          "a_in_b_pct": 69.02,
+          "b_in_a_pct": 66.49,
+          "inconclusive": false
+        },
+        {
+          "file_a": "InventoryLedger.java",
+          "file_b": "InventoryLedger.kt",
+          "jaccard_pct": 7.12,
+          "a_in_b_pct": 11.96,
+          "b_in_a_pct": 14.97,
+          "inconclusive": false
+        }
+      ]
+    },
+    "c2_java_to_kotlin_csharp/normalize+lang-aware": {
+      "input_digest": "b2ae497c3d035b00b7f846db94a801a04ce3e50207ea74a1838b630e99ea30eb",
+      "command": "python -m diffinite --mode deep --normalize --lang-aware --strip-comments --threshold-deep 0 --workers 1 -- tests/validation/behaviour_corpus/cross-language-and-encoding/c2_java_to_kotlin_csharp/left tests/validation/behaviour_corpus/cross-language-and-encoding/c2_java_to_kotlin_csharp/right",
+      "unmatched_a": 0,
+      "unmatched_b": 1,
+      "analysis_state": "complete",
+      "threshold_pct": 0.0,
+      "threshold_provenance": "user",
+      "comment_mode": "stripped",
+      "pairs": [
+        {
+          "file_a": "InventoryLedger.java",
+          "file_b": "InventoryLedger.cs",
+          "line_match_pct": 14.16,
+          "added": 105,
+          "deleted": 89,
+          "binary": false,
+          "error": null
+        }
+      ],
+      "deep": [
+        {
+          "file_a": "InventoryLedger.java",
+          "file_b": "InventoryLedger.cs",
+          "jaccard_pct": 30.93,
+          "a_in_b_pct": 47.71,
+          "b_in_a_pct": 46.79,
+          "inconclusive": false
+        },
+        {
+          "file_a": "InventoryLedger.java",
+          "file_b": "InventoryLedger.kt",
+          "jaccard_pct": 3.55,
+          "a_in_b_pct": 6.54,
+          "b_in_a_pct": 7.19,
+          "inconclusive": false
+        }
+      ]
+    },
+    "c7_trap_unrelated_cross_lang/raw": {
+      "input_digest": "46b3283ac0d6e983f01cd653f2a313fa6d1b3384737f42a5cfa4cf9287ec8580",
+      "command": "python -m diffinite --mode deep --threshold-deep 0 --workers 1 -- tests/validation/behaviour_corpus/cross-language-and-encoding/c7_trap_unrelated_cross_lang/left tests/validation/behaviour_corpus/cross-language-and-encoding/c7_trap_unrelated_cross_lang/right",
+      "unmatched_a": 0,
+      "unmatched_b": 0,
+      "analysis_state": "complete",
+      "threshold_pct": 0.0,
+      "threshold_provenance": "user",
+      "comment_mode": "included",
+      "pairs": [
+        {
+          "file_a": "scheduler.py",
+          "file_b": "scheduler.js",
+          "line_match_pct": 11.63,
+          "added": 78,
+          "deleted": 74,
+          "binary": false,
+          "error": null
+        },
+        {
+          "file_a": "Validator.java",
+          "file_b": "Validator.cs",
+          "line_match_pct": 12.22,
+          "added": 82,
+          "deleted": 76,
+          "binary": false,
+          "error": null
+        }
+      ],
+      "deep": [
+        {
+          "file_a": "Validator.java",
+          "file_b": "Validator.cs",
+          "jaccard_pct": 0.52,
+          "a_in_b_pct": 0.88,
+          "b_in_a_pct": 1.27,
+          "inconclusive": false
+        }
+      ]
+    },
+    "c7_trap_unrelated_cross_lang/normalize": {
+      "input_digest": "46b3283ac0d6e983f01cd653f2a313fa6d1b3384737f42a5cfa4cf9287ec8580",
+      "command": "python -m diffinite --mode deep --normalize --strip-comments --threshold-deep 0 --workers 1 -- tests/validation/behaviour_corpus/cross-language-and-encoding/c7_trap_unrelated_cross_lang/left tests/validation/behaviour_corpus/cross-language-and-encoding/c7_trap_unrelated_cross_lang/right",
+      "unmatched_a": 0,
+      "unmatched_b": 0,
+      "analysis_state": "complete",
+      "threshold_pct": 0.0,
+      "threshold_provenance": "user",
+      "comment_mode": "stripped",
+      "pairs": [
+        {
+          "file_a": "scheduler.py",
+          "file_b": "scheduler.js",
+          "line_match_pct": 9.3,
+          "added": 80,
+          "deleted": 76,
+          "binary": false,
+          "error": null
+        },
+        {
+          "file_a": "Validator.java",
+          "file_b": "Validator.cs",
+          "line_match_pct": 11.11,
+          "added": 83,
+          "deleted": 77,
+          "binary": false,
+          "error": null
+        }
+      ],
+      "deep": [
+        {
+          "file_a": "Validator.java",
+          "file_b": "Validator.cs",
+          "jaccard_pct": 4.04,
+          "a_in_b_pct": 7.59,
+          "b_in_a_pct": 7.97,
+          "inconclusive": false
+        },
+        {
+          "file_a": "Validator.java",
+          "file_b": "scheduler.js",
+          "jaccard_pct": 2.04,
+          "a_in_b_pct": 4.83,
+          "b_in_a_pct": 3.41,
+          "inconclusive": false
+        },
+        {
+          "file_a": "scheduler.py",
+          "file_b": "scheduler.js",
+          "jaccard_pct": 1.56,
+          "a_in_b_pct": 3.24,
+          "b_in_a_pct": 2.93,
+          "inconclusive": false
+        },
+        {
+          "file_a": "scheduler.py",
+          "file_b": "Validator.cs",
+          "jaccard_pct": 0.62,
+          "a_in_b_pct": 1.08,
+          "b_in_a_pct": 1.45,
+          "inconclusive": false
+        }
+      ]
+    },
+    "c7_trap_unrelated_cross_lang/normalize+lang-aware": {
+      "input_digest": "46b3283ac0d6e983f01cd653f2a313fa6d1b3384737f42a5cfa4cf9287ec8580",
+      "command": "python -m diffinite --mode deep --normalize --lang-aware --strip-comments --threshold-deep 0 --workers 1 -- tests/validation/behaviour_corpus/cross-language-and-encoding/c7_trap_unrelated_cross_lang/left tests/validation/behaviour_corpus/cross-language-and-encoding/c7_trap_unrelated_cross_lang/right",
+      "unmatched_a": 0,
+      "unmatched_b": 0,
+      "analysis_state": "complete",
+      "threshold_pct": 0.0,
+      "threshold_provenance": "user",
+      "comment_mode": "stripped",
+      "pairs": [
+        {
+          "file_a": "scheduler.py",
+          "file_b": "scheduler.js",
+          "line_match_pct": 9.3,
+          "added": 80,
+          "deleted": 76,
+          "binary": false,
+          "error": null
+        },
+        {
+          "file_a": "Validator.java",
+          "file_b": "Validator.cs",
+          "line_match_pct": 11.11,
+          "added": 83,
+          "deleted": 77,
+          "binary": false,
+          "error": null
+        }
+      ],
+      "deep": [
+        {
+          "file_a": "Validator.java",
+          "file_b": "Validator.cs",
+          "jaccard_pct": 2.95,
+          "a_in_b_pct": 6.14,
+          "b_in_a_pct": 5.38,
+          "inconclusive": false
+        },
+        {
+          "file_a": "Validator.java",
+          "file_b": "scheduler.js",
+          "jaccard_pct": 2.95,
+          "a_in_b_pct": 7.89,
+          "b_in_a_pct": 4.5,
+          "inconclusive": false
+        },
+        {
+          "file_a": "scheduler.py",
+          "file_b": "scheduler.js",
+          "jaccard_pct": 2.01,
+          "a_in_b_pct": 4.49,
+          "b_in_a_pct": 3.5,
+          "inconclusive": false
+        },
+        {
+          "file_a": "scheduler.py",
+          "file_b": "Validator.cs",
+          "jaccard_pct": 0.35,
+          "a_in_b_pct": 0.64,
+          "b_in_a_pct": 0.77,
+          "inconclusive": false
+        }
+      ]
+    }
+  }
+}

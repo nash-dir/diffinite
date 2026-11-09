@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import shutil
 import sys
@@ -35,6 +36,21 @@ EXAMPLE_DIR = Path(__file__).resolve().parent
 # 1. AOSP Android 9 vs 11 — same codebase, minor evolutionary edits
 _AOSP_PIE = "https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/pie-release/core/java/android/os"
 _AOSP_11 = "https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android-11.0.0_r1/core/java/android/os"
+
+# Benchmark sources pinned to commit SHAs (a branch or tag name can move; a commit
+# cannot). Resolved with `git ls-remote <repo> <tag>^{}`.
+# platform/libcore tag android-4.4_r1 (Android 4.4 KitKat). The aosp-mirror GitHub
+# copy of kitkat-release no longer serves these files (HTTP 404), so they are
+# fetched from Google's own Gitiles server, which returns base64 (?format=TEXT).
+_LIBCORE_KITKAT = ("https://android.googlesource.com/platform/libcore/+/"
+                   "e239af5ac0b3989363b2fed49076fa8a9d69d454")
+# openjdk/jdk tag jdk7-b147.
+_OPENJDK7 = ("https://raw.githubusercontent.com/openjdk/jdk/"
+             "7b2e99178f7cf41ecd86b2ccfba38ea653e815e7/jdk/src/share/classes/java")
+# eclipse/eclipse-collections release tag 13.0.0.
+_ECLIPSE_COLLECTIONS = ("https://raw.githubusercontent.com/eclipse/eclipse-collections/"
+                        "cff067d4fb8b306f394a140d043ec6ee1666093d/eclipse-collections/"
+                        "src/main/java/org/eclipse/collections/impl")
 
 DATASETS: dict[str, dict] = {
     "aosp": {
@@ -55,17 +71,20 @@ DATASETS: dict[str, dict] = {
         "description": "Google v. Oracle API headers (AOSP vs OpenJDK 7)",
         "dirs": {"AOSP_Google": {}, "OpenJDK_Oracle": {}},
         "files": {
-            # AOSP (Android 4.4 KitKat — the version at issue in the case)
-            **{f"AOSP_Google/{f}": f"https://raw.githubusercontent.com/aosp-mirror/platform_libcore/kitkat-release/luni/src/main/java/java/{p}"
+            # AOSP libcore, Android 4.4 KitKat (one of the Android versions in the
+            # Oracle v. Google litigation). These classes derive from Apache Harmony
+            # and carry ASF licence headers. In this release String.java lives
+            # under libdvm/, not luni/.
+            **{f"AOSP_Google/{f}": f"{_LIBCORE_KITKAT}/{p}?format=TEXT"
                for f, p in [
-                   ("ArrayList.java", "util/ArrayList.java"),
-                   ("Collections.java", "util/Collections.java"),
-                   ("List.java", "util/List.java"),
-                   ("Math.java", "lang/Math.java"),
-                   ("String.java", "lang/String.java"),
+                   ("ArrayList.java", "luni/src/main/java/java/util/ArrayList.java"),
+                   ("Collections.java", "luni/src/main/java/java/util/Collections.java"),
+                   ("List.java", "luni/src/main/java/java/util/List.java"),
+                   ("Math.java", "luni/src/main/java/java/lang/Math.java"),
+                   ("String.java", "libdvm/src/main/java/java/lang/String.java"),
                ]},
             # OpenJDK 7 b147
-            **{f"OpenJDK_Oracle/{f}": f"https://raw.githubusercontent.com/openjdk/jdk/jdk7-b147/jdk/src/share/classes/java/{p}"
+            **{f"OpenJDK_Oracle/{f}": f"{_OPENJDK7}/{p}"
                for f, p in [
                    ("ArrayList.java", "util/ArrayList.java"),
                    ("Collections.java", "util/Collections.java"),
@@ -82,7 +101,7 @@ DATASETS: dict[str, dict] = {
         "dirs": {"Eclipse_Collections": {}, "OpenJDK": {}},
         "files": {
             # Eclipse Collections
-            **{f"Eclipse_Collections/{f}": f"https://raw.githubusercontent.com/eclipse/eclipse-collections/master/eclipse-collections/src/main/java/org/eclipse/collections/impl/{p}"
+            **{f"Eclipse_Collections/{f}": f"{_ECLIPSE_COLLECTIONS}/{p}"
                for f, p in [
                    ("FastList.java", "list/mutable/FastList.java"),
                    ("UnifiedSet.java", "set/mutable/UnifiedSet.java"),
@@ -90,8 +109,8 @@ DATASETS: dict[str, dict] = {
                    ("Iterate.java", "utility/Iterate.java"),
                    ("StringIterate.java", "utility/StringIterate.java"),
                ]},
-            # OpenJDK 7
-            **{f"OpenJDK/{f}": f"https://raw.githubusercontent.com/openjdk/jdk/jdk7-b147/jdk/src/share/classes/java/{p}"
+            # OpenJDK 7 b147
+            **{f"OpenJDK/{f}": f"{_OPENJDK7}/{p}"
                for f, p in [
                    ("ArrayList.java", "util/ArrayList.java"),
                    ("HashSet.java", "util/HashSet.java"),
@@ -147,13 +166,20 @@ DATASETS: dict[str, dict] = {
 # Download helpers
 # ---------------------------------------------------------------------------
 
+def _is_gitiles_text(url: str) -> bool:
+    """Gitiles (googlesource.com) serves raw file content base64-encoded."""
+    return "googlesource.com/" in url and url.endswith("?format=TEXT")
+
+
 def _download_file(url: str, dest: Path) -> bool:
-    """Download a single file."""
+    """Download a single file (base64-decoding Gitiles ?format=TEXT responses)."""
     try:
         print(f"  ↓ {dest.name:35s} ", end="", flush=True)
         req = urllib.request.Request(url, headers={"User-Agent": "Diffinite/1.0"})
         with urllib.request.urlopen(req, timeout=60) as resp:
             data = resp.read()
+        if _is_gitiles_text(url):
+            data = base64.b64decode(data, validate=True)
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(data)
         print(f"OK ({len(data):,} bytes)")
@@ -219,7 +245,12 @@ def download_dataset(name: str, config: dict, *, force: bool = False) -> bool:
             return True
         if target.exists():
             shutil.rmtree(target)
-    elif dest.exists() and any(dest.rglob("*.java") if name != "sqlite" else dest.rglob("*.c")) and not force:
+    # A dataset with a file map counts as present only when every expected file is
+    # there; a partial earlier download is re-fetched instead of silently reused.
+    elif "files" in config and all((dest / rel).is_file() for rel in config["files"]) and not force:
+        print(f"[{name}] Already exists — skipping (use --clean to re-download)")
+        return True
+    elif "files" not in config and dest.exists() and any(dest.rglob("*.c")) and not force:
         print(f"[{name}] Already exists — skipping (use --clean to re-download)")
         return True
 
@@ -320,7 +351,7 @@ def main() -> int:
 
     if ok > 0:
         print("\nRun benchmarks:")
-        print("  diffinite example/Case-Oracle/AOSP_Google example/Case-Oracle/OpenJDK_Oracle --no-comments -o report.pdf")
+        print("  diffinite example/Case-Oracle/AOSP_Google example/Case-Oracle/OpenJDK_Oracle --strip-comments -o report.pdf")
 
     return 1 if fail else 0
 

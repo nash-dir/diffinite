@@ -418,26 +418,43 @@ python example/download_examples.py --dataset aosp  # or download one
 
 The two validation corpora (`plagiarism` = IR-Plag, `soco14` = SOCO 2014 training set) are pinned to exact upstream archives and verified by SHA-256, so `python -m tests.validation.error_rate` and `python -m tests.validation.holdout` reproduce the published figures from byte-identical inputs.
 
-Pre-generated benchmark reports (Markdown) are in `example/benchmark/`.
+The benchmark sources (`aosp`, `Case-Oracle`, `Case-NegativeControl`, `sqlite`) are **not** SHA-256-pinned. `Case-Oracle` and `Case-NegativeControl` are fetched from fixed commits (AOSP libcore tag `android-4.4_r1`, OpenJDK tag `jdk7-b147`, Eclipse Collections tag `13.0.0`), so their content should not drift, but no per-file hash is checked; `aosp` and `sqlite` use upstream branch/release URLs. An existing download is reused as-is; pass `--clean` to replace it with the pinned sources.
+
+**Reproduce every number in this section** with one command, and check it later for drift:
+
+```bash
+python example/download_examples.py --clean               # pinned sources (see above)
+python example/benchmark/run_benchmarks.py                # re-run all cases → reports + RESULTS.md + results.json
+python example/benchmark/run_benchmarks.py --check        # re-run and fail if any number or input differs
+```
+
+[`example/benchmark/RESULTS.md`](example/benchmark/RESULTS.md) lists, for every case, the exact command, the
+tool version and commit, and a SHA-256 *input digest* of both directories, so a reader can tell whether they
+ran on the same bytes. `results.json` is the machine-readable copy that `--check` compares against. The
+per-case Markdown reports (`case_oracle.md`, `case_negative.md`, `plagiarism_case01.md`, `aosp.md`,
+`unicode.md`) are the tool's own output for those commands. The calibration figures further down are
+regenerated separately by `python -m tests.validation.error_rate` and `python -m tests.validation.holdout`.
 
 ### 1. Google v. Oracle — API Header Similarity
 
-**Why this dataset**: The [Oracle v. Google](https://en.wikipedia.org/wiki/Google_LLC_v._Oracle_America,_Inc.) case is the landmark SSO (Structure, Sequence, Organization) copyright dispute. Google's Android reimplemented Java API declarations. The code *bodies* are independently written, but the API *signatures* are necessarily similar.
+**Why this dataset**: The [Oracle v. Google](https://en.wikipedia.org/wiki/Google_LLC_v._Oracle_America,_Inc.) case is the landmark SSO (Structure, Sequence, Organization) copyright dispute. Android's class library (AOSP libcore, derived from Apache Harmony; the files carry Apache Software Foundation licence headers) implemented the same Java API declarations as OpenJDK. Whether the bodies were written independently is a question for the expert; this benchmark shows only what the tool measures on such a pair.
 
 ```bash
 diffinite example/Case-Oracle/AOSP_Google example/Case-Oracle/OpenJDK_Oracle \
     --strip-comments --report-md example/benchmark/case_oracle.md
 ```
 
-| File | Match (difflib) | Deep Cross-Match (Jaccard) |
-|------|:-:|:-:|
-| `ArrayList.java` | 9.0% | 7.9% |
-| `Collections.java` | 4.5% | 23.1% |
-| `List.java` | 6.3% | 11.6% |
-| `Math.java` | 5.2% | 6.3% |
-| `String.java` | 3.3% | 6.8% |
+| File | Match (difflib) | Deep Cross-Match (Jaccard) | A in B / B in A |
+|------|:-:|:-:|:-:|
+| `ArrayList.java` | 7.0% | 8.0% | 16.5% / 13.4% |
+| `Collections.java` | 2.4% | 22.0% | 37.8% / 34.5% |
+| `List.java` | 6.3% | 11.6% | 20.5% / 21.2% |
+| `Math.java` | 7.4% | 7.2% | 9.9% / 20.9% |
+| `String.java` | 3.4% | 8.8% | 16.3% / 15.9% |
 
-**Observation**: The line-level Match (difflib) scores stay under 10%, confirming the *bodies* are independently written. Deep Compare still surfaces shared Winnowing fingerprints — Jaccard 6–23% (highest on `Collections.java`) — because the API *signatures and declarations* are necessarily similar. Higher shared-fingerprint (token k-gram) overlap alongside low line-level Match is consistent with the same interface being independently implemented. Diffinite does not parse code, so this is token overlap, not a structural (SSO) analysis. Diffinite reports both numbers; interpreting them is the expert's job.
+**Provenance**: measured on the pinned sources `download_examples.py` fetches (AOSP libcore `android-4.4_r1`, OpenJDK `jdk7-b147`); the input digest is in `RESULTS.md`. An earlier version of this table (Match 3.3–9.0%, Jaccard 6.3–23.1%) was measured on local files that were not these sources — some OpenJDK files came from a later JDK — and has been replaced. The report is marked *incomplete* only because the rendered side-by-side diff of one large pair exceeded the inline display size limit (`--max-diff-html-size`); the similarity values are computed on the full files.
+
+**Observation**: The line-level Match (difflib) scores are all under 10%, while Deep Compare reports shared Winnowing fingerprints at Jaccard 7–22% (highest on `Collections.java`). Low line-level Match alongside higher token k-gram overlap is consistent with the same interface being implemented separately, but the tool does not determine authorship. It also does not attribute shared fingerprints to signatures versus bodies; the matched regions are shown in the report for the expert to inspect. Diffinite does not parse code, so this is token overlap, not a structural (SSO) analysis. Diffinite reports both numbers; interpreting them is the expert's job.
 
 ### 2. Eclipse Collections v. OpenJDK — Negative Control
 
@@ -450,14 +467,14 @@ diffinite example/Case-NegativeControl/Eclipse_Collections example/Case-Negative
 
 | File A | File B | Match | Deep Cross-Match |
 |--------|--------|:-:|:-:|
-| `StringIterate.java` | `String.java` | 2.4% | — |
+| `StringIterate.java` | `String.java` | 1.1% | — |
 | `FastList.java` | `ArrayList.java` | 1.5% | — |
 
-**Observation**: No cross-matches appeared above the historical raw 5% threshold in this fixture. That single negative control does **not** calibrate 5 as a safe cutoff; the same-domain IR-Plag validation below measured a high false-positive rate on small files.
+**Observation**: No cross-matches appeared above the historical raw 5% threshold in this fixture (OpenJDK side from `jdk7-b147`, Eclipse Collections `13.0.0`). That single negative control does **not** calibrate 5 as a safe cutoff; the same-domain IR-Plag validation below measured a high false-positive rate on small files.
 
 ### 3. IR-Plag Case 01 — Known Plagiarism
 
-**Why this dataset**: [IR-Plag](https://github.com/oscarkarnalim/sourcecodeplagiarismdataset) is a publicly available plagiarism corpus with labeled modification levels (L1=verbatim copy through L6=heavy restructuring).
+**Why this dataset**: [IR-Plag](https://github.com/oscarkarnalim/sourcecodeplagiarismdataset) is a publicly available plagiarism corpus with six labelled modification levels following Faidhi and Robinson (1987), from L1 = comment and formatting changes through L6 = logic/structural changes. L1 is not verbatim: in this corpus L1 copies also commonly rename the class and make small statement edits.
 
 ```bash
 diffinite example/plagiarism/case-01/original example/plagiarism/case-01/plagiarized \
@@ -477,7 +494,8 @@ output did show lower-scoring L4–L6 rows, but threshold 5 had a 100% measured
 false-positive rate on the small same-domain negatives and must not be presented
 as the current calibrated result. See
 [`example/benchmark/plagiarism_case01.md`](example/benchmark/plagiarism_case01.md)
-for the exact command, base commit, dataset, date, and environment.
+for the full report and [`example/benchmark/RESULTS.md`](example/benchmark/RESULTS.md)
+for the exact command, tool version, commit, input digest and environment.
 
 ### Normalize precision — false-positive rate
 
@@ -542,7 +560,21 @@ diffinite example/unicode/left example/unicode/right \
     --report-pdf uni.pdf --report-html uni.html --report-md uni.md
 ```
 
+`run_benchmarks.py` runs the same comparison (without the PDF/HTML outputs) into `example/benchmark/unicode.md`.
+
 **What it verifies**: the Unicode-aware tokenizer treats a CJK/Cyrillic identifier as a single token (so non-ASCII fingerprint density matches ASCII); comment-stripping handles non-ASCII; non-ASCII filenames render in every format; and the PDF embeds CJK glyphs (`--pdf-lang ko` selects a Korean font). Covered by `tests/test_unicode_reports.py`.
+
+### 6. Cross-language ports — what the tool does *not* reliably detect
+
+**Why these cases**: a port to another language is a common question, and the tool has no parser (see [Limitations](#limitations)). The hand-written cases in [`tests/validation/behaviour_corpus/cross-language-and-encoding/`](tests/validation/behaviour_corpus/cross-language-and-encoding/CASES.md) contain two ports and a same-name unrelated control. They are illustrations (three cases, written by an AI agent), **not calibration data**; no threshold is calibrated for cross-language input. Every pair sharing at least one fingerprint is listed (`--threshold-deep 0`); pairs with none (Jaccard 0) are omitted.
+
+| Case | Highest Jaccard: default | `--normalize` | `--normalize --lang-aware` |
+|------|:-:|:-:|:-:|
+| Java → C# (near-mechanical port) | 27.9% | 51.2% | 30.9% |
+| Python → JavaScript (faithful port, renamed) | 2.7% | 7.7% | 4.3% |
+| Unrelated code, same file names (control) | 0.5% | 4.0% | 3.0% |
+
+The Java → Kotlin file of the same case (idiomatic rewrite) scored 3.5–8.2%. Line-level Match is 6–15% for the ports and the control alike, so it does not separate them. **Reading**: a port between syntactically close languages (Java → C#) stands out from the control; ports between distant languages (Python → JavaScript, Java → Kotlin) overlap with the unrelated control and are not distinguishable by these measurements. Full per-pair values are in `RESULTS.md`.
 
 ---
 

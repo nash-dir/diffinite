@@ -39,6 +39,9 @@ example/*/
 !example/benchmark/
 example/benchmark/*
 !example/benchmark/*.md
+# The reproduction runner and its machine-readable results (checked with --check)
+!example/benchmark/run_benchmarks.py
+!example/benchmark/results.json
 # Validation evidence (WS-A error-rate artifacts) — track the reports, not the
 # corpus. These are reproducible via: python -m tests.validation.error_rate
 !example/validation/
