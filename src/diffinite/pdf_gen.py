@@ -1003,6 +1003,14 @@ def merge_with_bookmarks(
 # ---------------------------------------------------------------------------
 # Bates numbering
 # ---------------------------------------------------------------------------
+def _drop_unreferenced_objects(writer: PdfWriter) -> None:
+    """Drop objects no page refers to any more (the pre-compression content streams)."""
+    try:
+        writer.compress_identical_objects(remove_duplicates=False, remove_unreferenced=True)
+    except TypeError:  # older pypdf within the supported range uses the earlier names
+        writer.compress_identical_objects(remove_identicals=False, remove_orphans=True)
+
+
 def add_bates_numbers(
     input_path: str,
     output_path: str,
@@ -1045,6 +1053,11 @@ def add_bates_numbers(
 
         overlay_page = PdfReader(buf).pages[0]
         page.merge_page(overlay_page)
+        # merge_page leaves the combined content stream uncompressed (~10x larger
+        # files on text-heavy reports); recompress it. Rendering is unchanged.
+        page.compress_content_streams()
+    # The pre-compression streams stay in the writer as orphans; drop them.
+    _drop_unreferenced_objects(writer)
 
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -1082,8 +1095,12 @@ def stamp_bates_inplace(
         buf.seek(0)
 
         overlay_page = PdfReader(buf).pages[0]
-        page.merge_page(overlay_page)
-        writer.add_page(page)
+        # Merge on the writer's copy (merging a reader page is deprecated in pypdf),
+        # then recompress the merged content stream; see add_bates_numbers.
+        writer_page = writer.add_page(page)
+        writer_page.merge_page(overlay_page)
+        writer_page.compress_content_streams()
+    _drop_unreferenced_objects(writer)
 
     with open(pdf_path, "wb") as fh:
         writer.write(fh)
