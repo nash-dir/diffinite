@@ -15,8 +15,9 @@ benchmarking. They are NOT part of the Diffinite software itself and
 retain their original licenses as noted below.
 
 Current tree: these files are NOT tracked. They are fetched on demand
-into example/ by example/download_examples.py (the IR-Plag calibration
-corpus is pinned to an upstream commit and verified by SHA-256) and are
+into example/ by example/download_examples.py (the IR-Plag and SOCO 2014
+validation corpora are verified by SHA-256; the benchmark files are fetched
+from the fixed upstream commits named below but not hash-checked) and are
 excluded from the repository by .gitignore and from the Python package
 and VS Code extension builds.
 
@@ -31,21 +32,31 @@ The TDD/corpus/ paths named below refer to that historical layout.
    Path:     example/Case-Oracle/OpenJDK_Oracle/
              example/Case-NegativeControl/OpenJDK/
              TDD/corpus/openjdk_extra/
-   Source:   https://github.com/openjdk/jdk (tag: jdk7-b147)
+   Source:   https://github.com/openjdk/jdk (tag: jdk7-b147,
+             commit 7b2e99178f7cf41ecd86b2ccfba38ea653e815e7)
    License:  GNU General Public License, version 2,
              with the Classpath Exception
-   Copyright (c) 1994, 2011, Oracle and/or its affiliates.
+   Copyright Oracle and/or its affiliates (years as stated in each
+             file header).
    Files:    ArrayList.java, Collections.java, String.java, List.java,
-             Math.java, HashMap.java, HashSet.java, Arrays.java
+             Math.java, HashMap.java, HashSet.java (Arrays.java: historical
+             TDD/corpus/ only)
+   Note:     Some earlier local copies (e.g. ArrayList.java dated 2017,
+             Collections.java dated 2019) came from a later OpenJDK
+             release, not jdk7-b147; their exact revision is not recorded.
 
 -------------------------------------------------------------------------
 2. Android Open Source Project (AOSP / Google)
 -------------------------------------------------------------------------
    Path:     example/Case-Oracle/AOSP_Google/
    Source:   https://android.googlesource.com/platform/libcore/
-             (Froyo release)
+             (tag android-4.4_r1, commit
+             e239af5ac0b3989363b2fed49076fa8a9d69d454; luni/src/main/java/java/
+             and, for String.java, libdvm/src/main/java/java/lang/)
    License:  Apache License, Version 2.0
-   Copyright (c) 2006, 2010, The Android Open Source Project.
+   Copyright: the files carry Apache Software Foundation (Apache Harmony)
+             licence headers; no separate AOSP copyright line appears in
+             them.
    Files:    ArrayList.java, Collections.java, String.java, List.java,
              Math.java
 
@@ -54,6 +65,7 @@ The TDD/corpus/ paths named below refer to that historical layout.
 -------------------------------------------------------------------------
    Path:     example/Case-NegativeControl/Eclipse_Collections/
    Source:   https://github.com/eclipse/eclipse-collections
+             (tag 13.0.0, commit cff067d4fb8b306f394a140d043ec6ee1666093d)
    License:  Eclipse Public License - v 1.0
              Eclipse Distribution License - v 1.0
    Copyright (c) 2004, 2024, Goldman Sachs, Eclipse Foundation,
@@ -109,9 +121,32 @@ The TDD/corpus/ paths named below refer to that historical layout.
 -------------------------------------------------------------------------
    Path:     example/soco14/
    Source:   https://zenodo.org/records/7433031
-   License:  Open Access (Creative Commons Attribution 4.0 International)
+   License:  The Zenodo record is marked open access but states no licence
+             (its metadata licence field is empty). Check the terms with the
+             dataset authors before redistributing.
+   Pinned:   archive SHA-256 879f8ef1...16f4c9, see download_examples.py
    Citation: Flores, E., Rosso, P., Moreno, L., Villatoro-Tello, E.
              (2014). "PAN@FIRE 2014: Overview of SOCO Track on the
              Detection of SOurce COde Re-use." Working notes of FIRE 2014.
    Files:    Training: 259 Java + 79 C files with expert annotations
              Test: ~30,000 Java + C/C++ files with relevance judgements
+
+-------------------------------------------------------------------------
+9. Android Open Source Project — frameworks/base
+-------------------------------------------------------------------------
+   Path:     example/aosp/
+   Source:   https://github.com/aosp-mirror/platform_frameworks_base
+             (left: branch pie-release; right: tag android-11.0.0_r1),
+             core/java/android/os/
+   License:  Apache License, Version 2.0
+   Copyright: as stated in each file header (The Android Open Source
+             Project).
+   Files:    Handler.java, Looper.java, Message.java
+
+-------------------------------------------------------------------------
+10. SQLite amalgamation
+-------------------------------------------------------------------------
+   Path:     example/sqlite/
+   Source:   https://www.sqlite.org/ (sqlite-amalgamation-3450000.zip and
+             sqlite-amalgamation-3460000.zip)
+   License:  Public domain (as stated in the SQLite source files)

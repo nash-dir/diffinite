@@ -130,7 +130,7 @@
               "nextBatesNumber": {
                 "type": "integer",
                 "default": 1,
-                "description": "Next Bates start number (auto-updated after export)"
+                "description": "Bates start number pre-filled when this preset is selected (not updated automatically; set it to the next unused number before each export)"
               }
             },
             "required": [

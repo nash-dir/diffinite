@@ -19,13 +19,12 @@ Compare two directories of source code with [Winnowing fingerprints](https://the
 - **N:M Cross-Matching (Deep Mode)** — Winnowing fingerprint-based Jaccard similarity across all file pairs. Detects code reuse across renamed files; for pairs that pass the Jaccard threshold, the directional *A in B / B in A* columns show how much of each file was carried over (Jaccard is diluted when file sizes differ). A small file copied whole into a much larger one can still fall below the Jaccard threshold and not be listed.
 - **Comment Stripping** — 6-state FSM parser supporting 45+ file extensions (`.py`, `.js`, `.ts`, `.java`, `.c`, `.cpp`, `.go`, `.rs`, `.swift`, `.rb`, `.php`, `.sql`, `.html`, `.css`, and more).
 - **Moved Block Detection** — Detects code blocks that were moved (not just added/deleted) and highlights them in purple (original position) and blue (moved destination).
-- **SHA-256 Evidence Integrity** — Embeds cryptographic hashes for all analyzed files directly in the report for forensic chain-of-custody.
+- **SHA-256 Integrity Hashes** — Every export writes a `<report file>.manifest.sha256.json` listing the SHA-256 of all inputs and outputs. With the **Hash** option (on by default in the GUI), HTML/PDF reports also embed a SHA-256 table of input files (not applicable to Markdown). This is an integrity check: a byte mismatch can be detected only against a copy of the manifest or hashes kept separately. The manifest is not signed, and hashes do not by themselves establish authenticity, chain of custody or admissibility.
 
 ### VS Code Integration
 - **Real-time Progress Bar** — Live percentage tracking during analysis, fed from Python backend stdout.
-- **Pre-analysis Time Estimation** — Scans file sizes upfront and estimates Simple/Deep mode duration before committing to analysis.
-- **Dynamic CPU Calibration** — Benchmarks Phase 1 performance to refine Phase 2 time predictions for the current machine.
-- **OOM Defense** — Warns before analyzing file pairs exceeding 5MB, preventing silent crashes on large binary/generated files.
+- **Rough Time Hint** — Scans file sizes upfront and shows a rough Simple/Deep duration hint. The hint uses unmeasured rule-of-thumb constants and counts only files with an identical relative path; the Phase 2 hint is rescaled by how long Phase 1 actually took. It is not a measured or calibrated prediction.
+- **Large-File Notice** — Shows a non-blocking warning when a same-path file pair is 5 MB or larger; analysis continues. Memory protection itself comes from the CLI's `--max-file-size` (default 10 MB): oversized files are compared by SHA-256 only and left out of Deep Compare; in Deep mode that omission stops the run unless Allow partial analysis is on.
 - **Interactive Tree Viewer** — Review matched pairs and selectively choose which files to include in the final report.
 - **Multiple Report Formats** — Export to PDF, HTML, Markdown, or JSON.
 - **Forensic Annotations** — Page numbers, file numbers, Bates stamps (with configurable prefix/suffix/start number), filenames on every page.
@@ -76,7 +75,7 @@ Summary table for each matched file pair:
 |--------|-------------|
 | **File A / File B** | Matched file paths |
 | **Name Sim.** | Fuzzy filename similarity score (0–100) |
-| **Line match (difflib)** | `SequenceMatcher.ratio()` — proportion of matching lines (`1.0` = identical) |
+| **Line match (difflib)** (*Word match* under By Word) | `SequenceMatcher.ratio()` — `2 × matched lines ÷ (lines A + lines B)`, shown as a percentage (`100%` = identical). Hash-only pairs (binary or over the size limit) show only whether the SHA-256 hashes are identical. |
 | **Added / Deleted** | Lines added to or deleted from File A to produce File B |
 
 ### Diff Pages
@@ -130,7 +129,7 @@ N:M cross-matching table (deep mode):
 
 ### GUI Options Panel
 
-All options are configurable through the built-in GUI panel:
+All options are configurable through the built-in GUI panel. Defaults below are the GUI defaults (`defaultAnalysisOptions`); where a CLI default differs, it is noted.
 
 | Option | Default | Description |
 |--------|:-------:|-------------|
@@ -140,8 +139,9 @@ All options are configurable through the built-in GUI panel:
 | **Normalize** | off | Normalize identifiers → `ID`, literals → `LIT` before fingerprinting. Python records the effective threshold and whether the measured profile (K=5, W=4, comments stripped, language-aware off) applies. Other profiles are shown as unvalidated; matches below 45 tokens remain *inconclusive / 판단 유보*. |
 | **Collapse Identical** | off | Fold unchanged blocks (3 context lines) |
 | **Detect Moved Blocks** | off | Highlight moved code in purple/blue instead of plain delete/add |
-| **No Autojunk** | off | Disable autojunk heuristic for more precise forensic analysis |
-| **Hash (SHA-256)** | off | Embed evidence integrity hashes in the report |
+| **No Autojunk** | **on** | Disables the difflib autojunk heuristic. The CLI default is autojunk *enabled*, so line ratios can differ from a default CLI run; the value used is recorded in report metadata. |
+| **Hash (SHA-256)** | **on** | Embed a SHA-256 table of input files in HTML/PDF reports (CLI default: off). The manifest is written either way. Integrity check only, not a signature or chain-of-custody proof. |
+| **Page / File / Bates Numbers** | **on** | Stamp page numbers, file numbers and Bates numbers on PDF pages (CLI defaults: off). |
 | **Encoding** | `auto` | Force file encoding (`euc-kr`, `utf-8`, etc.) or auto-detect |
 | **Uncompared Mode** | `inline` | How unmatched files appear: `inline`, `separate`, or `none` |
 | **Threshold** | `60` | Fuzzy file-name matching threshold (0–100) |
@@ -153,7 +153,7 @@ All options are configurable through the built-in GUI panel:
 | **Bates Preset** | — | Select a saved preset to auto-fill prefix/suffix/start |
 | **Bates Prefix** | (empty) | Prefix for Bates numbering (e.g. `PLAINTIFF-`) |
 | **Bates Suffix** | (empty) | Suffix for Bates numbering (e.g. `-CONFIDENTIAL`) |
-| **Starting Number** | `1` | First Bates number (auto-continues across reports) |
+| **Starting Number** | `1` | First Bates number. A preset pre-fills it from `nextBatesNumber`; it is **not** updated after export, so set the next unused number before each export to avoid reusing a Bates range. |
 
 Older saved options have no Auto/Manual marker, so an existing numeric
 `thresholdDeep` cannot be distinguished from an intentional override. Migration

@@ -13,10 +13,11 @@
 - **Directional containment** in every Deep Compare table and the JSON report: *A in B* = shared ÷ unique fingerprints of A, *B in A* = shared ÷ unique fingerprints of B (analogous to the 원본 기준 / 비교본 기준 ratios of Korean software appraisal and the per-direction similarity of JPlag/Dolos, but counted in unique fingerprints). For a pair that is listed, a file copied whole into a larger file now reads ~100% instead of a diluted Jaccard. Descriptive only — rows are still selected by the Jaccard threshold, so a small file inside a much larger one can remain unlisted. JSON adds `unique_hashes_a`, `unique_hashes_b`, `containment_a_in_b`, `containment_b_in_a`.
 - **Out-of-sample validation** (`python -m tests.validation.holdout`): leave-one-assignment-out on IR-Plag and an independent check on the SOCO 2014 training set; results in `example/validation/holdout.md`. `example/download_examples.py --dataset soco14` fetches the SOCO training set pinned by SHA-256.
 - Deep Compare now reports files it skipped as binary content (`analysis_status.deep.skipped_binary_files`) instead of counting them as processed.
-- Evidence hardening: immutable source snapshot verified before and after analysis, transactional multi-format output with rollback, provenance of ignore/filter policies, CSV formula-injection escaping.
+- Evidence hardening: a private source snapshot whose SHA-256 hashes are verified at creation, before analysis and before commit, transactional multi-format output with rollback, provenance of ignore/filter policies, CSV formula-injection escaping.
 
 ### Fixed
 
+- `--strip-comments`: a C-style block comment between two identifier or number characters (e.g. `int/*a*/x`) is now replaced by one space, as a compiler treats it, instead of joining the tokens into a non-existent identifier (`intx`). Stripped text, line diffs and fingerprints can differ from 0.13.x for such code. Markup comments (`<!-- -->`) are unchanged. The IR-Plag calibration corpus contains no such pattern, so the calibration figures are unchanged.
 - `#if 0 … #else … #endif`: the live `#else`/`#elif` branch was deleted as dead code, and a nested `#ifdef` inside `#if 0` ended the dead block early. `#if 0 // comment` is now recognised.
 - The line channel stripped comments from **both** files with File A's language rules; each file now uses its own.
 - A binary file saved under a source extension (e.g. a compiled blob named `.py`) no longer aborts the whole run; Deep Compare skips it and lists it in the report as skipped binary content.
@@ -29,6 +30,18 @@
 - A failure before report writing no longer leaves the plaintext source snapshot in the temp directory until garbage collection; it is removed immediately.
 - Extension error messages keep the last 8 KB of stderr instead of only the last chunk, so a traceback is not cut mid-line.
 - `calibration.json`: the `fp_le_5` point mixed two denominators; its count and confidence interval now use the same negatives as its rate. The shipped `fp_le_1` point is unchanged, and a new test ties the constants quoted in reports to this file.
+
+### Extension
+
+- **Review screen.** The Tree Viewer opens with a summary of counts and settings read straight from the analyzer's JSON (analysis state, matched and unmatched files, error and hash-only pairs, Deep Compare candidates, settings). A value the report does not carry is shown as `unknown`, never guessed.
+- **Report presets** at export time (As configured / Technical report / Evidence report). A preset only switches output flags (page/file/Bates numbers, SHA-256 table), never matching or metrics, and the export dialog lists exactly what the report will contain.
+- **Clearer failure messages.** A failed analysis or export now shows a short cause and next step (runtime missing, unreadable input, partial result refused, PDF failure, out of memory, …) with the full stderr in the *Diffinite* output channel.
+- **Theme support.** All webviews use VS Code theme colors, so Light, Dark and High Contrast themes render correctly.
+- **Fixed:** a Bates suffix or prefix starting with `-` (e.g. `-CONFIDENTIAL`) was read by the CLI as an unknown option and the run failed.
+- **Fixed:** with *Binary files: Exclude*, a valid report was rejected as inconsistent because excluded binary pairs leave no result row.
+- **Fixed:** hash-only pairs (binary or over `--max-file-size`) were shown as a content-similarity percentage. They now read *identical (SHA-256)* / *differs (SHA-256)*, and pairs with an error read *not compared*.
+- The bundled Windows runtime no longer ships pip console-script launchers (`site-packages/bin/*.exe`).
+- Wording: the extension README and help no longer describe SHA-256 hashes as chain-of-custody evidence, results as "legally sound", or the time hint as "calibrated"; the Options table now shows the real GUI defaults (No Autojunk, Hash and page/file/Bates numbers on). Bates presets pre-fill the start number but do not update it after export (the unused auto-update helper was removed); set the next unused number before each export.
 
 ### Docs
 

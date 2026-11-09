@@ -22,9 +22,9 @@ The recommended way to use Diffinite **on Windows** is through the **VS Code ext
 ### Features
 - **Visual directory picker** — Select two directories and configure options via a GUI panel
 - **Real-time progress bar** — Live percentage tracking during analysis
-- **Pre-analysis time estimation** — Scans file sizes upfront and estimates Simple/Deep mode duration
-- **Dynamic CPU calibration** — Benchmarks Phase 1 performance to refine Phase 2 time predictions
-- **OOM defense** — Warns before analyzing file pairs exceeding 5MB
+- **Rough time estimate** — Scans file sizes upfront and gives an approximate Simple/Deep mode duration (a heuristic, not a measured prediction)
+- **Phase 2 estimate scaled by Phase 1 speed** — Rescales the rough Phase 2 estimate using how long Phase 1 actually took
+- **Large-file notice** — Non-blocking warning when a same-path file pair is 5 MB or larger; memory protection itself comes from the CLI's `--max-file-size` (default 10 MB)
 - **Interactive tree viewer** — Review matched pairs and selectively export
 - **One-click PDF/HTML export** — With Bates numbering, page numbers, and filename annotations
 
@@ -116,8 +116,8 @@ The cover page contains a summary table for each matched file pair:
 |--------|-------------|
 | **File A / File B** | Matched file paths |
 | **Name Sim.** | Fuzzy filename similarity score (0–100) |
-| **Line match (difflib)** | `difflib.SequenceMatcher.ratio()` as a percentage — `2 × matched lines ÷ (lines A + lines B)`. `100%` = identical. Blank and brace-only lines count as matches, so unrelated files typically still score 10–30% on this column. |
-| **Added / Deleted** | Number of lines (or words) added to or deleted from File A to produce File B. |
+| **Line match (difflib)** — labelled *Word match* under `--by-word` | `difflib.SequenceMatcher.ratio()` as a percentage — `2 × matched lines ÷ (lines A + lines B)`; with `--by-word` the unit is whitespace-separated words instead of lines. `100%` = identical. difflib's `autojunk` heuristic (on by default) looks only at File B: when File B has fewer than 200 lines (words under `--by-word`), blank and brace-only lines count as matches, so unrelated small files can still score 10–30%; when File B has 200 or more, any line occurring in more than about 1% of File B's lines (typically blanks and `}`) is ignored, so unrelated large files usually score only a few percent (see the negative control under [Benchmarks](#benchmarks)). `--no-autojunk` counts every line at all file sizes. |
+| **Added / Deleted** | Number of lines (or words, with `--by-word`) added to or deleted from File A to produce File B. |
 
 ### Diff Pages
 
@@ -149,7 +149,7 @@ Jaccard similarity is a well-defined set metric. Its interpretation depends on t
 
 | Option | Annotation | Position |
 |--------|-----------|----------|
-| `--page-number` | `Page 3 / 47` | Bottom-right |
+| `--page-number` | `Page 3 / 5` (counted within the current file's diff) | Bottom-right |
 | `--file-number` | `File 2 / 12` | Bottom-left |
 | `--bates-number` | `TEST-000003-CONF` | Bottom-center |
 | `--filename` | `com/example/Foo.java` | Top-right |
@@ -214,8 +214,8 @@ Korean, Japanese, and Chinese text is rendered correctly in PDF output. By defau
 | `--k-gram N` | `5` | K-gram size for Winnowing. Larger K = fewer but more specific fingerprints. K=5 is the value frozen in the calibration profile (the paper prescribes no value for code). |
 | `--window N` | `4` | Winnowing window size. Guarantees detection of any shared sequence ≥ `K+W−1` = 8 tokens. |
 | `--threshold-deep N` | `5` raw / `93` normalize | Minimum Jaccard similarity (percent, 0–100) to include in results. Raw 5 is a **legacy, uncalibrated compatibility default**, not a safe cutoff. `--normalize` auto keeps **93**; the measured statistics apply only to the exact profile documented below. Pass a value to override; manual values are recorded as `user`. |
-| `--normalize` | off | Normalize identifiers → `ID`, literals → `LIT` before fingerprinting. This makes renamed-identifier similarity easier to surface but **raises the false-positive rate on independent code** — see [Normalize precision](#normalize-precision--false-positive-rate). Matches below 45 tokens are conservatively marked *inconclusive*. Every report states whether the measured calibration applies to its actual K/W/comment/language profile. |
-| `--lang-aware` | off | With `--normalize`, use language-aware normalization (Pygments lexer, falling back to per-language keyword sets) so keywords like Rust `fn`/`pub` or Go `func` are preserved instead of flattened to `ID`. Opt-in; produces fingerprints incompatible with the default channel. No effect without `--normalize`. |
+| `--normalize` | off | Normalize identifiers → `ID`, literals → `LIT` before fingerprinting. This makes renamed-identifier similarity easier to surface but **raises the false-positive rate on independent code** — see [Normalize precision](#normalize-precision--false-positive-rate). Matches below 45 tokens are conservatively marked *inconclusive*. Every report states whether its fingerprint profile (K/W, comment stripping, `--lang-aware`) and threshold match the measured calibration profile. That check does not look at the input language or file size: the calibration measured only small Java files, and the disclosure text states those limits. |
+| `--lang-aware` | off | With `--normalize`, use language-aware normalization (Pygments lexer, falling back to per-language keyword sets) so keywords like Rust `fn`/`pub` or Go `func` are preserved instead of flattened to `ID`. Pygments comment tokens are always discarded on this path, regardless of `--strip-comments`, and every string-literal sub-token (quote, body, escape, interpolation; Python docstrings included) maps to `STR`. Opt-in; produces fingerprints incompatible with the default channel. No effect without `--normalize`. |
 | `--workers N` | `4` | Number of parallel worker processes for diff rendering and fingerprint extraction. |
 
 ### Forensic Options
@@ -225,7 +225,7 @@ Korean, Japanese, and Chinese text is rendered correctly in PDF output. By defau
 | `--no-autojunk` | off | Disable `SequenceMatcher`'s autojunk heuristic. Treats all tokens equally — slower but more precise for forensic analysis. |
 | `--max-index-entries N` | `10,000,000` | Memory cap for the Deep Compare inverted index. Reaching the cap fails closed by default; `--allow-partial` is required to emit an explicitly incomplete truncated result. |
 | `--max-file-size N` | `10.0` | Files larger than this (MB) use SHA-256 match/mismatch in the line-comparison channel. Omitting them from Deep Compare fails closed unless `--allow-partial` explicitly authorizes an incomplete result. |
-| `--hash` | off | Embed SHA-256 evidence integrity hashes for all analyzed files in the report. |
+| `--hash` | off | Embed a table of SHA-256 digests of the analyzed input files in the HTML/PDF report. A digest lets anyone check, against a separately kept copy, that a file's bytes have not changed; it is not a signature and does not by itself establish authenticity or chain of custody. |
 | `--uncompared-files {inline,separate,none}` | `inline` | Control how unmatched files are displayed: inline in the main report, written to a separate `*_uncompared.txt` file, or omitted. |
 | `--bundle PATH` | — | Create an evidence bundle ZIP at `PATH` containing source files, generated reports, and the integrity manifest. |
 | `--allow-partial` | off | Permit an explicitly **incomplete** report after a worker/file failure. Without this flag, such failures stop report generation. |
@@ -246,8 +246,10 @@ Report checksum sidecars use `.sha256`. The legacy `.sig` sidecar is retained fo
 compatibility but is deprecated: it contains only a plain SHA-256 checksum and is
 not an electronic signature or chain-of-custody attestation.
 
-Successful evidence runs analyze and bundle a verified immutable source snapshot,
-then recheck both the live sources and snapshot before committing output. Report,
+Successful evidence runs analyze and bundle a private source snapshot (an ordinary
+temporary copy, writable by the process owner) whose SHA-256 hashes are verified when
+it is created, before analysis, and again before output is committed; the live
+sources are rechecked at the same point. Report,
 manifest, bundle, and checksum updates are covered by one rollback transaction for
 handled failures. Portable filesystems cannot atomically replace the complete
 multi-file set across a power loss, and a hostile local process can still race the
@@ -266,7 +268,7 @@ a successful or calibrated state.
 
 | Option | Description |
 |--------|-------------|
-| `--page-number` | Show `Page n / N` at the bottom-right |
+| `--page-number` | Show `Page n / N` at the bottom-right, counted within each file's diff (restarts for every file; cover pages are unnumbered). Use `--bates-number` for unique page identifiers. |
 | `--file-number` | Show `File n / N` at the bottom-left |
 | `--bates-number` | Stamp sequential Bates numbers at the bottom-center |
 | `--bates-prefix TEXT` | Bates number prefix (e.g. `PLAINTIFF-`). Combined as: `{prefix}{number}{suffix}` |
@@ -296,7 +298,7 @@ diffinite plaintiff_code/ defendant_code/ -o exhibit_A.pdf \
 diffinite vendor_v1/ vendor_v2/ --report-html audit.html --strip-comments
 ```
 
-### Profile-Bound Calibrated Normalize Channel (Near-Verbatim Candidates)
+### Profile-Bound Calibrated Normalize Channel (Lightly Modified Candidates)
 
 ```bash
 # Python selects the measured normalize operating point (currently 93)
@@ -312,6 +314,9 @@ The published estimate is profile-bound: K=5, W=4, comments stripped, and
 language-aware normalization off. The numeric auto threshold remains 93 for
 compatibility under other profiles, but those reports are explicitly marked
 `unvalidated-profile` and do not quote the measured false-positive rate or CI.
+A profile match means only that these fingerprint settings and the threshold
+match; it does not check the input language or file size. The calibration
+measured small Java files only, and the quoted disclosure says so.
 
 ### Simple Mode (Fast, No Cross-Matching)
 
@@ -493,15 +498,15 @@ An explicit/manual `--normalize --threshold-deep 5` is not a defensible safety c
 **What the operating point honestly is** (quoted only when the run matches the measured profile; every other normalize report says that these figures do not apply):
 
 - The false-positive rate is **0.95%, but that is 1 of 105 file pairs** — Wilson 95% CI **[0.17%, 5.2%]**. It is not a *known* 1% rate; the upper bound exceeds 5%.
-- **Recall is not uniform.** At threshold 93: L1 65%, L2 46%, L3 21%, **L4–L6 0%**. The threshold flags at most near-verbatim copies, and even of those about a third are missed (L1 65%); heavily restructured copies fall below it and need manual review. The pooled "~22%" should not be read as uniform sensitivity.
-- The 105 negatives derive from only **7 assignments** (not i.i.d.), and nothing **> 212 tokens** was tested — the operating point is unvalidated on large files. At FP ≤ 1% the 45-token floor is non-binding on this corpus (it gates sub-floor matches at runtime, which this corpus does not exercise). 45 is simply the smallest file pair in the corpus, not a measured boundary.
+- **Recall is not uniform.** At threshold 93: L1 65%, L2 46%, L3 21%, **L4–L6 0%**. The threshold flags mainly lightly modified copies (L1: comment, formatting and minor edits such as class renames — 65% recall); heavily restructured copies fall below it and need manual review. The pooled "~22%" should not be read as uniform sensitivity.
+- The 105 negatives derive from only **7 assignments** (not i.i.d.), and in every tested pair the **smaller file has ≤ 212 tokens** (individual files reach 307 tokens) — the operating point is unvalidated when both files are larger. At FP ≤ 1% the 45-token floor is non-binding on this corpus (it gates sub-floor matches at runtime, which this corpus does not exercise). 45 is simply the smallest file pair in the corpus, not a measured boundary.
 - All corpus files are **Java**; no other language was measured.
 - **93 is set by single pairs.** The one false positive (case-01, an independent submission) scores **100%**, so no threshold excludes it; the next-highest independent pair scores between 92% and 93% (`pr_curve.csv`: FP 2/105 at threshold 92, 1/105 at 93), which is why the lowest qualifying whole number is 93.
 
 **Out-of-sample checks** ([`tests/validation/holdout.py`](tests/validation/holdout.py); results in [`example/validation/holdout.md`](example/validation/holdout.md)):
 
 - *Leave-one-assignment-out on IR-Plag.* Re-running the "FP ≤ 1%" selection on 6 assignments and testing on the 7th is **unstable**: whenever the assignment containing the 100% false positive is in the selection set, no threshold meets the target and nothing would be flagged (6 of 7 folds). The same procedure with an "FP ≤ 5%" target picks a stable threshold (77–78 in every fold): pooled out-of-sample FP **5/105 = 4.8%** (Wilson 95% CI 2.1–10.7%; pairs cluster in 7 assignments, so the true interval is wider; per-fold FP ranged 0/15 to 3/15), recall 33.5%. Applied unchanged per assignment, threshold 93 gives FP 1/15 on case-01 and 0/15 on the other six. The shipped threshold has not been changed on the basis of this check; choosing an operating point is a forensic decision.
-- *SOCO 2014 training set* (Flores et al., FIRE 2014; never used for calibration), frozen profile, threshold 93: **0 of 33,327** Java pairs without an expert re-use label were flagged, and recall on the 84 expert-labelled Java re-use pairs is **16.7%**; on C it is **0%** (26 pairs). Unlabelled pairs are not proven independent, so 0 flags bounds — but does not measure — the false-positive rate; no confidence bound is quoted because every file appears in ~258 pairs. About 90% of SOCO files exceed the 212-token range measured on IR-Plag (median 589 Java tokens). The corpus is fetched and SHA-256-verified by `python example/download_examples.py --dataset soco14`.
+- *SOCO 2014 training set* (Flores et al., FIRE 2014; never used for calibration), frozen profile, threshold 93: **0 of 33,327** Java pairs without an expert re-use label were flagged, and recall on the 84 expert-labelled Java re-use pairs is **16.7%**; on C it is **0%** (26 pairs). Unlabelled pairs are not proven independent, so 0 flags bounds — but does not measure — the false-positive rate; no confidence bound is quoted because every file appears in ~258 pairs. 84.2% of the Java and 78.5% of the C SOCO files are larger than the largest IR-Plag file (307 tokens; median 589 Java tokens), so most of this corpus lies outside the measured size range. The corpus is fetched and SHA-256-verified by `python example/download_examples.py --dataset soco14`.
 - *Containment is not a copying signal under normalize on small files*: the median independent IR-Plag pair already has max(A in B, B in A) = 0.76. That is why containment is reported as a descriptive column without any threshold.
 
 For non-JVM/Python/JS languages, `--lang-aware` reduces the collapse by preserving language keywords (e.g. Rust `fn`/`pub`) instead of flattening them to `ID`.
@@ -575,7 +580,7 @@ Diffinite implements the paper's basic winnowing (rightmost minimal hash per win
 - **Deep channel gives "how much", not "where"**: Deep Compare reports file-level scores only. Line-level locations come from the 1:1 diff of name-paired files; an N:M match between differently named files has no line ranges.
 - **Temporary copy of the sources**: each run copies both source trees (and any prior evidence bundle) in plaintext to the system temp directory so it can verify them before and after analysis. The copy is removed afterwards, but this matters under confidentiality obligations; point `TEMP`/`TMPDIR` at an approved location if needed.
 - **CSV escaping**: a leading apostrophe on a CSV cell (e.g. `'-foo.c`) is a formula-injection escape, not part of the file name.
-- **Comments and docstrings**: without `--strip-comments`, comments and license headers are fingerprinted (a shared license header alone can produce a substantial Jaccard). Python docstrings are string literals and are kept even with `--strip-comments`.
+- **Comments and docstrings**: without `--strip-comments`, comments and license headers are fingerprinted (a shared license header alone can produce a substantial Jaccard). Python docstrings are string literals and are kept even with `--strip-comments`. Exception: under `--normalize --lang-aware` the Pygments lexer drops comment tokens even without `--strip-comments`, and docstrings collapse to `STR`.
 - **No corpus-based analysis**: Each comparison is pairwise. There is no built-in corpus-wide frequency weighting (e.g., TF-IDF) to down-weight common idioms.
 - **Binary and obfuscated code**: Not supported. Diffinite operates on source code text only.
 - **Not a legal opinion**: Similarity scores are mathematical measurements, not legal conclusions. Professional review is required before use in any legal proceeding.
