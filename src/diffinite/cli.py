@@ -167,7 +167,11 @@ def main(argv: list[str] | None = None) -> None:
         "--page-number",
         action="store_true",
         default=False,
-        help="Show 'Page n / N' at the bottom-right of each page",
+        help=(
+            "Show 'Page n / N' at the bottom-right, counted within each file's diff "
+            "(restarts per file; cover pages unnumbered). Use --bates-number for "
+            "unique page identifiers."
+        ),
     )
     parser.add_argument(
         "--file-number",
@@ -454,7 +458,9 @@ def main(argv: list[str] | None = None) -> None:
             "With --normalize, use language-aware normalization (Pygments lexer, "
             "falling back to per-language keyword sets) so keywords like Rust fn/pub "
             "or Go func are preserved instead of flattened to ID. Opt-in: produces "
-            "fingerprints incompatible with the default channel. No effect without "
+            "fingerprints incompatible with the default channel. Pygments comment "
+            "tokens are always discarded (regardless of --strip-comments), and string "
+            "literals including docstrings collapse to STR. No effect without "
             "--normalize."
         ),
     )

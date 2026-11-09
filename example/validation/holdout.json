@@ -257,7 +257,7 @@
       "unlabelled_flagged": 0,
       "unlabelled_flag_rate_pct": 0.0,
       "median_tokens": 589,
-      "share_files_over_calibrated_max_pct": 89.6
+      "share_files_over_largest_calibration_file_pct": 84.2
     },
     {
       "language": "c",
@@ -269,7 +269,7 @@
       "unlabelled_flagged": 0,
       "unlabelled_flag_rate_pct": 0.0,
       "median_tokens": 420,
-      "share_files_over_calibrated_max_pct": 94.9
+      "share_files_over_largest_calibration_file_pct": 78.5
     }
   ]
 }

@@ -74,6 +74,7 @@ from diffinite.models import (
     DeepMatchResult,
     DiffResult,
     FileHashEntry,
+    deep_compare_comment_mode,
 )
 from diffinite.parser import strip_comments as _strip_comments_fn
 from diffinite.pdf_gen import (
@@ -1545,6 +1546,7 @@ def _generate_markdown_report(
     """Generate a Markdown summary report."""
     unit = "word" if by_word else "line"
     comment_mode = "stripped" if strip_comments else "included"
+    deep_comment_mode = deep_compare_comment_mode(strip_comments, metadata)
 
     lines: list[str] = []
     lines.append("# Diffinite — Source Code Diff Report\n")
@@ -1555,13 +1557,19 @@ def _generate_markdown_report(
     lines.append(f"- **Dir A:** `{_md_escape(dir_a)}`")
     lines.append(f"- **Dir B:** `{_md_escape(dir_b)}`")
     lines.append(f"- **Comparison unit:** {unit}")
-    lines.append(f"- **Comments:** {comment_mode}")
+    if deep_comment_mode in ("not-applicable", comment_mode):
+        lines.append(f"- **Comments:** {comment_mode}")
+    else:
+        lines.append(f"- **Comments (line diff):** {comment_mode}")
+        lines.append(f"- **Comments (Deep Compare):** {deep_comment_mode}")
     lines.append(f"- **Matched pairs:** {len(results)}")
     lines.append(f"- **Unmatched:** {len(unmatched_a)} (A) / {len(unmatched_b)} (B)\n")
 
     # Summary table
     lines.append("## Summary\n")
-    lines.append("| # | File A | File B | Name Sim. | Line match (difflib) | +Added | −Deleted |")
+    lines.append(
+        f"| # | File A | File B | Name Sim. | {unit.capitalize()} match (difflib) | +Added | −Deleted |"
+    )
     lines.append("|---|--------|--------|:---------:|:--------------------:|:------:|:--------:|")
     for idx, r in enumerate(results, 1):
         if r.binary:
@@ -1722,11 +1730,9 @@ def _generate_json_report(
         "comment_mode": comment_mode,
         "preprocessing": {
             "line_diff_comments": comment_mode,
-            "deep_compare_comments": (
-                comment_mode
-                if metadata is not None and metadata.exec_mode == "deep"
-                else "not-applicable"
-            ),
+            # --normalize --lang-aware drops lexer comment tokens regardless of
+            # --strip-comments, so the deep channel is reported separately.
+            "deep_compare_comments": deep_compare_comment_mode(strip_comments, metadata),
             "normalize_whitespace": normalize_ws,
             "fingerprint_normalize": (metadata.normalize if metadata is not None else False),
             "lang_aware": metadata.lang_aware if metadata is not None else False,
@@ -1802,7 +1808,7 @@ def _generate_html_report(
             diff_sections.append(
                 f"<h2>{idx}. {html_mod.escape(r.match.rel_path_a)} &harr; "
                 f"{html_mod.escape(r.match.rel_path_b)}</h2>\n"
-                f"<p>Line-level match (difflib): {_ratio_badge(r.ratio)} &nbsp; "
+                f"<p>{unit.capitalize()}-level match (difflib): {_ratio_badge(r.ratio)} &nbsp; "
                 f'<span style="color:green">+{r.additions} {unit}(s)</span> &nbsp; '
                 f'<span style="color:red">-{r.deletions} {unit}(s)</span></p>\n'
                 f"{r.html_diff}\n"
@@ -1894,7 +1900,7 @@ def _generate_individual_html(
             body = (
                 f"<h2>{html_mod.escape(r.match.rel_path_a)} &harr; "
                 f"{html_mod.escape(r.match.rel_path_b)}</h2>\n"
-                f"<p>Line-level match (difflib): {_ratio_badge(r.ratio)} &nbsp; "
+                f"<p>{unit.capitalize()}-level match (difflib): {_ratio_badge(r.ratio)} &nbsp; "
                 f'<span style="color:green">+{r.additions} {unit}(s)</span> &nbsp; '
                 f'<span style="color:red">-{r.deletions} {unit}(s)</span></p>\n'
                 f"{r.html_diff}\n"
@@ -1947,6 +1953,7 @@ def _generate_individual_html(
         metadata=metadata,
         analysis_status=analysis_status,
         uncompared_mode=uncompared_mode,
+        unit=unit,
     )
     logger.info(
         "  Individual HTML reports (%d files) + index.html → %s",
@@ -1966,12 +1973,13 @@ def _build_index_html(
     metadata: AnalysisMetadata | None = None,
     analysis_status: AnalysisStatus | None = None,
     uncompared_mode: str = "inline",
+    unit: str = "line",
 ) -> None:
     """Generate an index.html with hyperlinks to all individual reports."""
     rows = []
     for e in entries:
         name_sim = f"{e.get('name_similarity', 0.0):.1f}"
-        # "Line match (difflib)" mirrors the cover/CSV: percentage for text pairs,
+        # The "<Unit> match (difflib)" column mirrors the cover/CSV: percentage for text pairs,
         # SHA-256 status for binary pairs (difflib ratio is meaningless there).
         if e["error"]:
             content_match = '<span style="color:red">Error</span>'
@@ -2037,7 +2045,7 @@ a:hover {{ text-decoration: underline; }}
 <thead>
 <tr>
 <th>#</th><th>File A (→ Click to View)</th><th>File B</th>
-<th>Name Sim.</th><th>Line match (difflib)</th><th>Added</th><th>Deleted</th>
+<th>Name Sim.</th><th>{unit.capitalize()} match (difflib)</th><th>Added</th><th>Deleted</th>
 </tr>
 </thead>
 <tbody>
@@ -2441,7 +2449,8 @@ def run_pipeline(
         len(unmatched_b),
     )
 
-    # Analysis, manifest, and bundle all consume this verified immutable copy.
+    # Analysis, manifest, and bundle all consume this private snapshot, verified by
+    # SHA-256 at creation, before analysis and before commit (it is not immutable).
     # The original roots are re-hashed after analysis so mid-run source changes
     # cannot silently produce a successful evidence artifact.
     snapshot_tmp = tempfile.TemporaryDirectory(prefix="diffinite_snapshot_")
@@ -3178,16 +3187,17 @@ def _generate_pdf_report(
                 with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
                     writer = csv.writer(f)
                     col_header = "Bates Range" if show_bates_number else "Page Range"
-                    # "Name Sim." = fuzzy filename similarity; "Line match (difflib)" =
-                    # difflib line-level ratio. Keeping them in separate, explicitly-labelled
-                    # columns prevents reading a 100% filename match as identical file content.
+                    # "Name Sim." = fuzzy filename similarity; "Line/Word match (difflib)" =
+                    # difflib ratio over the comparison unit (word under --by-word). Keeping
+                    # them in separate, explicitly-labelled columns prevents reading a 100%
+                    # filename match as identical file content.
                     writer.writerow(
                         [
                             "Index",
                             "File A",
                             "File B",
                             "Name Sim. (%)",
-                            "Line match (difflib, %)",
+                            f"{'Word' if by_word else 'Line'} match (difflib, %)",
                             col_header,
                         ]
                     )

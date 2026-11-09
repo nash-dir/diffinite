@@ -175,7 +175,8 @@ def build_inverted_index(
     나이브 쌍-단위 비교 O(N×M) 대비 O(Σ|fp_a|)로 단축.
 
     메모리: O(Σ|fp_b|) — 대규모 코퍼스에서 수 GB 가능.
-    ``max_entries`` 초과 시 경고 로그 출력 후 truncated index 반환.
+    엔트리 수가 ``max_entries`` 를 초과해 실제로 버려지는 엔트리가 있을 때만
+    경고 로그 출력 후 truncated index 반환(정확히 상한과 같으면 완전한 인덱스).
     ``--max-index-entries`` CLI 옵션으로 제어 가능.
 
     Returns:
@@ -186,8 +187,8 @@ def build_inverted_index(
     entry_count = 0
     for file_id, hashes in fp_map.items():
         for h in hashes:
-            index[h].add(file_id)
-            entry_count += 1
+            # 삽입 전에 검사한다: 정확히 max_entries 개로 끝나는 완전한 인덱스는
+            # 잘린 것이 아니다. 실제로 엔트리를 버릴 때만 truncated=True.
             if entry_count >= max_entries:
                 logger.warning(
                     "Inverted index truncated at %d entries "
@@ -195,6 +196,8 @@ def build_inverted_index(
                     max_entries,
                 )
                 return index, True
+            index[h].add(file_id)
+            entry_count += 1
     return index, False
 
 

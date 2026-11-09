@@ -285,8 +285,13 @@ class AnalysisMetadata:
     """normalize 오류율 수치를 산출한 버전 고정 검증 프로필 식별자."""
 
     calibration_status: str = "not-assessed"
-    """검증 수치 적용 상태: ``applicable``, ``unvalidated-profile``,
-    ``off-calibration-threshold``, ``not-applicable`` 또는 ``not-assessed``."""
+    """검증 프로필 일치 상태: ``applicable``, ``unvalidated-profile``,
+    ``off-calibration-threshold``, ``not-applicable`` 또는 ``not-assessed``.
+
+    ``applicable``은 **핑거프린트 실행 프로필(K, W, 주석 제거, lang-aware)과
+    threshold가 검증 지점과 일치한다는 뜻일 뿐**이다. 입력 언어와 파일 크기는
+    검사하지 않는다 — 측정은 IR-Plag Java 소형 파일에서만 이루어졌으며, 그 한계는
+    공시 문구(``calibration.threshold_disclosure``)가 전달한다."""
 
     calibration_profile_mismatches: tuple[str, ...] = ()
     """검증 프로필과 다른 실제 설정 필드명. 빈 튜플은 차이가 없거나
@@ -338,6 +343,28 @@ class AnalysisMetadata:
 
     allow_partial: bool | None = None
     """일부 입력/worker 실패를 명시적 불완전 보고서로 허용한 정책인지 여부."""
+
+
+LANG_AWARE_DEEP_COMMENT_MODE = (
+    "stripped (lang-aware lexer drops comments; files with no Pygments lexer, "
+    "or whose lexing fails (logged warning), keep them)"
+)
+
+
+def deep_compare_comment_mode(strip_comments: bool, metadata: AnalysisMetadata | None) -> str:
+    """Deep Compare 채널이 실제로 주석을 어떻게 처리했는지 보고용 문자열로 반환한다.
+
+    ``--normalize --lang-aware``의 Tier-2 경로는 ``--strip-comments`` 설정과
+    무관하게 Pygments 주석 토큰을 항상 버린다(``fingerprint._normalize_lang_aware``).
+    따라서 이 경우 라인 diff의 주석 모드(``strip_comments``)와 다르게 보고한다.
+    """
+    if metadata is None or metadata.exec_mode != "deep":
+        return "not-applicable"
+    if strip_comments:
+        return "stripped"
+    if metadata.normalize and metadata.lang_aware:
+        return LANG_AWARE_DEEP_COMMENT_MODE
+    return "included"
 
 
 @dataclass

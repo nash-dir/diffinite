@@ -31,6 +31,7 @@ import os
 import shutil
 import stat
 import tempfile
+import time
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Optional
@@ -244,6 +245,11 @@ def create_immutable_snapshot(
     The verified copy is the only source subsequently used for diffing,
     fingerprinting, and evidence bundling. A change between initial hashing and
     snapshot creation therefore fails closed instead of mixing byte versions.
+
+    Despite the historical function name, the snapshot is **not immutable**: it is
+    a private temp-directory copy the process owner can write to. Its integrity
+    comes from SHA-256 verification at creation, again before analysis and again
+    before output is committed (``verify_snapshot_matches_manifest``).
     """
     try:
         root = Path(root_dir).resolve(strict=True)
@@ -492,10 +498,12 @@ def write_manifest(
         "version": __version__,
         "created_at": datetime.datetime.now(tz=datetime.timezone.utc).isoformat(),
         "integrity_note": (
-            "Integrity is verified by the per-file sha256 values below. "
+            "Integrity is checked by comparing the per-file sha256 values below "
+            "with an independently kept copy; this manifest is not signed. "
             "created_at is informational only: re-running on identical inputs "
             "yields identical per-file hashes but a different created_at, so a "
-            "differing manifest-as-a-whole hash is expected and is not tampering."
+            "difference in the manifest-as-a-whole hash alone does not show that "
+            "any input or report changed."
         ),
         "source_a": {
             "root": root_label_a if root_label_a is not None else Path(dir_a).name,
@@ -670,6 +678,23 @@ def _publish_bundle_pair(
         staged_hash.unlink(missing_ok=True)
 
 
+# ZIP's DOS date field covers 1980-01-01 .. 2107-12-31 (PKWARE APPNOTE 4.4.6:
+# 7-bit year offset from 1980, 2-second resolution); clamp outside that range.
+_ZIP_MIN_DATE_TIME = (1980, 1, 1, 0, 0, 0)
+_ZIP_MAX_DATE_TIME = (2107, 12, 31, 23, 59, 58)
+
+
+def _zip_date_time(timestamp: float) -> tuple[int, int, int, int, int, int]:
+    """Local date_time tuple for a ZIP entry, clamped to the DOS-representable range."""
+    try:
+        value = tuple(time.localtime(timestamp)[:6])
+    except (OverflowError, OSError, ValueError):
+        # Out of the platform's localtime range: clamp toward the nearer end
+        # (a NaN fails "> 0" and gets the minimum).
+        return _ZIP_MAX_DATE_TIME if timestamp > 0 else _ZIP_MIN_DATE_TIME
+    return min(max(value, _ZIP_MIN_DATE_TIME), _ZIP_MAX_DATE_TIME)  # type: ignore[return-value]
+
+
 def create_evidence_bundle(
     dir_a: str,
     dir_b: str,
@@ -777,6 +802,22 @@ def create_evidence_bundle(
 
     expected_a = _expected_hashes("source_a")
     expected_b = _expected_hashes("source_b")
+
+    def _recorded_mtimes(side_key: str) -> dict[str, float]:
+        # Bundle entries carry the ORIGINAL file's mtime as recorded in the
+        # manifest; the snapshot copy being bundled has a fresh mtime.
+        recorded: dict[str, float] = {}
+        for entry in manifest[side_key]["files"]:
+            value = entry.get("modified_at")
+            if isinstance(value, str):
+                try:
+                    recorded[entry["path"]] = datetime.datetime.fromisoformat(value).timestamp()
+                except (ValueError, OverflowError, OSError):
+                    continue
+        return recorded
+
+    mtimes_a = _recorded_mtimes("source_a")
+    mtimes_b = _recorded_mtimes("source_b")
     if set(files_a) != set(expected_a) or len(files_a) != len(expected_a):
         raise SourceIntegrityError("source_a file list does not match the manifest")
     if set(files_b) != set(expected_b) or len(files_b) != len(expected_b):
@@ -839,10 +880,15 @@ def create_evidence_bundle(
         source: Path,
         archive_name: str,
         expected_digest: str,
+        mtime: float | None = None,
     ) -> None:
         digest = hashlib.sha256()
         try:
-            with source.open("rb") as input_file, archive.open(archive_name, "w") as output_file:
+            if mtime is None:
+                mtime = source.stat().st_mtime
+            info = zipfile.ZipInfo(archive_name, date_time=_zip_date_time(mtime))
+            info.compress_type = archive.compression
+            with source.open("rb") as input_file, archive.open(info, "w") as output_file:
                 while chunk := input_file.read(_HASH_BUF_SIZE):
                     digest.update(chunk)
                     output_file.write(chunk)
@@ -867,6 +913,7 @@ def create_evidence_bundle(
                     _resolved_source(root_a, rel_path),
                     f"source_a/{rel_path}",
                     expected_a[rel_path],
+                    mtimes_a.get(rel_path),
                 )
             for rel_path in files_b:
                 _write_verified(
@@ -874,6 +921,7 @@ def create_evidence_bundle(
                     _resolved_source(root_b, rel_path),
                     f"source_b/{rel_path}",
                     expected_b[rel_path],
+                    mtimes_b.get(rel_path),
                 )
             archive.writestr("manifest.sha256.json", manifest_bytes)
             for report_path, logical_path in mapped_reports:

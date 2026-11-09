@@ -66,9 +66,15 @@ NORMALIZE_RECALL_PCT: float = 21.7
 # nothing that is heavily restructured.
 NORMALIZE_RECALL_NEAR_VERBATIM_PCT: float = 65.0
 
-# Largest file (tokens) in the calibration corpus. The operating point is
-# unvalidated above this size.
+# Largest SMALLER-file size (tokens, min over each pair) among calibration pairs
+# (max tokens_min, tests/validation/error_rate.py). The operating point is
+# unvalidated for pairs whose files both exceed this. Disclosed, not enforced:
+# assess_normalize_calibration does not check input size.
 CALIBRATION_MAX_TOKENS: int = 212
+
+# Largest single file (tokens, strip_comments + tokenize(normalize=False)) among
+# the 467 IR-Plag files — the per-file counterpart of CALIBRATION_MAX_TOKENS.
+CALIBRATION_MAX_FILE_TOKENS: int = 307
 
 # Frozen execution profile used to produce example/validation/calibration.json.
 # tests/validation/error_rate.py stripped comments and invoked the then-default
@@ -84,7 +90,10 @@ NORMALIZE_CALIBRATION_LANG_AWARE: bool = False
 
 @dataclass(frozen=True)
 class NormalizeCalibrationAssessment:
-    """Whether the published normalize statistics apply to one effective run."""
+    """Whether one effective run matches the measured fingerprint profile and threshold.
+
+    Language and file size are not assessed; see ``assess_normalize_calibration``.
+    """
 
     profile_id: str
     threshold: float
@@ -124,7 +133,14 @@ def assess_normalize_calibration(
     strip_comments: bool | None,
     lang_aware: bool | None,
 ) -> NormalizeCalibrationAssessment:
-    """Compare an effective normalize run with the measured IR-Plag profile."""
+    """Compare an effective normalize run with the measured IR-Plag profile.
+
+    ``applicable`` means only that the fingerprint execution profile (K, W,
+    comment stripping, lang-aware) and the threshold match the measured point.
+    Input language and file size are **not** checked: the calibration measured
+    only small Java files, and those limits are carried by the disclosure text
+    (``normalize_disclosure``), not by this status.
+    """
     mismatches: list[str] = []
     if k != NORMALIZE_CALIBRATION_K:
         mismatches.append("k")
@@ -243,8 +259,10 @@ def normalize_disclosure(
     measured = (
         f"the measured false-positive rate is {NORMALIZE_FP_RATE_PCT:.2g}% "
         f"(Wilson 95% CI {lo:.2g}–{hi:.2g}%, 1/105 file pairs) on the IR-Plag "
-        f"Java corpus (files ≤{CALIBRATION_MAX_TOKENS} tokens; other languages "
-        "were not measured). The pairs cluster in 7 assignments, so the true "
+        f"Java corpus (file pairs whose smaller file has ≤{CALIBRATION_MAX_TOKENS} "
+        f"tokens; largest file {CALIBRATION_MAX_FILE_TOKENS}; other languages and "
+        "larger files were not measured, and this run's language and file sizes are "
+        "not checked against that scope). The pairs cluster in 7 assignments, so the true "
         "uncertainty is wider than this interval, and the one false positive "
         "scored 100%, which no threshold excludes. Recall is non-uniform: "
         f"~{NORMALIZE_RECALL_NEAR_VERBATIM_PCT:.0f}% for near-verbatim copies but "

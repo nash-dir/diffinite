@@ -12,8 +12,10 @@ Corpus — Karnalim IR-Plag (``example/plagiarism``). Each ``case-NN/`` is one
 programming assignment with three labelled groups:
 
   * ``original/``            — the reference solution
-  * ``plagiarized/L1..L6/*`` — obfuscated copies of ``original`` (L1 verbatim
-                               → L6 heavily restructured) → **POSITIVES** (recall)
+  * ``plagiarized/L1..L6/*`` — obfuscated copies of ``original``, levels after
+                               Faidhi & Robinson (1987): L1 = comment/formatting
+                               changes (not verbatim) → L6 heavy restructuring
+                               → **POSITIVES** (recall)
   * ``non-plagiarized/*``    — *different students'* independent solutions to the
                                **same** assignment → **NEGATIVES** (precision)
 
@@ -95,6 +97,7 @@ class PairScore:
     level: int | None    # 1..6 for positives, None for negatives
     jaccard: float       # 0.0–1.0
     tokens_min: int      # min token count across the two docs (stratification key)
+    tokens_max: int = 0  # max token count across the two docs (size-scope disclosure)
 
 
 def _file_doc(path: Path) -> Doc | None:
@@ -147,6 +150,7 @@ def score_case(case_dir: Path) -> list[PairScore]:
         for cand in _submission_files(sub_dir):
             for orig in original_files:
                 tmin = min(orig.tokens, cand.tokens)
+                tmax = max(orig.tokens, cand.tokens)
                 for mode, a, b in (
                     ("raw", orig.raw_fp, cand.raw_fp),
                     ("normalize", orig.norm_fp, cand.norm_fp),
@@ -154,6 +158,7 @@ def score_case(case_dir: Path) -> list[PairScore]:
                     scores.append(PairScore(
                         case=case, mode=mode, label=label, level=level,
                         jaccard=jaccard_similarity(set(a), set(b)), tokens_min=tmin,
+                        tokens_max=tmax,
                     ))
 
     # Negatives: independent solutions to the same assignment (file pairs).
@@ -317,6 +322,20 @@ def calibrate(scores: list[PairScore], *, fp_target: float = 5.0,
     return frontier, recommended
 
 
+def per_level_recall_at(scores: list[PairScore], point: CalibrationPoint,
+                        mode: str = "normalize") -> dict[str, float]:
+    """Per-level recall at *point*, over the SAME floor-filtered positives that
+    ``point.recall`` uses — so the pooled and per-level figures share one
+    denominator."""
+    out: dict[str, float] = {}
+    for lv in sorted({s.level for s in scores if s.label == "pos" and s.level}):
+        pos_lv = [s for s in scores if s.mode == mode and s.label == "pos"
+                  and s.level == lv and s.tokens_min >= point.floor]
+        hit = sum(1 for s in pos_lv if s.jaccard * 100 >= point.threshold)
+        out[f"L{lv}"] = round(_rate((hit, len(pos_lv))), 1)
+    return out
+
+
 def write_csv(rows: list[dict], path: Path) -> None:
     import csv
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -415,12 +434,14 @@ def write_md_summary(scores: list[PairScore], path: Path) -> None:
                 continue
             star = "  ⟵ recommended" if rec and p.floor == rec.floor and \
                 p.threshold == rec.threshold else ""
-            lines.append(f"| {p.floor} | {p.threshold} | {p.fp_rate:.1f}% | "
+            # fp_rate is already rounded to 2 dp; re-rounding to 1 dp printed
+            # 1/105 = 0.952% as "0.9%" (binary 0.95 < 0.95), so print 2 dp.
+            lines.append(f"| {p.floor} | {p.threshold} | {p.fp_rate:.2f}% | "
                          f"{p.recall:.1f}% | {p.coverage*100:.0f}%{star} |")
         if rec:
             lines.append(f"\n> Recommended (highest recall with ≥50% coverage): "
                          f"**floor={rec.floor} tokens, threshold={rec.threshold}** "
-                         f"→ FP {rec.fp_rate:.1f}%, recall {rec.recall:.1f}%.\n")
+                         f"→ FP {rec.fp_rate:.2f}%, recall {rec.recall:.1f}%.\n")
         else:
             lines.append("\n> No point meets the target with ≥50% coverage.\n")
 
@@ -467,12 +488,15 @@ def write_md_summary(scores: list[PairScore], path: Path) -> None:
             f"false-positive rate ranges {min(pcf):.0f}%–{max(pcf):.0f}%. The pooled "
             "CI above therefore *understates* true uncertainty.\n")
 
-        # Size scope.
+        # Size scope. tokens_min is the SMALLER file of a pair, so the bound is
+        # stated per pair, with the largest single file alongside it.
         max_tok = max((s.tokens_min for s in scores if s.label == "neg"), default=0)
+        max_file = max((s.tokens_max for s in scores), default=0)
         lines.append(
-            f"**Size scope:** every tested file pair has ≤ {max_tok} tokens (no large "
-            "files in this corpus). The operating point is unvalidated on large files; "
-            "the calibration characterizes small-file behavior only.\n")
+            f"**Size scope:** every tested pair's smaller file has ≤ {max_tok} tokens "
+            f"(largest single file {max_file} tokens; no large files in this corpus). "
+            "The operating point is unvalidated on large files; the calibration "
+            "characterizes small-file behavior only.\n")
 
         # Floor binding.
         below = sum(1 for s in scores
@@ -506,10 +530,7 @@ def main() -> None:
         fk = sum(1 for s in judged if s.jaccard * 100 >= rec.threshold)
         fn = len(judged)
         lo, hi = wilson_ci(fk, fn)
-        per_level = {
-            f"L{lv}": round(_rate(recall(scores, "normalize", rec.threshold, level=lv)), 1)
-            for lv in sorted({s.level for s in scores if s.label == "pos" and s.level})
-        }
+        per_level = per_level_recall_at(scores, rec)
         calib[f"fp_le_{int(fp_target)}"] = {
             "floor_tokens": rec.floor, "threshold": rec.threshold,
             "fp_rate": rec.fp_rate, "fp_ci95": [round(lo, 2), round(hi, 2)],

@@ -54,12 +54,12 @@ No threshold met the target in **0 of 7** folds. Pooled over folds (which used d
 
 ## 3. SOCO 2014 training set at threshold 93 (never used for calibration)
 
-Unlabelled pairs are *not* proven independent, so their flag count bounds the false-positive rate from above but does not measure it. No confidence bound is given: every file appears in about (files - 1) pairs, so the pairs are not independent. Most SOCO files are larger than the 212-token range measured on IR-Plag.
+Unlabelled pairs are *not* proven independent, so their flag count bounds the false-positive rate from above but does not measure it. No confidence bound is given: every file appears in about (files - 1) pairs, so the pairs are not independent. Most SOCO files are larger than the largest IR-Plag file (307 tokens).
 
-| Language | Files | Median tokens | Files > 212 tokens | Recall on expert re-use pairs | Unlabelled pairs flagged |
+| Language | Files | Median tokens | Files > 307 tokens | Recall on expert re-use pairs | Unlabelled pairs flagged |
 |---|:-:|:-:|:-:|:-:|:-:|
-| java | 259 | 589 | 89.6% | 16.67% (84 pairs) | 0/33327 |
-| c | 79 | 420 | 94.9% | 0.0% (26 pairs) | 0/3055 |
+| java | 259 | 589 | 84.2% | 16.67% (84 pairs) | 0/33327 |
+| c | 79 | 420 | 78.5% | 0.0% (26 pairs) | 0/3055 |
 
 ## 4. Directional containment on IR-Plag (descriptive)
 

@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from diffinite.calibration import (
-    CALIBRATION_MAX_TOKENS,
+    CALIBRATION_MAX_FILE_TOKENS,
     NORMALIZE_CALIBRATION_K,
     NORMALIZE_CALIBRATION_W,
     NORMALIZE_DEFAULT_THRESHOLD,
@@ -240,8 +240,12 @@ def score_soco(lang: str) -> dict | None:
         # No confidence bound: every file appears in ~(files-1) pairs, so the
         # pairs are far from independent and a binomial bound would mislead.
         "median_tokens": int(statistics.median(token_counts)),
-        "share_files_over_calibrated_max_pct": round(
-            sum(t > CALIBRATION_MAX_TOKENS for t in token_counts) / len(token_counts) * 100, 1
+        "share_files_over_largest_calibration_file_pct": round(
+            # Per-FILE counts against the per-FILE IR-Plag maximum (same unit; the
+            # 212 bound is a per-pair smaller-file size and must not be used here).
+            sum(t > CALIBRATION_MAX_FILE_TOKENS for t in token_counts)
+            / len(token_counts) * 100,
+            1,
         ),
     }
 
@@ -314,17 +318,17 @@ def write_md(result: dict, path: Path) -> None:
         "Unlabelled pairs are *not* proven independent, so their flag count bounds "
         "the false-positive rate from above but does not measure it. No confidence "
         "bound is given: every file appears in about (files - 1) pairs, so the pairs "
-        "are not independent. Most SOCO files are larger than the 212-token range "
-        "measured on IR-Plag.",
+        "are not independent. Most SOCO files are larger than the largest IR-Plag "
+        f"file ({CALIBRATION_MAX_FILE_TOKENS} tokens).",
         "",
-        "| Language | Files | Median tokens | Files > 212 tokens "
+        f"| Language | Files | Median tokens | Files > {CALIBRATION_MAX_FILE_TOKENS} tokens "
         "| Recall on expert re-use pairs | Unlabelled pairs flagged |",
         "|---|:-:|:-:|:-:|:-:|:-:|",
     ]
     for s in result["soco"]:
         lines.append(
             f"| {s['language']} | {s['files']} | {s['median_tokens']} "
-            f"| {s['share_files_over_calibrated_max_pct']}% | {s['recall_pct']}% "
+            f"| {s['share_files_over_largest_calibration_file_pct']}% | {s['recall_pct']}% "
             f"({s['positives']} pairs) | {s['unlabelled_flagged']}/{s['unlabelled_pairs']} |")
     lines += [
         "",

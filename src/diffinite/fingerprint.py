@@ -128,7 +128,9 @@ def _normalize_with_keywords(
 ) -> list[str]:
     """정규식 토큰열을 주어진 키워드 세트로 Type-2 정규화한다.
 
-    식별자→``ID``, 숫자→``LIT``, 문자열 구분자→``STR``, 키워드/연산자는 유지.
+    식별자→``ID``, 10진 숫자열(선택적 ``.소수부`` 포함)→``LIT``, 문자열 구분자→``STR``,
+    키워드/연산자는 유지. 16진·지수·접미사 리터럴(``0xFF``, ``1e10``, ``1.5f``)은
+    ``LIT`` 다음에 ``ID`` 가 붙는 두 토큰이 된다 — 리터럴 전체 정규화는 ``--lang-aware``.
     ``keywords`` 만 바꿔 끼우면 기본(언어 무관) 정규화와 언어 인식 Tier-1 정규화를
     같은 코드로 처리할 수 있다.
     """
@@ -161,7 +163,11 @@ def _normalize_lang_aware(source: str, ext: str | None) -> list[str] | None:
     """언어 인식 Tier-2 정규화: Pygments lexer 토큰 타입으로 분류한다.
 
     ``Keyword*``(``i32``·``pub``·``fn``·``func``·``fun`` 등 타입/선언 키워드 포함)는
-    원문 보존, ``Name*``→``ID``, ``Number``→``LIT``, ``String``→``STR``, 주석은 폐기.
+    원문 보존, ``Name*``→``ID``, ``Number``→``LIT``, ``String`` 하위 토큰(따옴표·본문·
+    이스케이프·보간 조각)은 **각각** ``STR`` (docstring 포함), 주석은
+    ``--strip-comments`` 설정과 무관하게 **항상 폐기**.
+    ``Text``/``Other``/``Generic`` 덩어리(예: ``.txt``·``.html`` 본문)는 통째로 한 토큰이
+    되지 않도록 Tier-1 토크나이저·정규화(언어 키워드 세트)를 거친다.
     이로써 함수 선언이 식별자와 구분되어, 비-JVM/Python/JS 언어의 위양성을 줄인다.
 
     ``ext`` 가 없거나, Pygments lexer를 찾지 못하거나, 렉싱 중 어떤 예외라도 나면
@@ -181,6 +187,7 @@ def _normalize_lang_aware(source: str, ext: str | None) -> list[str] | None:
         return None                          # → Tier-1 (registry keywords)
 
     out: list[str] = []
+    tier1_keywords = _lang_keywords(ext)
     try:
         for tok_type, val in lexer.get_tokens(source):
             s = val.strip()
@@ -196,6 +203,12 @@ def _normalize_lang_aware(source: str, ext: str | None) -> list[str] | None:
                 out.append("LIT")            # 숫자 리터럴 → LIT
             elif tok_type in Token.Literal.String:
                 out.append("STR")            # 문자열 리터럴 → STR
+            elif (tok_type in Token.Text or tok_type in Token.Other
+                  or tok_type in Token.Generic):
+                # 분류되지 않은 텍스트 덩어리 — 한 토큰으로 붙이면 파일이 K 미만
+                # 토큰으로 뭉개져 지문이 0개가 된다. Tier-1 로 쪼개 정규화한다.
+                out.extend(_normalize_with_keywords(
+                    TOKEN_RE.findall(s), tier1_keywords))
             else:
                 out.append(s)                # 연산자/구두점/기타 — 유지
     except Exception:  # noqa: BLE001 — lexer EXISTS but failed mid-stream
@@ -225,7 +238,9 @@ def tokenize(
     ``normalize=True``:
         Type-2 클론 탐지용 정규화:
         - 식별자 → ``"ID"`` (변수명 변경 무력화)
-        - 숫자 리터럴 → ``"LIT"``
+        - 10진 숫자열(선택적 ``.소수부``) → ``"LIT"`` — ``0xFF``·``1e10``·``1.5f`` 같은
+          16진·지수·접미사 리터럴은 ``"LIT"`` + ``"ID"`` 두 토큰이 된다
+          (리터럴 전체 정규화는 ``lang_aware=True`` 의 Tier-2 경로)
         - 문자열 **구분자**(따옴표) → ``"STR"``
         - 키워드/연산자 → 원문 보존
 
@@ -234,14 +249,17 @@ def tokenize(
         Tier-2(Pygments lexer)를 우선 시도하고, 해당 ``ext`` 의 lexer가 없으면
         Tier-1(레지스트리 ``LangSpec.keywords``)로 폴백한다. **opt-in 전용**이며
         기본 경로의 핑거프린트(기존 보고서 재현성)는 바뀌지 않는다.
+        Tier-2 는 ``--strip-comments`` 와 무관하게 lexer 주석 토큰을 **항상 버리고**,
+        문자열 리터럴(docstring 포함)을 ``STR`` 로 접는다.
 
     주의:
         문자열 **내용**은 정규화하지 않는다 — 따옴표만 ``STR``로 바뀌고 그 사이
         문자는 일반 식별자/리터럴로 토큰화된다. 따라서 문자열 값만 바뀐 클론은
         정규화 후에도 서로 다른 핑거프린트를 가질 수 있다(식별자 변경에는 둔감).
 
-        주석은 여기서 제거하지 않는다. 입력에 남은 주석은 코드처럼 지문에 포함되므로,
-        제외하려면 ``parser.strip_comments()``를 먼저 호출할 것.
+        기본 경로(및 Tier-1 폴백)는 주석을 여기서 제거하지 않는다. 입력에 남은 주석은
+        코드처럼 지문에 포함되므로, 제외하려면 ``parser.strip_comments()``를 먼저
+        호출할 것. 단 ``lang_aware=True`` 의 Tier-2 경로는 주석을 항상 버린다.
     """
     raw_tokens = TOKEN_RE.findall(source)
     if not normalize:

@@ -41,7 +41,12 @@ from reportlab.pdfgen import canvas
 from xhtml2pdf import pisa
 
 from diffinite.calibration import assess_normalize_metadata, threshold_disclosure
-from diffinite.models import DeepMatchResult, DiffResult, FileHashEntry
+from diffinite.models import (
+    DeepMatchResult,
+    DiffResult,
+    FileHashEntry,
+    deep_compare_comment_mode,
+)
 
 if TYPE_CHECKING:
     # build_cover_body's ``metadata`` param is annotated with this. Importing it
@@ -377,10 +382,12 @@ def build_hash_table_html(
     hashes_a: list[FileHashEntry],
     hashes_b: list[FileHashEntry],
 ) -> str:
-    """Build an HTML table showing SHA-256 hashes for all analyzed files.
+    """Build an HTML table showing the full SHA-256 digest of every analyzed file.
 
     Used when ``--hash`` is specified to embed integrity data
-    directly in the PDF/HTML cover page.
+    directly in the PDF/HTML cover page. The full 64-hex digest is printed
+    (wrapped with ``word-break``) so a reader can check a file against the
+    printed value without the manifest.
     """
     parts: list[str] = []
     parts.append('<h2>&#128274; Evidence Integrity — SHA-256 Hashes</h2>\n')
@@ -391,17 +398,18 @@ def build_hash_table_html(
         parts.append(f'<h3>{html.escape(label)}</h3>\n')
         parts.append(
             '<table class="summary">\n'
-            '<tr><th style="width: 5%;">#</th><th style="width: 60%;">File</th><th style="width: 20%;">SHA-256</th>'
-            '<th style="width: 15%;">Size (bytes)</th></tr>\n'
+            '<tr><th style="width: 5%;">#</th><th style="width: 48%;">File</th><th style="width: 35%;">SHA-256</th>'
+            '<th style="width: 12%;">Size (bytes)</th></tr>\n'
         )
         for idx, h in enumerate(hashes, 1):
-            # Show first 16 + last 8 chars of hash for readability
-            short_hash = f'{h.sha256[:16]}…{h.sha256[-8:]}'
+            # Full digest: an abbreviated hash cannot be checked against a file.
+            full_hash = html.escape(h.sha256)
             parts.append(
                 f'<tr>'
                 f'<td>{idx}</td>'
                 f'<td>{_break_path(html.escape(h.rel_path))}</td>'
-                f'<td style="font-family:monospace;font-size:8px">{short_hash}</td>'
+                f'<td style="font-family:monospace;font-size:8px;word-break:break-all">'
+                f'{full_hash}</td>'
                 f'<td>{h.size_bytes:,}</td>'
                 f'</tr>\n'
             )
@@ -574,6 +582,16 @@ def build_cover_body(
     """Build the cover-page body fragment (no DOCTYPE/html/head wrapper)."""
     unit = "word" if by_word else "line"
     comment_mode = "stripped" if strip_comments else "included"
+    deep_comment_mode = deep_compare_comment_mode(strip_comments, metadata)
+    if deep_comment_mode in ("not-applicable", comment_mode):
+        comment_html = f"<strong>Comments:</strong> {comment_mode}"
+    else:
+        # --normalize --lang-aware drops lexer comment tokens in the deep channel
+        # regardless of --strip-comments; report each channel truthfully.
+        comment_html = (
+            f"<strong>Comments (line diff):</strong> {comment_mode} &nbsp;|&nbsp; "
+            f"<strong>Comments (Deep Compare):</strong> {html.escape(deep_comment_mode)}"
+        )
 
     # Analysis metadata banner (transparency)
     meta_html = ""
@@ -806,7 +824,7 @@ def build_cover_body(
   <strong>Dir A:</strong> {html.escape(dir_a)}<br>
   <strong>Dir B:</strong> {html.escape(dir_b)}<br>
   <strong>Comparison unit:</strong> {unit} &nbsp;|&nbsp;
-  <strong>Comments:</strong> {comment_mode} &nbsp;|&nbsp;
+  {comment_html} &nbsp;|&nbsp;
   <strong>Matched pairs:</strong> {len(results)} &nbsp;|&nbsp;
   <strong>Unmatched:</strong> {len(unmatched_a)} (A) / {len(unmatched_b)} (B)
 </p>
@@ -815,7 +833,7 @@ def build_cover_body(
 <table class="summary">
 <tr>
   <th style="width: 4%;">#</th><th style="width: 34%;">File A</th><th style="width: 34%;">File B</th><th style="width: 8%;">Name Sim.</th>
-  <th style="width: 10%;">Line match (difflib)</th><th style="width: 5%;">Added</th><th style="width: 5%;">Deleted</th>
+  <th style="width: 10%;">{unit.capitalize()} match (difflib)</th><th style="width: 5%;">Added</th><th style="width: 5%;">Deleted</th>
 </tr>
 {summary_rows}
 </table>
@@ -855,7 +873,7 @@ def build_diff_page_html(
         body = (
             f"<h2>{index}. {html.escape(r.match.rel_path_a)} &harr; "
             f"{html.escape(r.match.rel_path_b)}</h2>\n"
-            f"<p>Line-level match (difflib): {_ratio_badge(r.ratio)} &nbsp; "
+            f"<p>{unit.capitalize()}-level match (difflib): {_ratio_badge(r.ratio)} &nbsp; "
             f"<span style='color:green'>+{r.additions} {unit}(s)</span> &nbsp; "
             f"<span style='color:red'>-{r.deletions} {unit}(s)</span></p>\n"
             f"{r.html_diff}\n"

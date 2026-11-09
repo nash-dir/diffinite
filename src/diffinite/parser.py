@@ -18,7 +18,7 @@ Pass 2 (Slow-path):
 
 호출관계:
     ``pipeline.run_pipeline()`` → ``strip_comments()``
-    ``deep_compare._extract_multi()`` → ``strip_comments()``
+    ``deep_compare._extract_one()`` → ``strip_comments()``
 
 주의:
     이 모듈은 소스코드의 라인 번호 보존을 기본 원칙으로 한다.
@@ -214,6 +214,11 @@ _OBJECT_LITERAL_PREV_CHARS = frozenset("(,[=:+-*/%&|^!~?")
 _OBJECT_LITERAL_PREV_KEYWORDS = frozenset({"return", "yield", "case", "throw"})
 
 
+def _is_word_char(ch: str) -> bool:
+    """식별자/숫자 토큰을 이루는 문자인지 (``\\w`` 또는 ``$``)."""
+    return ch.isalnum() or ch in "_$"
+
+
 def _regex_allowed(prev_sig: str, prev_word: str) -> bool:
     """직전 유의미 토큰을 보고 ``/`` 가 정규식 리터럴을 여는 위치인지 판정한다."""
     if prev_word in _REGEX_PREV_KEYWORDS:
@@ -378,6 +383,20 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
                 ):
                     pos += len(block_end)
                     state = _State.CODE
+                    # 컴파일러처럼 주석을 공백으로 취급한다: 'int/*x*/y' 가 존재하지
+                    # 않는 식별자 'inty' 로 붙지 않도록, 양쪽이 모두 단어 문자일 때만
+                    # 공백 하나를 남긴다(그 외 줄 내용·줄 번호는 종전과 동일).
+                    # Markup (<!-- -->) is excluded: there a comment is not whitespace,
+                    # and "foo<!-- c -->bar" renders as the single word "foobar".
+                    in_word = False
+                    if (
+                        spec.block_start != "<!--"
+                        and line_out
+                        and pos < length
+                        and _is_word_char(line_out[-1][-1])
+                        and _is_word_char(line[pos])
+                    ):
+                        line_out.append(" ")
                 else:
                     pos += 1
                 continue
