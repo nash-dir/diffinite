@@ -101,6 +101,11 @@ jobs:
         tests/test_pipeline.py
         tests/test_release_security.py
         tests/test_remaining_threats.py
+        tests/test_audit_regressions_report_truth.py
+        tests/test_download_examples.py
+        tests/test_report_preset_invariance.py
+        example/benchmark/run_benchmarks.py
+        example/download_examples.py
 
     - name: Python format check (new correctness boundaries)
       run: >-
@@ -117,6 +122,10 @@ jobs:
         tests/test_p0_regressions.py
         tests/test_release_security.py
         tests/test_remaining_threats.py
+        tests/test_audit_regressions_report_truth.py
+        tests/test_download_examples.py
+        tests/test_report_preset_invariance.py
+        example/benchmark/run_benchmarks.py
 
     - name: Python typecheck
       run: python -m mypy
