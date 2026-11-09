@@ -147,6 +147,7 @@
     "compile": "tsc -p ./",
     "typecheck": "tsc --noEmit -p ./",
     "test": "npm run compile && node --test test/*.test.js",
+    "test:host": "npm run compile && node test/host/run.js",
     "watch": "tsc -watch -p ./"
   },
   "devDependencies": {
