@@ -139,8 +139,8 @@ test("result UI blocks duplicate exports and the host gate releases in finally",
   assert.match(source, /const exportRunGate = new RunGate\(\)/);
   assert.match(source, /if \(!exportRunGate\.tryEnter\(\)\)/);
   assert.match(source, /finally\s*\{[\s\S]*?exportRunGate\.leave\(\)[\s\S]*?exportComplete/);
-  assert.match(source, /exportPending[\s\S]*?button\.disabled = true/);
-  assert.match(source, /exportComplete[\s\S]*?button\.disabled = false/);
+  assert.match(source, /exportPending = true;\s*exportBtn\.disabled = true/);
+  assert.match(source, /exportComplete[\s\S]*?exportBtn\.disabled = false/);
 });
 
 test("runner exports through same-parent staging before publishing", () => {

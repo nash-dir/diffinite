@@ -429,7 +429,7 @@ class TestMetadataBannerAutojunk:
 
     def test_html_banner_shows_autojunk(self):
         from diffinite.pipeline import _build_metadata_banner_html
-        assert "autojunk=" in _build_metadata_banner_html(self._meta(True))
+        assert "Line diff autojunk" in _build_metadata_banner_html(self._meta(True))
         assert "off" in _build_metadata_banner_html(self._meta(False))
 
 
@@ -459,8 +459,8 @@ class TestNormalizeDisclosure:
             exec_mode="deep", k=5, w=4, threshold=5.0,
             threshold_provenance="legacy-uncalibrated", normalize=False,
         )).lower()
-        assert "not a calibrated safety threshold" in output
-        assert "legal copying determinations" in output
+        assert "the default threshold" in output
+        assert "no false-positive rate has been measured" in output
 
     def test_html_banner_discloses_when_normalize(self):
         from diffinite.pipeline import _build_metadata_banner_html

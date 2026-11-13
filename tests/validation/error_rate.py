@@ -12,8 +12,10 @@ Corpus — Karnalim IR-Plag (``example/plagiarism``). Each ``case-NN/`` is one
 programming assignment with three labelled groups:
 
   * ``original/``            — the reference solution
-  * ``plagiarized/L1..L6/*`` — obfuscated copies of ``original`` (L1 verbatim
-                               → L6 heavily restructured) → **POSITIVES** (recall)
+  * ``plagiarized/L1..L6/*`` — obfuscated copies of ``original``, levels after
+                               Faidhi & Robinson (1987): L1 = comment/formatting
+                               changes (not verbatim) → L6 heavy restructuring
+                               → **POSITIVES** (recall)
   * ``non-plagiarized/*``    — *different students'* independent solutions to the
                                **same** assignment → **NEGATIVES** (precision)
 
@@ -41,6 +43,8 @@ curves, never guessed here.
 
 from __future__ import annotations
 
+import hashlib
+import importlib.util
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -69,6 +73,56 @@ _SIZE_BINS: tuple[tuple[str, int, int], ...] = (
 )
 
 
+def is_flagged(jaccard: float, threshold_pct: float) -> bool:
+    """Whether a pair is flagged at *threshold_pct* (0-100), exactly as the engine
+    decides it: ``jaccard >= threshold / 100`` (deep_compare.py ``jaccard >=
+    min_jaccard`` with pipeline.py ``min_jaccard = threshold / 100.0``).
+
+    ``jaccard * 100 >= threshold`` is not equivalent in floating point: 0.57 * 100
+    is 56.99999999999999, so a 57/100 pair the tool flags at 57 would be missed.
+    """
+    return jaccard >= threshold_pct / 100.0
+
+
+def tree_sha256(root: Path) -> str:
+    """Platform-independent digest of a corpus tree.
+
+    sha256 over ``"<posix relative path>\\0<file sha256>\\n"`` lines, sorted by the
+    POSIX path *string*. Sorting Path objects is not portable (Windows compares
+    them case-insensitively), so the same bytes would digest differently per OS.
+    Must stay identical to ``_tree_sha256`` in example/download_examples.py,
+    which pins the expected value.
+    """
+    h = hashlib.sha256()
+    entries = sorted((p.relative_to(root).as_posix(), p) for p in root.rglob("*") if p.is_file())
+    for rel, f in entries:
+        h.update(f"{rel}\0{hashlib.sha256(f.read_bytes()).hexdigest()}\n".encode())
+    return h.hexdigest()
+
+
+def pinned_tree_sha256(dataset: str) -> str:
+    """Expected corpus digest, read from the downloader's dataset pin (one source)."""
+    script = _REPO_ROOT / "example" / "download_examples.py"
+    spec = importlib.util.spec_from_file_location("_diffinite_download_examples", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.DATASETS[dataset]["expected_tree_sha256"]
+
+
+def verify_corpus(root: Path, dataset: str) -> str:
+    """Return the measured digest of *root*; exit if it is not the pinned corpus."""
+    actual = tree_sha256(root)
+    expected = pinned_tree_sha256(dataset)
+    if actual != expected:
+        raise SystemExit(
+            f"{root} is not the pinned {dataset} corpus (tree sha256 {actual}, "
+            f"pinned {expected}). Re-fetch it with "
+            f"`python example/download_examples.py --dataset {dataset} --clean`."
+        )
+    return actual
+
+
 def _size_bin(tokens: int) -> str:
     for label, lo, hi in _SIZE_BINS:
         if lo <= tokens < hi:
@@ -95,6 +149,7 @@ class PairScore:
     level: int | None    # 1..6 for positives, None for negatives
     jaccard: float       # 0.0–1.0
     tokens_min: int      # min token count across the two docs (stratification key)
+    tokens_max: int = 0  # max token count across the two docs (size-scope disclosure)
 
 
 def _file_doc(path: Path) -> Doc | None:
@@ -147,6 +202,7 @@ def score_case(case_dir: Path) -> list[PairScore]:
         for cand in _submission_files(sub_dir):
             for orig in original_files:
                 tmin = min(orig.tokens, cand.tokens)
+                tmax = max(orig.tokens, cand.tokens)
                 for mode, a, b in (
                     ("raw", orig.raw_fp, cand.raw_fp),
                     ("normalize", orig.norm_fp, cand.norm_fp),
@@ -154,6 +210,7 @@ def score_case(case_dir: Path) -> list[PairScore]:
                     scores.append(PairScore(
                         case=case, mode=mode, label=label, level=level,
                         jaccard=jaccard_similarity(set(a), set(b)), tokens_min=tmin,
+                        tokens_max=tmax,
                     ))
 
     # Negatives: independent solutions to the same assignment (file pairs).
@@ -192,7 +249,7 @@ def fp_rate(scores: list[PairScore], mode: str, threshold: float,
     """Return (flagged, total) for negatives at a threshold (0–100 scale)."""
     negs = [s for s in scores if s.mode == mode and s.label == "neg"
             and (size_bin is None or _size_bin(s.tokens_min) == size_bin)]
-    flagged = sum(1 for s in negs if s.jaccard * 100 >= threshold)
+    flagged = sum(1 for s in negs if is_flagged(s.jaccard, threshold))
     return flagged, len(negs)
 
 
@@ -201,7 +258,7 @@ def recall(scores: list[PairScore], mode: str, threshold: float,
     """Return (flagged, total) for positives at a threshold (0–100 scale)."""
     pos = [s for s in scores if s.mode == mode and s.label == "pos"
            and (level is None or s.level == level)]
-    flagged = sum(1 for s in pos if s.jaccard * 100 >= threshold)
+    flagged = sum(1 for s in pos if is_flagged(s.jaccard, threshold))
     return flagged, len(pos)
 
 
@@ -234,7 +291,7 @@ def per_case_fp(scores: list[PairScore], mode: str, threshold: float) -> list[fl
     for c in cases:
         negs = [s for s in scores if s.case == c and s.mode == mode and s.label == "neg"]
         if negs:
-            out.append(sum(1 for s in negs if s.jaccard * 100 >= threshold) / len(negs) * 100)
+            out.append(sum(1 for s in negs if is_flagged(s.jaccard, threshold)) / len(negs) * 100)
     return out
 
 
@@ -297,14 +354,14 @@ def calibrate(scores: list[PairScore], *, fp_target: float = 5.0,
         coverage = len(negs) / total_neg if total_neg else 0.0
         chosen_t = None
         for t in range(0, 101):
-            fp = sum(1 for s in negs if s.jaccard * 100 >= t) / len(negs) * 100
+            fp = sum(1 for s in negs if is_flagged(s.jaccard, t)) / len(negs) * 100
             if fp <= fp_target:
                 chosen_t = t
                 break
         if chosen_t is None:
             continue
-        fp_at = sum(1 for s in negs if s.jaccard * 100 >= chosen_t) / len(negs) * 100
-        rc = (sum(1 for s in pos if s.jaccard * 100 >= chosen_t) / len(pos) * 100
+        fp_at = sum(1 for s in negs if is_flagged(s.jaccard, chosen_t)) / len(negs) * 100
+        rc = (sum(1 for s in pos if is_flagged(s.jaccard, chosen_t)) / len(pos) * 100
               if pos else 0.0)
         frontier.append(CalibrationPoint(
             floor=floor if floor != (1 << 30) else -1,
@@ -317,6 +374,20 @@ def calibrate(scores: list[PairScore], *, fp_target: float = 5.0,
     return frontier, recommended
 
 
+def per_level_recall_at(scores: list[PairScore], point: CalibrationPoint,
+                        mode: str = "normalize") -> dict[str, float]:
+    """Per-level recall at *point*, over the SAME floor-filtered positives that
+    ``point.recall`` uses — so the pooled and per-level figures share one
+    denominator."""
+    out: dict[str, float] = {}
+    for lv in sorted({s.level for s in scores if s.label == "pos" and s.level}):
+        pos_lv = [s for s in scores if s.mode == mode and s.label == "pos"
+                  and s.level == lv and s.tokens_min >= point.floor]
+        hit = sum(1 for s in pos_lv if is_flagged(s.jaccard, point.threshold))
+        out[f"L{lv}"] = round(_rate((hit, len(pos_lv))), 1)
+    return out
+
+
 def write_csv(rows: list[dict], path: Path) -> None:
     import csv
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -326,7 +397,8 @@ def write_csv(rows: list[dict], path: Path) -> None:
         writer.writerows(rows)
 
 
-def write_md_summary(scores: list[PairScore], path: Path) -> None:
+def write_md_summary(scores: list[PairScore], path: Path,
+                     corpus_sha256: str | None = None) -> None:
     levels = sorted({s.level for s in scores if s.label == "pos" and s.level})
     n_neg = sum(1 for s in scores if s.label == "neg" and s.mode == "raw")
     n_pos = sum(1 for s in scores if s.label == "pos" and s.mode == "raw")
@@ -338,6 +410,10 @@ def write_md_summary(scores: list[PairScore], path: Path) -> None:
         f"Negatives (independent same-domain submissions): **{n_neg}** pairs. "
         f"Positives (labelled copies L1–L6): **{n_pos}** pairs. "
         "A negative scoring above threshold is a **false positive**.\n")
+    if corpus_sha256 is not None:
+        lines.append(
+            f"Measured corpus digest (sha256 over sorted POSIX path + file hash): "
+            f"`{corpus_sha256}`, equal to the pin in example/download_examples.py.\n")
 
     lines.append("## Headline — false-positive rate at the shipped default "
                  f"(`--threshold-deep {DEFAULT_THRESHOLD:.0f}`)\n")
@@ -415,12 +491,14 @@ def write_md_summary(scores: list[PairScore], path: Path) -> None:
                 continue
             star = "  ⟵ recommended" if rec and p.floor == rec.floor and \
                 p.threshold == rec.threshold else ""
-            lines.append(f"| {p.floor} | {p.threshold} | {p.fp_rate:.1f}% | "
+            # fp_rate is already rounded to 2 dp; re-rounding to 1 dp printed
+            # 1/105 = 0.952% as "0.9%" (binary 0.95 < 0.95), so print 2 dp.
+            lines.append(f"| {p.floor} | {p.threshold} | {p.fp_rate:.2f}% | "
                          f"{p.recall:.1f}% | {p.coverage*100:.0f}%{star} |")
         if rec:
             lines.append(f"\n> Recommended (highest recall with ≥50% coverage): "
                          f"**floor={rec.floor} tokens, threshold={rec.threshold}** "
-                         f"→ FP {rec.fp_rate:.1f}%, recall {rec.recall:.1f}%.\n")
+                         f"→ FP {rec.fp_rate:.2f}%, recall {rec.recall:.1f}%.\n")
         else:
             lines.append("\n> No point meets the target with ≥50% coverage.\n")
 
@@ -467,12 +545,15 @@ def write_md_summary(scores: list[PairScore], path: Path) -> None:
             f"false-positive rate ranges {min(pcf):.0f}%–{max(pcf):.0f}%. The pooled "
             "CI above therefore *understates* true uncertainty.\n")
 
-        # Size scope.
+        # Size scope. tokens_min is the SMALLER file of a pair, so the bound is
+        # stated per pair, with the largest single file alongside it.
         max_tok = max((s.tokens_min for s in scores if s.label == "neg"), default=0)
+        max_file = max((s.tokens_max for s in scores), default=0)
         lines.append(
-            f"**Size scope:** every tested file pair has ≤ {max_tok} tokens (no large "
-            "files in this corpus). The operating point is unvalidated on large files; "
-            "the calibration characterizes small-file behavior only.\n")
+            f"**Size scope:** every tested pair's smaller file has ≤ {max_tok} tokens "
+            f"(largest single file {max_file} tokens; no large files in this corpus). "
+            "The operating point is unvalidated on large files; the calibration "
+            "characterizes small-file behavior only.\n")
 
         # Floor binding.
         below = sum(1 for s in scores
@@ -486,15 +567,21 @@ def write_md_summary(scores: list[PairScore], path: Path) -> None:
 
 
 def main() -> None:
+    if not CORPUS_ROOT.is_dir():
+        raise SystemExit(f"{CORPUS_ROOT} is missing — run "
+                         "`python example/download_examples.py --dataset plagiarism`.")
+    # Refuse to regenerate the calibration evidence from anything but the pinned
+    # bytes, and record the digest that was actually measured.
+    corpus_sha256 = verify_corpus(CORPUS_ROOT, "plagiarism")
     scores = score_corpus()
     if not scores:
         raise SystemExit(f"No scores produced — is {CORPUS_ROOT} present?")
     write_csv(sweep_rows(scores), OUTPUT_DIR / "pr_curve.csv")
-    write_md_summary(scores, OUTPUT_DIR / "error_rate.md")
+    write_md_summary(scores, OUTPUT_DIR / "error_rate.md", corpus_sha256)
 
     # Machine-readable calibration for WS-B (calibration.py reads this).
     import json
-    calib = {"unit": "file-pair"}
+    calib: dict = {"unit": "file-pair", "corpus_sha256": corpus_sha256}
     for fp_target in (5.0, 1.0):
         _, rec = calibrate(scores, fp_target=fp_target)
         if rec is None:
@@ -503,13 +590,10 @@ def main() -> None:
         # Same denominator as rec.fp_rate: only negatives that clear the floor.
         judged = [s for s in scores if s.mode == "normalize" and s.label == "neg"
                   and s.tokens_min >= rec.floor]
-        fk = sum(1 for s in judged if s.jaccard * 100 >= rec.threshold)
+        fk = sum(1 for s in judged if is_flagged(s.jaccard, rec.threshold))
         fn = len(judged)
         lo, hi = wilson_ci(fk, fn)
-        per_level = {
-            f"L{lv}": round(_rate(recall(scores, "normalize", rec.threshold, level=lv)), 1)
-            for lv in sorted({s.level for s in scores if s.label == "pos" and s.level})
-        }
+        per_level = per_level_recall_at(scores, rec)
         calib[f"fp_le_{int(fp_target)}"] = {
             "floor_tokens": rec.floor, "threshold": rec.threshold,
             "fp_rate": rec.fp_rate, "fp_ci95": [round(lo, 2), round(hi, 2)],

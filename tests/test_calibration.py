@@ -39,8 +39,12 @@ def test_disclosure_cites_measured_fp_at_shipped_point():
         assessment=_validated_assessment(),
     )
     assert f"{NORMALIZE_FP_RATE_PCT:.2g}%" in s          # the measured rate, exact
-    assert "inconclusive" in s.lower()
-    assert str(INCONCLUSIVE_TOKEN_FLOOR) in s
+    # The inconclusive rule is stated once, in notices.INCONCLUSIVE_NOTICE under
+    # the Deep Compare table, so the disclosure must not repeat it.
+    assert "inconclusive" not in s.lower()
+    from diffinite.notices import INCONCLUSIVE_NOTICE
+
+    assert f"fewer than {INCONCLUSIVE_TOKEN_FLOOR} tokens" in INCONCLUSIVE_NOTICE
 
 
 def test_disclosure_carries_confidence_interval_and_recall_caveat():

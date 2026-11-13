@@ -33,7 +33,6 @@ Outputs ``example/validation/holdout.md`` and ``holdout.json``.
 
 from __future__ import annotations
 
-import hashlib
 import itertools
 import json
 import statistics
@@ -41,7 +40,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from diffinite.calibration import (
-    CALIBRATION_MAX_TOKENS,
+    CALIBRATION_MAX_FILE_TOKENS,
     NORMALIZE_CALIBRATION_K,
     NORMALIZE_CALIBRATION_W,
     NORMALIZE_DEFAULT_THRESHOLD,
@@ -49,7 +48,13 @@ from diffinite.calibration import (
 from diffinite.differ import read_file
 from diffinite.fingerprint import extract_fingerprints, tokenize
 from diffinite.parser import strip_comments
-from tests.validation.error_rate import CORPUS_ROOT, OUTPUT_DIR, wilson_ci
+from tests.validation.error_rate import (
+    CORPUS_ROOT,
+    OUTPUT_DIR,
+    is_flagged,
+    verify_corpus,
+    wilson_ci,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 SOCO_TRAIN = _REPO_ROOT / "example" / "soco14" / "fire14-source-code-training-dataset"
@@ -120,7 +125,7 @@ def _select_threshold(train: list[Pair], fp_target: float) -> int:
     """Lowest whole threshold meeting *fp_target*; 101 means none does (flag nothing)."""
     negs = [p for p in train if p.label == "neg"]
     for t in range(0, 101):
-        if sum(p.jaccard * 100 >= t for p in negs) / len(negs) * 100 <= fp_target:
+        if sum(is_flagged(p.jaccard, t) for p in negs) / len(negs) * 100 <= fp_target:
             return t
     return 101
 
@@ -133,22 +138,12 @@ def fixed_threshold_by_case(pairs: list[Pair], threshold: float) -> list[dict]:
         pos = [p for p in pairs if p.case == case and p.label == "pos"]
         out.append({
             "case": case,
-            "fp": sum(p.jaccard * 100 >= threshold for p in negs),
+            "fp": sum(is_flagged(p.jaccard, threshold) for p in negs),
             "negatives": len(negs),
-            "tp": sum(p.jaccard * 100 >= threshold for p in pos),
+            "tp": sum(is_flagged(p.jaccard, threshold) for p in pos),
             "positives": len(pos),
         })
     return out
-
-
-def tree_sha256(root: Path) -> str:
-    """Order-independent digest of a corpus: sha256 over sorted (path, file sha256)."""
-    h = hashlib.sha256()
-    for f in sorted(p for p in root.rglob("*") if p.is_file()):
-        rel = f.relative_to(root).as_posix()
-        digest = hashlib.sha256(f.read_bytes()).hexdigest()
-        h.update(f"{rel}\0{digest}\n".encode())
-    return h.hexdigest()
 
 
 def loco(pairs: list[Pair], fp_target: float) -> dict:
@@ -163,9 +158,9 @@ def loco(pairs: list[Pair], fp_target: float) -> dict:
         folds.append({
             "held_out": held,
             "threshold": t,
-            "fp": sum(p.jaccard * 100 >= t for p in negs),
+            "fp": sum(is_flagged(p.jaccard, t) for p in negs),
             "negatives": len(negs),
-            "tp": sum(p.jaccard * 100 >= t for p in pos),
+            "tp": sum(is_flagged(p.jaccard, t) for p in pos),
             "positives": len(pos),
         })
     fp = sum(f["fp"] for f in folds)
@@ -221,13 +216,13 @@ def score_soco(lang: str) -> dict | None:
     flagged_pos = flagged_unl = n_pos = n_unl = 0
     for (na, a), (nb, b) in itertools.combinations(sets.items(), 2):
         union = len(a | b)
-        j = len(a & b) / union * 100 if union else 0.0
+        flagged = is_flagged(len(a & b) / union if union else 0.0, t)
         if frozenset((na, nb)) in positives:
             n_pos += 1
-            flagged_pos += j >= t
+            flagged_pos += flagged
         else:
             n_unl += 1
-            flagged_unl += j >= t
+            flagged_unl += flagged
     return {
         "language": lang,
         "threshold": t,
@@ -240,8 +235,12 @@ def score_soco(lang: str) -> dict | None:
         # No confidence bound: every file appears in ~(files-1) pairs, so the
         # pairs are far from independent and a binomial bound would mislead.
         "median_tokens": int(statistics.median(token_counts)),
-        "share_files_over_calibrated_max_pct": round(
-            sum(t > CALIBRATION_MAX_TOKENS for t in token_counts) / len(token_counts) * 100, 1
+        "share_files_over_largest_calibration_file_pct": round(
+            # Per-FILE counts against the per-FILE IR-Plag maximum (same unit; the
+            # 212 bound is a per-pair smaller-file size and must not be used here).
+            sum(t > CALIBRATION_MAX_FILE_TOKENS for t in token_counts)
+            / len(token_counts) * 100,
+            1,
         ),
     }
 
@@ -254,7 +253,7 @@ def write_md(result: dict, path: Path) -> None:
         f"K={NORMALIZE_CALIBRATION_K}, W={NORMALIZE_CALIBRATION_W}, comments stripped, "
         "language-aware off — the frozen calibration profile.",
         "",
-        "Corpus digests (sha256 over sorted path + file hash): IR-Plag "
+        "Corpus digests (sha256 over POSIX-path-sorted path + file hash): IR-Plag "
         f"`{result['corpus_sha256']['irplag']}`"
         + (f", SOCO training `{result['corpus_sha256']['soco']}`"
            if result["corpus_sha256"].get("soco") else "")
@@ -314,17 +313,17 @@ def write_md(result: dict, path: Path) -> None:
         "Unlabelled pairs are *not* proven independent, so their flag count bounds "
         "the false-positive rate from above but does not measure it. No confidence "
         "bound is given: every file appears in about (files - 1) pairs, so the pairs "
-        "are not independent. Most SOCO files are larger than the 212-token range "
-        "measured on IR-Plag.",
+        "are not independent. Most SOCO files are larger than the largest IR-Plag "
+        f"file ({CALIBRATION_MAX_FILE_TOKENS} tokens).",
         "",
-        "| Language | Files | Median tokens | Files > 212 tokens "
+        f"| Language | Files | Median tokens | Files > {CALIBRATION_MAX_FILE_TOKENS} tokens "
         "| Recall on expert re-use pairs | Unlabelled pairs flagged |",
         "|---|:-:|:-:|:-:|:-:|:-:|",
     ]
     for s in result["soco"]:
         lines.append(
             f"| {s['language']} | {s['files']} | {s['median_tokens']} "
-            f"| {s['share_files_over_calibrated_max_pct']}% | {s['recall_pct']}% "
+            f"| {s['share_files_over_largest_calibration_file_pct']}% | {s['recall_pct']}% "
             f"({s['positives']} pairs) | {s['unlabelled_flagged']}/{s['unlabelled_pairs']} |")
     lines += [
         "",
@@ -341,11 +340,15 @@ def write_md(result: dict, path: Path) -> None:
 
 
 def main() -> None:
+    # Both corpora must be the pinned bytes; the digests recorded below are the
+    # ones actually measured (platform-independent, see error_rate.tree_sha256).
+    irplag_sha256 = verify_corpus(CORPUS_ROOT, "plagiarism")
+    soco_sha256 = verify_corpus(SOCO_TRAIN, "soco14") if SOCO_TRAIN.is_dir() else None
     pairs = score_irplag()
     result = {
         "corpus_sha256": {
-            "irplag": tree_sha256(CORPUS_ROOT),
-            "soco": tree_sha256(SOCO_TRAIN) if SOCO_TRAIN.is_dir() else None,
+            "irplag": irplag_sha256,
+            "soco": soco_sha256,
         },
         "fixed_threshold_by_case": fixed_threshold_by_case(pairs, NORMALIZE_DEFAULT_THRESHOLD),
         "loco": [loco(pairs, t) for t in FP_TARGETS_PCT],

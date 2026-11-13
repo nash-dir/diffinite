@@ -130,7 +130,9 @@ test("merged export publishes the complete staged set only after validation", as
   assert.equal(fs.readFileSync(outputPath, "utf8"), "%PDF-new");
   assert.equal(fs.readFileSync(path.join(outputDir, "report.csv"), "utf8"), "csv-new");
   assertManifestMatches(outputDir, finalManifestPath(outputPath));
-  assert.equal(fs.existsSync(path.join(outputDir, "manifest.sha256.json")), false);
+  // A bare manifest that cannot be shown to describe this report (here: not
+  // even JSON) may belong to a CLI run, so it is preserved (audit #6).
+  assert.equal(fs.readFileSync(path.join(outputDir, "manifest.sha256.json"), "utf8"), "old-manifest");
   assert.equal(fs.existsSync(transaction.stagingDirectory), false);
 });
 
@@ -265,6 +267,14 @@ test("no-merge publishes the exact current split tree and removes stale merged a
   writeFile(finalTree, "001_old.py.html", "old-flat-html-entry");
   writeFile(finalTree, "entries/a.py.html", "old-html-entry");
   writeFile(finalTree, "entries/stale.py.pdf", "stale-pdf");
+  // Ownership proof required before the tree may be replaced (audit #5).
+  writeManifest(outputDir, {
+    "report_files/index.html": "old-index-html",
+    "report_files/001_old.py.html": "old-flat-html-entry",
+    "report_files/entries/a.py.html": "old-html-entry",
+    "report_files/entries/stale.py.pdf": "stale-pdf",
+  });
+  fs.renameSync(path.join(outputDir, "manifest.sha256.json"), finalManifestPath(outputPath));
   fs.writeFileSync(outputPath, "%PDF-old-merged");
   fs.writeFileSync(`${outputPath}.sha256`, "old-sha");
   fs.writeFileSync(`${outputPath}.sig`, "old-sig");
@@ -478,6 +488,13 @@ test("no-merge publish failure restores the entire prior sibling tree", async (t
   for (const [relative, data] of Object.entries(prior)) {
     writeFile(finalTree, relative, data);
   }
+  // Ownership proof required before the tree may be replaced (audit #5).
+  const priorManifest = finalManifestPath(outputPath);
+  writeManifest(outputDir, Object.fromEntries(
+    Object.entries(prior).map(([relative, data]) => [`report_files/${relative}`, data]),
+  ));
+  fs.renameSync(path.join(outputDir, "manifest.sha256.json"), priorManifest);
+  const priorManifestText = fs.readFileSync(priorManifest, "utf8");
   fs.writeFileSync(path.join(outputDir, "manifest.sha256.json"), "old-manifest");
   const oldMerged = {
     "report.pdf": "%PDF-old-merged",
@@ -520,6 +537,7 @@ test("no-merge publish failure restores the entire prior sibling tree", async (t
   }
   assert.equal(fs.existsSync(path.join(finalTree, "entries/new.py.pdf")), false);
   assert.equal(fs.readFileSync(path.join(outputDir, "manifest.sha256.json"), "utf8"), "old-manifest");
+  assert.equal(fs.readFileSync(priorManifest, "utf8"), priorManifestText);
   for (const [name, data] of Object.entries(oldMerged)) {
     assert.equal(fs.readFileSync(path.join(outputDir, name), "utf8"), data);
   }

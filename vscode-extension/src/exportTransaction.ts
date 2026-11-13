@@ -31,6 +31,14 @@ interface ArtifactPlan {
   conditionalRemovalNames: Set<string>;
   publicationNames: Map<string, string>;
   splitTreeName?: string;
+  /** Report-specific manifests that may own an existing `<stem>_files` tree. */
+  splitTreeOwnerManifests: string[];
+  /** Merged export: an earlier split tree of the same report, removed only when owned. */
+  staleSplitTreeName?: string;
+  finalManifestName: string;
+  /** Names written by older extension versions; removed only with ownership proof. */
+  legacyManifestName: string;
+  legacyUncomparedName: string;
 }
 
 interface ManifestReportEntry {
@@ -43,7 +51,7 @@ class ExportRollbackError extends Error {}
 
 class ExportCancelledError extends Error {
   public constructor() {
-    super("Export cancelled before publication; existing output was preserved");
+    super("Export canceled before publication; existing output was preserved");
   }
 }
 
@@ -137,7 +145,12 @@ function buildArtifactPlan(options: ExportTransactionOptions): ArtifactPlan {
   // report-specific final name so sequential exports cannot overwrite one
   // another's evidence manifest.
   claimName(requiredNames, "manifest.sha256.json", finalManifestName);
-  removalNames.add("manifest.sha256.json");
+  // The bare "manifest.sha256.json" is also what the Python CLI writes next to
+  // its own reports, so it is removed only after proving it describes this
+  // report (see legacyOwnedArtifacts), never by name alone.
+  const siblingFormat = options.format === "pdf" ? "html" : "pdf";
+  const splitTreeOwnerManifests = [finalManifestName];
+  let staleSplitTreeName: string | undefined;
 
   if (splitMode) {
     splitTreeName = `${outputStem}_files`;
@@ -152,12 +165,18 @@ function buildArtifactPlan(options: ExportTransactionOptions): ArtifactPlan {
     if (options.format === "pdf") {
       removalNames.add(`${outputStem}.csv`);
     }
-    const siblingFormat = options.format === "pdf" ? "html" : "pdf";
     conditionalRemovalNames.add(
       `${outputStem}.${siblingFormat}.manifest.sha256.json`,
     );
+    splitTreeOwnerManifests.push(`${outputStem}.${siblingFormat}.manifest.sha256.json`);
   } else {
     claimName(requiredNames, outputName);
+    if (options.format === "pdf" || options.format === "html") {
+      // A merged export replaces this report's manifest. If that manifest is
+      // the one covering an earlier split tree, the tree would be left with no
+      // hash record, so it is removed in the same transaction (when owned).
+      staleSplitTreeName = `${outputStem}_files`;
+    }
   }
 
   if (!options.noMerge && (options.format === "pdf" || options.format === "html")) {
@@ -169,10 +188,10 @@ function buildArtifactPlan(options: ExportTransactionOptions): ArtifactPlan {
   }
   const stagedUncomparedName = `${outputStem}_uncompared.txt`;
   const finalUncomparedName = `${outputStem}.${options.format}_uncompared.txt`;
-  // Remove both the report-specific prior output and the legacy shared name.
-  // The latter could not distinguish report.pdf from report.html.
+  // Remove the report-specific prior output. The legacy shared name
+  // `<stem>_uncompared.txt` is also written by CLI runs, so it is removed only
+  // when an owned legacy manifest lists it (see legacyOwnedArtifacts).
   removalNames.add(finalUncomparedName);
-  removalNames.add(stagedUncomparedName);
   if (options.uncomparedFiles === "separate") {
     claimName(optionalNames, stagedUncomparedName, finalUncomparedName);
   }
@@ -187,6 +206,11 @@ function buildArtifactPlan(options: ExportTransactionOptions): ArtifactPlan {
     conditionalRemovalNames,
     publicationNames,
     splitTreeName,
+    splitTreeOwnerManifests,
+    staleSplitTreeName,
+    finalManifestName,
+    legacyManifestName: "manifest.sha256.json",
+    legacyUncomparedName: stagedUncomparedName,
   };
 }
 
@@ -198,16 +222,28 @@ function publicationName(plan: ArtifactPlan, stagedName: string): string {
   return finalName;
 }
 
-function validateOutputBoundaries(
-  options: ExportTransactionOptions,
-  plan: ArtifactPlan,
-): void {
-  const sourceRoots = [options.dirA, options.dirB].map((source) => {
+function sourceRootsOf(options: ExportTransactionOptions): Array<{ canonical: string; lexical: string }> {
+  return [options.dirA, options.dirB].map((source) => {
     const canonical = canonicalProspectivePath(source);
     const stat = fs.statSync(canonical);
     if (!stat.isDirectory()) { throw new Error(`Source path is not a directory: ${source}`); }
     return { canonical, lexical: path.resolve(source) };
   });
+}
+
+function assertTreeOutsideSources(options: ExportTransactionOptions, treeRoot: string): void {
+  const canonicalTree = canonicalProspectivePath(treeRoot);
+  if (sourceRootsOf(options).some((root) =>
+    pathsOverlap(treeRoot, root.lexical) || pathsOverlap(canonicalTree, root.canonical))) {
+    throw new Error(`Unsafe split-report tree overlaps a source directory: ${treeRoot}`);
+  }
+}
+
+function validateOutputBoundaries(
+  options: ExportTransactionOptions,
+  plan: ArtifactPlan,
+): void {
+  const sourceRoots = sourceRootsOf(options);
   const finalParent = path.dirname(path.resolve(options.outputPath));
   const parentStat = fs.statSync(finalParent);
   if (!parentStat.isDirectory()) {
@@ -251,15 +287,14 @@ function validateOutputBoundaries(
   }
 }
 
-function validateKnownExistingSplitTree(finalParent: string, plan: ArtifactPlan): void {
-  if (!plan.splitTreeName) { return; }
-  const splitRoot = path.join(finalParent, plan.splitTreeName);
-  const rootStat = lstat(splitRoot);
-  if (!rootStat) { return; }
-  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
-    throw new Error(`Refusing unsafe existing split-report tree: ${splitRoot}`);
-  }
-
+/**
+ * List an existing split tree's files (POSIX paths relative to the tree) after
+ * checking that every entry is a name a split-report generator can create.
+ * Mirrors pipeline._verify_replaceable_split_tree's structural checks.
+ */
+function listExistingSplitTree(splitRoot: string): string[] {
+  const files: string[] = [];
+  const directories: string[] = [];
   const inspectDirectory = (directory: string, underEntries: boolean): void => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       const absolute = path.join(directory, entry.name);
@@ -273,6 +308,7 @@ function validateKnownExistingSplitTree(finalParent: string, plan: ArtifactPlan)
             `Existing split-report tree contains an unknown directory; preserving it: ${absolute}`,
           );
         }
+        directories.push(path.relative(splitRoot, absolute).split(path.sep).join("/"));
         inspectDirectory(absolute, underEntries || entry.name === "entries");
         continue;
       }
@@ -282,17 +318,204 @@ function validateKnownExistingSplitTree(finalParent: string, plan: ArtifactPlan)
       const extension = path.extname(entry.name).toLowerCase();
       const knownRootFile = !underEntries
         && (entry.name === "000_cover.pdf" || entry.name === "index.html");
+      // Same rule as pipeline._is_generated_split_artifact: idx:03d or wider.
       const knownFlatFile = !underEntries
-        && /^[0-9]+_.+\.(pdf|html)$/i.test(entry.name);
+        && /^[0-9]{3,}_.+\.(pdf|html)$/i.test(entry.name);
       const knownEntryFile = underEntries && (extension === ".pdf" || extension === ".html");
       if (!knownRootFile && !knownFlatFile && !knownEntryFile) {
         throw new Error(
           `Existing split-report tree contains an unknown file; preserving it: ${absolute}`,
         );
       }
+      files.push(path.relative(splitRoot, absolute).split(path.sep).join("/"));
     }
   };
   inspectDirectory(splitRoot, false);
+  const unowned = directories.filter((directory) =>
+    !files.some((file) => file.startsWith(`${directory}/`)));
+  if (unowned.length) {
+    throw new Error(
+      `Existing split-report tree contains directories with no report files; preserving it: ${unowned.join(", ")}`,
+    );
+  }
+  return files;
+}
+
+/**
+ * Report entries a prior manifest records under `<treeName>/`, keyed by
+ * logical path. Undefined when the manifest is absent or lists no such entry.
+ */
+function manifestTreeEntries(
+  finalParent: string,
+  manifestName: string,
+  treeName: string,
+): Map<string, string> | undefined {
+  const manifestPath = path.join(finalParent, manifestName);
+  const manifestStat = lstat(manifestPath);
+  if (!manifestStat) { return undefined; }
+  if (!manifestStat.isFile() || manifestStat.isSymbolicLink() || manifestStat.nlink > 1) {
+    throw new Error(`Unsafe existing split manifest target: ${manifestPath}`);
+  }
+  let parsed: { reports?: unknown };
+  try {
+    parsed = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as { reports?: unknown };
+  } catch (err) {
+    throw new Error(`Cannot verify ownership of existing split manifest ${manifestPath}: ${err}`);
+  }
+  if (parsed === null || typeof parsed !== "object" || !Array.isArray(parsed.reports)) {
+    throw new Error(`Cannot verify ownership of existing split manifest: ${manifestPath}`);
+  }
+  const prefix = `${treeName}/`;
+  const entries = new Map<string, string>();
+  for (const rawEntry of parsed.reports) {
+    if (rawEntry === null || typeof rawEntry !== "object" || Array.isArray(rawEntry)) { continue; }
+    const { path: logicalPath, sha256 } = rawEntry as { path?: unknown; sha256?: unknown };
+    if (typeof logicalPath !== "string" || !logicalPath.startsWith(prefix)) { continue; }
+    if (typeof sha256 !== "string" || entries.has(logicalPath)) {
+      throw new Error(`Existing split manifest has ambiguous hashes for ${treeName}: ${manifestPath}`);
+    }
+    entries.set(logicalPath, sha256.toLowerCase());
+  }
+  return entries.size ? entries : undefined;
+}
+
+interface SplitTreeOwnership {
+  treeName: string;
+  manifestName: string;
+  expected: Map<string, string>;
+}
+
+function sameLogicalSet(treeName: string, files: string[], expected: Map<string, string>): boolean {
+  return files.length === expected.size
+    && files.every((file) => expected.has(`${treeName}/${file}`));
+}
+
+/**
+ * Decide, without hashing, whether an existing `<stem>_files` tree may be
+ * replaced (split export) or must be removed with the manifest it belongs to
+ * (merged export). Throws when replacing it would destroy files that a prior
+ * Diffinite manifest does not account for exactly.
+ */
+function inspectExistingSplitTrees(
+  finalParent: string,
+  plan: ArtifactPlan,
+  options: ExportTransactionOptions,
+): SplitTreeOwnership[] {
+  const owned: SplitTreeOwnership[] = [];
+  if (plan.splitTreeName) {
+    const splitRoot = path.join(finalParent, plan.splitTreeName);
+    const rootStat = lstat(splitRoot);
+    if (rootStat) {
+      if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+        throw new Error(`Refusing unsafe existing split-report tree: ${splitRoot}`);
+      }
+      const files = listExistingSplitTree(splitRoot);
+      if (files.length) {
+        let owner: SplitTreeOwnership | undefined;
+        for (const manifestName of plan.splitTreeOwnerManifests) {
+          const expected = manifestTreeEntries(finalParent, manifestName, plan.splitTreeName);
+          if (expected && sameLogicalSet(plan.splitTreeName, files, expected)) {
+            owner = { treeName: plan.splitTreeName, manifestName, expected };
+            break;
+          }
+        }
+        if (!owner) {
+          throw new Error(
+            `Existing ${plan.splitTreeName} is not exactly covered by a prior Diffinite ` +
+            `report manifest; preserving it. Move it or choose another file name: ${splitRoot}`,
+          );
+        }
+        owned.push(owner);
+      }
+    }
+  }
+  if (plan.staleSplitTreeName) {
+    const treeRoot = path.join(finalParent, plan.staleSplitTreeName);
+    const rootStat = lstat(treeRoot);
+    // Only an existing tree needs its (to-be-replaced) manifest consulted.
+    const expected = rootStat
+      ? manifestTreeEntries(finalParent, plan.finalManifestName, plan.staleSplitTreeName)
+      : undefined;
+    if (expected) {
+      if (rootStat) {
+        if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+          throw new Error(`Refusing unsafe existing split-report tree: ${treeRoot}`);
+        }
+        assertTreeOutsideSources(options, treeRoot);
+        const files = listExistingSplitTree(treeRoot);
+        if (!sameLogicalSet(plan.staleSplitTreeName, files, expected)) {
+          throw new Error(
+            `Existing ${plan.staleSplitTreeName} was listed by ${plan.finalManifestName} but has ` +
+            `changed since; preserving both. Move them or choose another file name: ${treeRoot}`,
+          );
+        }
+        owned.push({ treeName: plan.staleSplitTreeName, manifestName: plan.finalManifestName, expected });
+      }
+    }
+  }
+  return owned;
+}
+
+async function verifySplitTreeHashes(
+  finalParent: string,
+  ownership: SplitTreeOwnership,
+): Promise<void> {
+  // Sequential for the same file-descriptor reason as validateStagedArtifacts.
+  for (const [logicalPath, digest] of ownership.expected) {
+    const absolute = path.join(finalParent, ...logicalPath.split("/"));
+    if (await sha256File(absolute) !== digest) {
+      throw new Error(
+        `Existing ${ownership.treeName} contains a modified report file (${logicalPath}) ` +
+        `that no longer matches ${ownership.manifestName}; preserving it.`,
+      );
+    }
+  }
+}
+
+/**
+ * The bare `manifest.sha256.json` (and legacy `<stem>_uncompared.txt`) are
+ * removed only when that manifest lists nothing but artifacts this export is
+ * replacing anyway; a CLI run's manifest for other reports is left alone.
+ */
+function legacyOwnedArtifacts(
+  finalParent: string,
+  plan: ArtifactPlan,
+  targetNames: ReadonlySet<string>,
+): string[] {
+  const manifestPath = path.join(finalParent, plan.legacyManifestName);
+  const stat = lstat(manifestPath);
+  if (!stat || !stat.isFile() || stat.isSymbolicLink()) { return []; }
+  let parsed: { reports?: unknown };
+  try {
+    parsed = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as { reports?: unknown };
+  } catch {
+    return [];
+  }
+  if (parsed === null || typeof parsed !== "object"
+      || !Array.isArray(parsed.reports) || parsed.reports.length === 0) {
+    return [];
+  }
+  let listsLegacyUncompared = false;
+  for (const rawEntry of parsed.reports) {
+    const logicalPath = rawEntry !== null && typeof rawEntry === "object"
+      ? (rawEntry as { path?: unknown }).path : undefined;
+    if (typeof logicalPath !== "string") { return []; }
+    if (logicalPath === plan.legacyUncomparedName) {
+      listsLegacyUncompared = true;
+      continue;
+    }
+    if (!targetNames.has(logicalPath) && !targetNames.has(logicalPath.split("/")[0])) {
+      return [];
+    }
+  }
+  const owned = [plan.legacyManifestName];
+  if (listsLegacyUncompared) {
+    const uncompared = lstat(path.join(finalParent, plan.legacyUncomparedName));
+    if (uncompared?.isFile() && !uncompared.isSymbolicLink()) {
+      owned.push(plan.legacyUncomparedName);
+    }
+  }
+  return owned;
 }
 
 function splitManifestOwnedArtifacts(
@@ -465,8 +688,16 @@ async function validateStagedArtifacts(
       throw new Error(`Duplicate staged manifest report path: ${entry.path}`);
     }
     manifestPaths.add(entry.path);
+    // Report paths are logical names relative to the manifest's own folder
+    // (the staging directory): `<report>` or `<stem>_files/...`, the same rule
+    // as evidence._logical_report_paths with that folder as its base.
     const artifact = manifestPathToFile(stagingDirectory, entry.path);
-    const artifactStat = fs.lstatSync(artifact);
+    const artifactStat = lstat(artifact);
+    if (!artifactStat) {
+      throw new Error(
+        `Staged manifest lists a report path that is not relative to the export folder: ${entry.path}`,
+      );
+    }
     if (!artifactStat.isFile() || artifactStat.isSymbolicLink()) {
       throw new Error(`Manifest report artifact is not a regular file: ${entry.path}`);
     }
@@ -541,6 +772,7 @@ export class ExportTransaction {
   private readonly outputName: string;
   private readonly plan: ArtifactPlan;
   private active = true;
+  private ownedSplitTrees: SplitTreeOwnership[] = [];
 
   public constructor(private readonly options: ExportTransactionOptions) {
     const finalOutputPath = path.resolve(options.outputPath);
@@ -548,11 +780,30 @@ export class ExportTransaction {
     this.outputName = path.basename(finalOutputPath);
     this.plan = buildArtifactPlan(options);
     validateOutputBoundaries(options, this.plan);
-    validateKnownExistingSplitTree(this.finalParent, this.plan);
+    inspectExistingSplitTrees(this.finalParent, this.plan, options);
     this.stagingDirectory = fs.mkdtempSync(
       path.join(this.finalParent, ".diffinite-export-"),
     );
     this.stagedOutputPath = path.join(this.stagingDirectory, this.outputName);
+  }
+
+  /** Python's manifest of the staged run (inputs and outputs), for callers' checks. */
+  public get stagedManifestPath(): string {
+    return path.join(this.stagingDirectory, "manifest.sha256.json");
+  }
+
+  /**
+   * Prove that an existing `<stem>_files` tree this export would replace or
+   * remove is an unmodified prior Diffinite output (names, exact coverage and
+   * SHA-256 against its manifest). Call before the analyzer runs so a refusal
+   * costs nothing; publish() repeats it immediately before renaming.
+   */
+  public async verifyExistingOutputs(): Promise<void> {
+    const owned = inspectExistingSplitTrees(this.finalParent, this.plan, this.options);
+    for (const ownership of owned) {
+      await verifySplitTreeHashes(this.finalParent, ownership);
+    }
+    this.ownedSplitTrees = owned;
   }
 
   public abort(): void {
@@ -574,7 +825,6 @@ export class ExportTransaction {
     try {
       throwIfCancellationRequested(options.isCancellationRequested);
       validateOutputBoundaries(this.options, this.plan);
-      validateKnownExistingSplitTree(this.finalParent, this.plan);
       await validateStagedArtifacts(
         this.stagingDirectory, this.outputName, this.options, this.plan,
       );
@@ -582,7 +832,10 @@ export class ExportTransaction {
       throwIfCancellationRequested(options.isCancellationRequested);
       await yieldBeforePublication(options.isCancellationRequested);
       validateOutputBoundaries(this.options, this.plan);
-      validateKnownExistingSplitTree(this.finalParent, this.plan);
+      // Last await before the synchronous rename sequence: ownership and
+      // hashes are checked against the final folder as it is now.
+      await this.verifyExistingOutputs();
+      throwIfCancellationRequested(options.isCancellationRequested);
       this.publishPreparedArtifacts(operations);
     } catch (err) {
       if (err instanceof ExportRollbackError) {
@@ -611,6 +864,14 @@ export class ExportTransaction {
           targetNames.add(ownedArtifact);
         }
       }
+    }
+    for (const ownership of this.ownedSplitTrees) {
+      // Split mode: the tree is already a target. Merged mode: the earlier
+      // split tree whose only manifest is being replaced goes with it.
+      targetNames.add(ownership.treeName);
+    }
+    for (const legacyArtifact of legacyOwnedArtifacts(this.finalParent, this.plan, targetNames)) {
+      targetNames.add(legacyArtifact);
     }
     const backupDirectory = path.join(this.stagingDirectory, ".rollback");
     fs.mkdirSync(backupDirectory);

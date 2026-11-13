@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import zipfile
 from concurrent.futures import Future
 import pytest
@@ -229,7 +230,7 @@ def test_deep_compare_obeys_actual_comment_preprocessing(tmp_path):
     assert stripped == []
 
 
-def test_policy_excluded_binary_pair_is_counted_as_processed(monkeypatch, tmp_path):
+def test_policy_excluded_binary_pair_is_disclosed_as_excluded(monkeypatch, tmp_path):
     import diffinite.pipeline as pipeline
 
     left = tmp_path / "left"
@@ -251,9 +252,13 @@ def test_policy_excluded_binary_pair_is_counted_as_processed(monkeypatch, tmp_pa
     )
     report = json.loads(output.read_text(encoding="utf-8"))
     assert report["results"] == []
-    assert report["analysis_status"]["diff"]["requested_pair_count"] == 1
-    assert report["analysis_status"]["diff"]["successful_pair_count"] == 1
-    assert report["analysis_status"]["diff"]["failed_pair_count"] == 0
+    diff = report["analysis_status"]["diff"]
+    assert diff["requested_pair_count"] == 1
+    # An excluded pair was not compared: it is listed, never counted as successful.
+    assert diff["successful_pair_count"] == 0
+    assert diff["failed_pair_count"] == 0
+    assert diff["excluded_pair_count"] == 1
+    assert diff["excluded_pairs"][0]["file_a"] == "asset.bin"
     assert report["analysis_status"]["state"] == "complete"
 
 
@@ -331,7 +336,8 @@ def test_allow_partial_records_failed_pairs(monkeypatch, tmp_path):
     pair_html = (tmp_path / "report_files" / "entries" / "a.py.html").read_text(encoding="utf-8")
     for rendered in (index_html, pair_html):
         assert "Incomplete analysis" in rendered
-        assert "1/2 processed" in rendered
+        # Labelled status row: label cell, then value cell.
+        assert re.search(r">File pairs compared</td>\s*<td[^>]*>1 of 2<", rendered)
         assert "b.py" in rendered
 
 

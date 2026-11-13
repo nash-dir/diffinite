@@ -25,19 +25,6 @@ export function getBatesPresets(): BatesPreset[] {
   return config.get<BatesPreset[]>("batesPresets", []);
 }
 
-export async function updateBatesPresetStart(
-  presetName: string,
-  nextNumber: number
-): Promise<void> {
-  const config = vscode.workspace.getConfiguration("diffinite");
-  const presets = config.get<BatesPreset[]>("batesPresets", []);
-  const idx = presets.findIndex((p) => p.name === presetName);
-  if (idx >= 0) {
-    presets[idx].nextBatesNumber = nextNumber;
-    await config.update("batesPresets", presets, vscode.ConfigurationTarget.Global);
-  }
-}
-
 export function getPdfFont(): string {
   const config = vscode.workspace.getConfiguration("diffinite");
   return config.get<string>("pdfFont", "");

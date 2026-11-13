@@ -349,8 +349,8 @@ def test_skipped_collection_entry_fails_closed_by_default(monkeypatch, tmp_path)
     original_collect = pipeline.collect_files
     unreadable_log = tmp_path / "unreadable.log"
 
-    def collect_with_skip(directory, ignore_patterns=None, unreadable_list=None):
-        files = original_collect(directory, ignore_patterns, unreadable_list)
+    def collect_with_skip(directory, ignore_patterns=None, unreadable_list=None, **kwargs):
+        files = original_collect(directory, ignore_patterns, unreadable_list, **kwargs)
         if Path(directory).resolve() == left.resolve() and unreadable_list is not None:
             unreadable_list.append(str(left / "hidden.py"))
         return files
@@ -381,8 +381,8 @@ def test_collection_failure_preserves_existing_unreadable_log(monkeypatch, tmp_p
     prior_bytes = b"prior-run diagnostic\r\n"
     unreadable_log.write_bytes(prior_bytes)
 
-    def collect_with_skip(directory, ignore_patterns=None, unreadable_list=None):
-        files = original_collect(directory, ignore_patterns, unreadable_list)
+    def collect_with_skip(directory, ignore_patterns=None, unreadable_list=None, **kwargs):
+        files = original_collect(directory, ignore_patterns, unreadable_list, **kwargs)
         if Path(directory).resolve() == left.resolve() and unreadable_list is not None:
             unreadable_list.append(str(left / "hidden.py"))
         return files
@@ -471,8 +471,8 @@ def test_allow_partial_discloses_privacy_safe_collection_failures(monkeypatch, t
     original_collect = pipeline.collect_files
     output = tmp_path / "report.json"
 
-    def collect_with_skip(directory, ignore_patterns=None, unreadable_list=None):
-        files = original_collect(directory, ignore_patterns, unreadable_list)
+    def collect_with_skip(directory, ignore_patterns=None, unreadable_list=None, **kwargs):
+        files = original_collect(directory, ignore_patterns, unreadable_list, **kwargs)
         if Path(directory).resolve() == right.resolve() and unreadable_list is not None:
             unreadable_list.append("nested/link.py (skipped: symbolic link)")
         return files

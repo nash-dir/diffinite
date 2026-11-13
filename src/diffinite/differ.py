@@ -30,6 +30,8 @@ from typing import Optional, Tuple
 from pygments import highlight as _pygments_highlight
 from pygments.formatters import HtmlFormatter
 from pygments.lexers import get_lexer_for_filename, TextLexer
+from pygments.style import Style
+from pygments.token import Comment
 from pygments.util import ClassNotFound
 
 from charset_normalizer import from_bytes
@@ -106,7 +108,8 @@ def detect_moved_blocks(
     """delete/insert 블록 간 이동된 코드 블록을 탐지한다.
 
     세 기본값은 표시용 휴리스틱이다(측정으로 보정된 값이 아니며 유사도 점수에
-    영향을 주지 않는다): 3줄 미만·3회 초과 반복 줄은 이동으로 표시하지 않고,
+    영향을 주지 않는다): 3줄 미만 블록과 삭제 구간 안에서 3회 이상 반복되는 줄은
+    이동으로 표시하지 않고,
     1줄 틈까지는 한 블록으로 묶는다.
 
     알고리즘:
@@ -259,6 +262,15 @@ def detect_moved_blocks(
 # ──────────────────────────────────────────────────────────────────────
 # 인코딩 자동 감지 파일 리더
 # ──────────────────────────────────────────────────────────────────────
+def _strip_bom(text: str) -> str:
+    """선두 U+FEFF(BOM) 하나를 제거한다.
+
+    자동 감지는 BOM을 떼지만 명시 인코딩(``utf-8``)·fallback 디코드는 남긴다.
+    디코드 경로와 무관하게 같은 내용이 같은 텍스트가 되도록 모든 경로에서 뗀다.
+    """
+    return text[1:] if text.startswith("\ufeff") else text
+
+
 def read_file(path: str, encoding: str | None = None) -> Optional[str]:
     """파일을 읽고 인코딩을 자동 감지하여 유니코드 문자열로 반환한다.
 
@@ -292,7 +304,7 @@ def read_file(path: str, encoding: str | None = None) -> Optional[str]:
     # ── Manual encoding specified ────────────────────────────────
     if encoding and encoding.lower() not in ("auto", ""):
         try:
-            return raw.decode(encoding)
+            return _strip_bom(raw.decode(encoding))
         except (UnicodeDecodeError, LookupError) as exc:
             logger.error("Decoding failed for %s with encoding %s: %s",
                          path, encoding, exc)
@@ -305,12 +317,12 @@ def read_file(path: str, encoding: str | None = None) -> Optional[str]:
         # 운영 휴리스틱(측정으로 보정한 값 아님): 비정합 문자 30% 초과면 다른 인코딩을 시도
         if result.chaos > 0.3:
             logger.debug(
-                "charset_normalizer detected %s for %s but chaos=%.2f — trying fallback",
+                "charset_normalizer detected %s for %s but chaos=%.2f; trying fallback",
                 result.encoding, path, result.chaos,
             )
         else:
             try:
-                return str(result)
+                return _strip_bom(str(result))
             except Exception as exc:  # noqa: BLE001
                 logger.warning("charset_normalizer decode failed for %s (%s): %s",
                                path, result.encoding, exc)
@@ -318,11 +330,11 @@ def read_file(path: str, encoding: str | None = None) -> Optional[str]:
     # ── Fallback chain (Korean-optimized) ────────────────────────
     for fallback_enc in ("utf-8", "euc-kr", "cp949"):
         try:
-            return raw.decode(fallback_enc)
+            return _strip_bom(raw.decode(fallback_enc))
         except (UnicodeDecodeError, LookupError):
             continue
 
-    logger.warning("Could not detect encoding for %s — skipping", path)
+    logger.warning("Could not detect encoding for %s; skipping", path)
     return None
 
 
@@ -384,12 +396,37 @@ def compute_diff(
 # ──────────────────────────────────────────────────────────────────────
 # Pygments 헬퍼
 # ──────────────────────────────────────────────────────────────────────
-# ``nowrap=True`` — <pre>/<code> 래핑 없이 순수 inline span만 생성.
-# ``noclasses=True`` — CSS class 대신 inline style 사용 (자기 완결형 HTML).
-_INLINE_FORMATTER = HtmlFormatter(nowrap=True, noclasses=True)
+class _PrintStyle(Style):
+    """One restrained, print-first style for the PDF and HTML reports.
+
+    Code is set in the body color; only comments are set apart, in a mid
+    grey. No bold, no italic (CJK faces have neither, and synthetic slanting
+    distorts them) and no color, so the diff reads the same in greyscale
+    print and on the change tints.
+    """
+
+    background_color = "#ffffff"
+    styles = {
+        # #555555 on the darkest change tint (#e9c2c2) is about 4.6:1, above the
+        # WCAG 2.1 SC 1.4.3 minimum contrast for normal text.
+        Comment: "#555555",
+        # Preprocessor directives are code, not comments.
+        Comment.Preproc: "noinherit",
+        Comment.PreprocFile: "noinherit",
+    }
+
+
+# ``nowrap=True``: inline spans only, no <pre>/<code> wrapper.
+# ``noclasses=True``: inline style attributes, so the HTML is self-contained.
+_INLINE_FORMATTER = HtmlFormatter(nowrap=True, noclasses=True, style=_PrintStyle)
+
+_RE_ANY_TAG = re.compile(r"<[^>]*>")
 
 # Pygments Error 토큰이 삽입하는 빨간 테두리 제거용 정규식
 _RE_PYG_ERR_BORDER = re.compile(r"\s*border:\s*1px\s+solid\s+#[0-9a-fA-F]+;?")
+# style 속성 값만 대상으로 한다. HtmlFormatter는 본문의 '"'를 &quot;로 바꾸므로
+# 속성 경계가 모호하지 않다 — 소스 코드 텍스트 자체는 절대 수정하지 않는다.
+_RE_STYLE_ATTR = re.compile(r'style="([^"]*)"')
 
 
 def _get_lexer(filename: str):
@@ -404,19 +441,71 @@ def _get_lexer(filename: str):
         return TextLexer(stripnl=False)
 
 
+def _strip_error_border(highlighted: str) -> str:
+    # Pygments Error 토큰이 inline border 를 삽입하므로 제거 (빨간 박스 방지).
+    # style 속성 안에서만 지운다: 본문에 같은 문자열이 있어도 증거 텍스트는 그대로.
+    return _RE_STYLE_ATTR.sub(
+        lambda m: 'style="' + _RE_PYG_ERR_BORDER.sub("", m.group(1)) + '"',
+        highlighted,
+    )
+
+
 def _highlight_line(line: str, lexer) -> str:
     """단일 라인에 구문 강조를 적용하여 inline HTML을 반환한다."""
     highlighted = _pygments_highlight(line, lexer, _INLINE_FORMATTER)
     # Pygments가 줄바꿈을 추가할 수 있으므로 제거 (테이블 셀용)
-    highlighted = highlighted.rstrip("\n")
-    # Pygments Error 토큰이 inline border 를 삽입하므로 제거 (빨간 박스 방지)
-    highlighted = _RE_PYG_ERR_BORDER.sub("", highlighted)
-    return highlighted
+    return _strip_error_border(highlighted.rstrip("\n"))
+
+
+def _highlight_lines(lines: list[str], lexer) -> list[str]:
+    """Highlight a whole file at once and return one HTML fragment per line.
+
+    Lexing the file as a whole keeps the lexer state across lines, so the
+    inside of a multi-line comment is styled as a comment. Pygments closes
+    every span at a line end, so each fragment is balanced. Each fragment is
+    checked against its source line (tags removed, entities decoded); if the
+    lexer changed the line count or any text, the lines are highlighted one
+    by one instead, so the displayed evidence is always the source text.
+    """
+    if not lines:
+        return []
+    out = _pygments_highlight("\n".join(lines) + "\n", lexer, _INLINE_FORMATTER)
+    if out.endswith("\n"):
+        out = out[:-1]
+    parts = out.split("\n")
+    if len(parts) == len(lines) and all(
+        html.unescape(_RE_ANY_TAG.sub("", part)) == line
+        for part, line in zip(parts, lines)
+    ):
+        return [_strip_error_border(part) for part in parts]
+    return [_highlight_line(line, lexer) for line in lines]
 
 
 # ──────────────────────────────────────────────────────────────────────
 # Intra-line word diff (2nd pass)
 # ──────────────────────────────────────────────────────────────────────
+def _split_ws(line: str) -> tuple[list[str], list[str]]:
+    """줄을 단어와 그 사이 공백으로 나눈다.
+
+    Returns:
+        ``(words, gaps)`` — ``gaps[i]`` 는 ``words[i]`` 앞의 공백, ``gaps[-1]`` 은
+        줄 끝 공백. ``len(gaps) == len(words) + 1`` 이며
+        ``gaps[0] + words[0] + gaps[1] + ... + gaps[-1] == line``.
+    """
+    words: list[str] = []
+    gaps: list[str] = []
+    pos = 0
+    for m in _RE_WORD.finditer(line):
+        gaps.append(line[pos:m.start()])
+        words.append(m.group())
+        pos = m.end()
+    gaps.append(line[pos:])
+    return words, gaps
+
+
+_RE_WORD = re.compile(r"\S+")
+
+
 def _highlight_word_diff(
     line_a: str, line_b: str,
 ) -> tuple[str, str]:
@@ -425,51 +514,84 @@ def _highlight_word_diff(
     Pygments 구문 강조 대신 ``html.escape``로 처리하고,
     변경된 단어만 ``<span class="word-del/add">``로 감싼다.
 
+    단어 매칭은 공백이 아닌 토큰으로만 하지만(``compute_diff(by_word=True)`` 와
+    같은 단위), 출력은 원문 공백(들여쓰기·탭·연속 공백)을 그대로 보존한다.
+    대응하는 같은 단어 사이의 공백이 양쪽에서 다르면 그 공백도 하이라이팅하여,
+    공백만 다른 줄이 내용 동일한 'chg' 행으로 보이지 않게 한다.
+
     Returns:
         (highlighted_a, highlighted_b)
     """
-    words_a = line_a.split()
-    words_b = line_b.split()
+    words_a, gaps_a = _split_ws(line_a)
+    words_b, gaps_b = _split_ws(line_b)
 
     word_matcher = difflib.SequenceMatcher(None, words_a, words_b)
 
     parts_a: list[str] = []
     parts_b: list[str] = []
 
-    for tag, i1, i2, j1, j2 in word_matcher.get_opcodes():
-        if tag == "equal":
-            parts_a.append(html.escape(" ".join(words_a[i1:i2])))
-            parts_b.append(html.escape(" ".join(words_b[j1:j2])))
-        elif tag == "replace":
-            parts_a.append(
-                f'<span class="word-del">'
-                f'{html.escape(" ".join(words_a[i1:i2]))}'
-                f'</span>'
-            )
-            parts_b.append(
-                f'<span class="word-add">'
-                f'{html.escape(" ".join(words_b[j1:j2]))}'
-                f'</span>'
-            )
-        elif tag == "delete":
-            parts_a.append(
-                f'<span class="word-del">'
-                f'{html.escape(" ".join(words_a[i1:i2]))}'
-                f'</span>'
-            )
-        elif tag == "insert":
-            parts_b.append(
-                f'<span class="word-add">'
-                f'{html.escape(" ".join(words_b[j1:j2]))}'
-                f'</span>'
-            )
+    def _span(cls: str, text: str) -> str:
+        return f'<span class="{cls}">{html.escape(text)}</span>'
 
-    return " ".join(parts_a), " ".join(parts_b)
+    def _gap_pair(ga: str, gb: str) -> None:
+        if ga == gb:
+            parts_a.append(html.escape(ga))
+            parts_b.append(html.escape(gb))
+        else:
+            # 공백만 바뀐 부분은 "ws" 클래스를 더해, 취소선·밑줄 없이 옅은 음영만
+            # 보이게 한다 (취소선 그은 공백은 대시 문자로 오인될 수 있다).
+            parts_a.append(_span("word-del ws", ga) if ga else "")
+            parts_b.append(_span("word-add ws", gb) if gb else "")
+
+    def _run(words: list[str], gaps: list[str], lo: int, hi: int) -> str:
+        # words[lo:hi] 와 그 사이 공백(앞 공백 gaps[lo] 제외)을 원문대로 잇는다.
+        text = words[lo]
+        for idx in range(lo + 1, hi):
+            text += gaps[idx] + words[idx]
+        return text
+
+    opcodes = word_matcher.get_opcodes()
+    for tag, i1, i2, j1, j2 in opcodes:
+        # 블록 앞 공백: 같은 단어 블록에서는 양쪽 공백을 비교한다.
+        if tag == "equal":
+            for off in range(i2 - i1):
+                ia, jb = i1 + off, j1 + off
+                if off == 0 and not (ia == 0 and jb == 0):
+                    # 앞 블록과의 경계 공백은 변경 블록 쪽 문맥이므로 그대로 둔다.
+                    parts_a.append(html.escape(gaps_a[ia]))
+                    parts_b.append(html.escape(gaps_b[jb]))
+                else:
+                    _gap_pair(gaps_a[ia], gaps_b[jb])
+                parts_a.append(html.escape(words_a[ia]))
+                parts_b.append(html.escape(words_b[jb]))
+            continue
+        if i2 > i1:
+            parts_a.append(html.escape(gaps_a[i1]))
+            parts_a.append(_span("word-del", _run(words_a, gaps_a, i1, i2)))
+        if j2 > j1:
+            parts_b.append(html.escape(gaps_b[j1]))
+            parts_b.append(_span("word-add", _run(words_b, gaps_b, j1, j2)))
+
+    # 줄 끝 공백: 마지막 블록이 같은 단어로 끝났으면 비교, 아니면 원문 그대로.
+    if opcodes and opcodes[-1][0] == "equal":
+        _gap_pair(gaps_a[-1], gaps_b[-1])
+    elif not words_a and not words_b:
+        _gap_pair(gaps_a[-1], gaps_b[-1])
+    else:
+        parts_a.append(html.escape(gaps_a[-1]))
+        parts_b.append(html.escape(gaps_b[-1]))
+
+    return "".join(parts_a), "".join(parts_b)
 
 
 # ──────────────────────────────────────────────────────────────────────
 # Side-by-side HTML diff 테이블 생성
 # ──────────────────────────────────────────────────────────────────────
+def _side_label(side: str, label: str) -> str:
+    """Pane header: "A: path" (just "A" when no path is given)."""
+    return side if not label or label == side else f"{side}: {label}"
+
+
 CONTEXT_LINES: int = 3
 """equal 블록에서 변경점 주변에 보여줄 컨텍스트 라인 수.
 너무 크면 보고서가 비대해지고, 너무 작으면 맥락 파악이 어렵다."""
@@ -492,7 +614,7 @@ def generate_html_diff(
 ) -> str:
     """구문 강조 + context folding이 적용된 side-by-side diff HTML을 생성한다.
 
-    2*context_lines보다 긴 equal 블록은 접혀서 "⋯ N identical lines ⋯"로 표시.
+    2*context_lines보다 긴 equal 블록은 접혀서 "N identical lines not shown"으로 표시.
     이로써 10만 줄 파일도 수 KB의 HTML로 압축된다.
 
     Args:
@@ -511,19 +633,21 @@ def generate_html_diff(
         ``del``(삭제), ``empty``(빈 셀), ``fold``(접힌 구간),
         ``moved-del``(이동 원위치), ``moved-add``(이동 목적지).
     """
-    # by_word 모드에서는 탭→스페이스를 항상 자동 수행.
-    # word split()은 이미 탭과 스페이스를 동일 취급하지만,
-    # 라인 레벨 SequenceMatcher는 차이를 인식하여 블록이 밀릴 수 있다.
-    if by_word:
-        text_a = text_a.replace("\t", " ")
-        text_b = text_b.replace("\t", " ")
-
     if normalize_ws:
         text_a = normalize_whitespace(text_a)
         text_b = normalize_whitespace(text_b)
 
+    # 표시용 줄(lines_*)은 원문 그대로 둔다. by_word 모드에서는 라인 매칭용
+    # 사본(match_*)에서만 탭→스페이스를 수행한다: word split()은 탭과 스페이스를
+    # 동일 취급하지만 라인 레벨 SequenceMatcher는 차이를 인식해 블록이 밀릴 수 있다.
+    # 탭→스페이스는 줄 수를 바꾸지 않으므로 두 목록의 인덱스는 1:1로 대응한다.
     lines_a = split_lines(text_a)
     lines_b = split_lines(text_b)
+    if by_word:
+        match_a = [ln.replace("\t", " ") for ln in lines_a]
+        match_b = [ln.replace("\t", " ") for ln in lines_b]
+    else:
+        match_a, match_b = lines_a, lines_b
 
     # 반응형 라인 번호 열 너비 계산
     # 공식: 7px/digit + 10px padding, 최소 28px
@@ -533,15 +657,17 @@ def generate_html_diff(
 
     lexer_a = _get_lexer(filename_a) if filename_a else TextLexer(stripnl=False)
     lexer_b = _get_lexer(filename_b) if filename_b else TextLexer(stripnl=False)
+    hl_a = _highlight_lines(lines_a, lexer_a)
+    hl_b = _highlight_lines(lines_b, lexer_b)
 
-    matcher = difflib.SequenceMatcher(None, lines_a, lines_b, autojunk=autojunk)
+    matcher = difflib.SequenceMatcher(None, match_a, match_b, autojunk=autojunk)
     opcodes = matcher.get_opcodes()
 
     # Moved block detection
     moved_a: dict[int, int] = {}  # A-side line → move_id
     moved_b: dict[int, int] = {}  # B-side line → move_id
     if detect_moved:
-        moved_blocks = detect_moved_blocks(opcodes, lines_a, lines_b)
+        moved_blocks = detect_moved_blocks(opcodes, match_a, match_b)
         for mb in moved_blocks:
             for ln in mb.a_lines:
                 moved_a[ln] = mb.move_id
@@ -571,11 +697,15 @@ def generate_html_diff(
         return (
             f'<tr class="fold">'
             f'<td class="ln" colspan="4" '
-            f'style="text-align:center;color:#888;background:#f0f0f0;">'
-            f'⋯ {hidden} identical lines (A:{from_a + 1}–{from_a + hidden},'
-            f' B:{from_b + 1}–{from_b + hidden}) ⋯'
+            f'style="text-align:center;color:#444;background:#f0f0f0;">'
+            f'{hidden:,} identical {"line" if hidden == 1 else "lines"} not shown '
+            f'(A {from_a + 1:,} to {from_a + hidden:,}, B {from_b + 1:,} to {from_b + hidden:,})'
             f'</td></tr>'
         )
+
+    def _equal_row(idx_a: int, idx_b: int) -> str:
+        """equal 행. 매칭용 사본만 같고 원문이 다르면(탭 vs 스페이스) 각자 원문을 표시."""
+        return _row(str(idx_a + 1), hl_a[idx_a], "", str(idx_b + 1), hl_b[idx_b], "")
 
     for tag, i1, i2, j1, j2 in opcodes:
         if tag == "equal":
@@ -583,22 +713,14 @@ def generate_html_diff(
             fold = context_lines >= 0 and span > context_lines * 2
             if fold:
                 for off in range(context_lines):
-                    c = _highlight_line(lines_a[i1 + off], lexer_a)
-                    rows.append(_row(str(i1 + off + 1), c, "",
-                                     str(j1 + off + 1), c, ""))
+                    rows.append(_equal_row(i1 + off, j1 + off))
                 hidden = span - context_lines * 2
                 rows.append(_sep_row(hidden, i1 + context_lines, j1 + context_lines))
                 for off in range(context_lines):
-                    idx_a = i2 - context_lines + off
-                    idx_b = j2 - context_lines + off
-                    c = _highlight_line(lines_a[idx_a], lexer_a)
-                    rows.append(_row(str(idx_a + 1), c, "",
-                                     str(idx_b + 1), c, ""))
+                    rows.append(_equal_row(i2 - context_lines + off, j2 - context_lines + off))
             else:
                 for off in range(span):
-                    c = _highlight_line(lines_a[i1 + off], lexer_a)
-                    rows.append(_row(str(i1 + off + 1), c, "",
-                                     str(j1 + off + 1), c, ""))
+                    rows.append(_equal_row(i1 + off, j1 + off))
         elif tag == "replace":
             mx = max(i2 - i1, j2 - j1)
             for off in range(mx):
@@ -615,7 +737,7 @@ def generate_html_diff(
                 if a_moved and not b_exists:
                     mid = moved_a[a_idx]
                     la = str(a_idx + 1)
-                    ca = _highlight_line(lines_a[a_idx], lexer_a)
+                    ca = hl_a[a_idx]
                     cla = "moved-del"
                     lb, cb, clb = "", "", "empty"
                     extra = f' data-move-id="{mid}"'
@@ -623,10 +745,12 @@ def generate_html_diff(
                     mid = moved_b[b_idx]
                     la, ca, cla = "", "", "empty"
                     lb = str(b_idx + 1)
-                    cb = _highlight_line(lines_b[b_idx], lexer_b)
+                    cb = hl_b[b_idx]
                     clb = "moved-add"
                     extra = f' data-move-id="{mid}"'
-                elif by_word and a_exists and b_exists:
+                elif by_word and a_exists and b_exists and not a_moved and not b_moved:
+                    # 이동 줄은 아래 else 분기가 moved-del/add 클래스와
+                    # data-move-id로 렌더링한다 (--by-word가 이동 표시를 지우지 않게).
                     la = str(a_idx + 1)
                     lb = str(b_idx + 1)
                     ca, cb = _highlight_word_diff(
@@ -637,7 +761,7 @@ def generate_html_diff(
                 else:
                     if a_exists:
                         la = str(a_idx + 1)
-                        ca = _highlight_line(lines_a[a_idx], lexer_a)
+                        ca = hl_a[a_idx]
                         cla = "moved-del" if a_moved else "del"
                         if a_moved:
                             extra = f' data-move-id="{moved_a[a_idx]}"'
@@ -645,7 +769,7 @@ def generate_html_diff(
                         la, ca, cla = "", "", "empty"
                     if b_exists:
                         lb = str(b_idx + 1)
-                        cb = _highlight_line(lines_b[b_idx], lexer_b)
+                        cb = hl_b[b_idx]
                         clb = "moved-add" if b_moved else "add"
                         if b_moved and not extra:
                             extra = f' data-move-id="{moved_b[b_idx]}"'
@@ -655,7 +779,7 @@ def generate_html_diff(
         elif tag == "delete":
             for off in range(i2 - i1):
                 a_idx = i1 + off
-                c = _highlight_line(lines_a[a_idx], lexer_a)
+                c = hl_a[a_idx]
                 if a_idx in moved_a:
                     mid = moved_a[a_idx]
                     rows.append(_row(
@@ -667,7 +791,7 @@ def generate_html_diff(
         elif tag == "insert":
             for off in range(j2 - j1):
                 b_idx = j1 + off
-                c = _highlight_line(lines_b[b_idx], lexer_b)
+                c = hl_b[b_idx]
                 if b_idx in moved_b:
                     mid = moved_b[b_idx]
                     rows.append(_row(
@@ -683,9 +807,9 @@ def generate_html_diff(
         f'<table class="difftbl">'
         f'<thead><tr>'
         f'<th class="ln" {ln_th_style}>#</th>'
-        f'<th class="code">{html.escape(label_a)}</th>'
+        f'<th class="code">{html.escape(_side_label("A", label_a))}</th>'
         f'<th class="ln" {ln_th_style}>#</th>'
-        f'<th class="code">{html.escape(label_b)}</th>'
+        f'<th class="code">{html.escape(_side_label("B", label_b))}</th>'
         f'</tr></thead>\n'
         f'<tbody>\n{body}\n</tbody>'
         f'</table>'

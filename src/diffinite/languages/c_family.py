@@ -1,10 +1,15 @@
 ﻿"""C-family language definitions: C, C++, Objective-C headers."""
 
-from diffinite.languages._spec import LangSpec
+from diffinite.languages._spec import LangSpec, LanguageCommentSpec
 from diffinite.languages._registry import register
 from diffinite.models import CommentSpec
 
 _COMMENT = CommentSpec(line_markers=("//",), block_start="/*", block_end="*/")
+# C++11 raw string literals R"d(...)d" exist only in C++, not in C.
+_CPP_COMMENT = LanguageCommentSpec(
+    line_markers=("//",), block_start="/*", block_end="*/",
+    cpp_raw_strings=True,
+)
 
 _KEYWORDS = frozenset({
     # Control flow
@@ -43,7 +48,7 @@ register(LangSpec(
 register(LangSpec(
     name="C++",
     extensions=(".cpp", ".hpp", ".cc"),
-    comment=_COMMENT,
+    comment=_CPP_COMMENT,
     has_ifdef_zero=True,
     keywords=_KEYWORDS | _CPP_EXTRA,
 ))

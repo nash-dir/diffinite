@@ -1,7 +1,7 @@
 {
   "corpus_sha256": {
     "irplag": "97e2619618dbe9314285457f38f0b75a6d17927c42a775b98b293e58addf17e5",
-    "soco": "131e9295b7935475a6e291b9937b95a53259ea39000d5b63b42b7b5194357990"
+    "soco": "c9fee2d4818eb5da069a67e92ba191ff9e4e26950e150df989ce18eebcd3623e"
   },
   "fixed_threshold_by_case": [
     {
@@ -257,7 +257,7 @@
       "unlabelled_flagged": 0,
       "unlabelled_flag_rate_pct": 0.0,
       "median_tokens": 589,
-      "share_files_over_calibrated_max_pct": 89.6
+      "share_files_over_largest_calibration_file_pct": 84.2
     },
     {
       "language": "c",
@@ -269,7 +269,7 @@
       "unlabelled_flagged": 0,
       "unlabelled_flag_rate_pct": 0.0,
       "median_tokens": 420,
-      "share_files_over_calibrated_max_pct": 94.9
+      "share_files_over_largest_calibration_file_pct": 78.5
     }
   ]
 }

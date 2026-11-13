@@ -62,8 +62,10 @@ class TestInvertedIndex:
         right = tmp_path / "right"
         left.mkdir()
         right.mkdir()
-        (left / "a.py").write_text("value = 1\n" * 20, encoding="utf-8")
-        (right / "b.py").write_text("value = 1\n" * 20, encoding="utf-8")
+        # Distinct lines: >1 unique fingerprint, so a 1-entry cap really drops one.
+        body = "".join(f"value_{i} = {i}\n" for i in range(20))
+        (left / "a.py").write_text(body, encoding="utf-8")
+        (right / "b.py").write_text(body, encoding="utf-8")
 
         status = {}
         with pytest.raises(RuntimeError, match="max-index-entries|incomplete"):
@@ -86,8 +88,10 @@ class TestInvertedIndex:
         right = tmp_path / "right"
         left.mkdir()
         right.mkdir()
-        (left / "a.py").write_text("value = 1\n" * 20, encoding="utf-8")
-        (right / "b.py").write_text("value = 1\n" * 20, encoding="utf-8")
+        # Distinct lines: >1 unique fingerprint, so a 1-entry cap really drops one.
+        body = "".join(f"value_{i} = {i}\n" for i in range(20))
+        (left / "a.py").write_text(body, encoding="utf-8")
+        (right / "b.py").write_text(body, encoding="utf-8")
 
         status = {}
         run_deep_compare(

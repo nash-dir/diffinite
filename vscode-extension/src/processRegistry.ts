@@ -4,9 +4,20 @@ export interface TrackableProcess {
   removeListener(event: "close", listener: (...args: unknown[]) => void): unknown;
 }
 
+interface OutputStreamState {
+  readonly destroyed?: boolean;
+  readonly readableEnded?: boolean;
+}
+
 export interface ClosableProcess extends TrackableProcess {
   readonly exitCode?: number | null;
   readonly signalCode?: string | null;
+  readonly stdout?: OutputStreamState | null;
+  readonly stderr?: OutputStreamState | null;
+}
+
+function streamClosed(stream: OutputStreamState | null | undefined): boolean {
+  return !stream || stream.destroyed === true || stream.readableEnded === true;
 }
 
 /** Wait for close without allowing a missing child-process event to hang forever. */
@@ -14,7 +25,10 @@ export function waitForProcessClose(
   process: ClosableProcess,
   timeoutMs: number,
 ): Promise<boolean> {
-  if (process.exitCode != null || process.signalCode != null) {
+  // An exit code alone is not "closed": a surviving worker that inherited the
+  // pipes keeps them open (and running) after the parent has exited.
+  if ((process.exitCode != null || process.signalCode != null)
+      && streamClosed(process.stdout) && streamClosed(process.stderr)) {
     return Promise.resolve(true);
   }
   return new Promise((resolve) => {
@@ -37,6 +51,9 @@ export class ActiveProcessRegistry<T extends TrackableProcess = TrackableProcess
   private readonly releases = new Map<T, () => void>();
 
   public get size(): number { return this.processes.size; }
+
+  /** True until the process emits 'close' (or is released explicitly). */
+  public has(process: T): boolean { return this.processes.has(process); }
 
   public track(process: T): () => void {
     const previousRelease = this.releases.get(process);

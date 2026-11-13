@@ -127,7 +127,7 @@ function newReport(overrides = {}) {
   return { ...fixture("report-v2.json"), ...overrides };
 }
 
-test("inconclusive is rendered as 판단 유보, not a normal similarity candidate", () => {
+test("inconclusive is rendered as Inconclusive, not as a candidate", () => {
   const report = model.parseReport(newReport({
     deep_results: [{
       file_a: "a.py", fingerprint_count_a: 2,
@@ -135,13 +135,13 @@ test("inconclusive is rendered as 판단 유보, not a normal similarity candida
     }],
   }));
   const view = model.buildReportViewModel(report);
-  assert.equal(view.deepRows[0].label, "판단 유보");
+  assert.equal(view.deepRows[0].label, "Inconclusive");
   assert.equal(view.deepRows[0].kind, "inconclusive");
 });
 
 test("manual normalize threshold and canonical disclosure produce warnings", () => {
   const view = model.buildReportViewModel(model.parseReport(newReport()));
-  assert.ok(view.banners.some((b) => /manual threshold/i.test(b.title)));
+  assert.ok(view.banners.some((b) => /threshold set by user/i.test(b.title)));
   assert.ok(view.banners.some((b) => b.message === "Canonical Python disclosure"));
 });
 
@@ -157,8 +157,12 @@ test("index truncation and partial worker failure produce Incomplete analysis ba
   const view = model.buildReportViewModel(model.parseReport(raw));
   const banner = view.banners.find((b) => b.title === "Incomplete analysis");
   assert.ok(banner);
-  assert.match(banner.message, /불완전 결과/);
-  assert.match(banner.message, /1\/2/);
+  // Reason codes are stated as plain sentences, never as internal tokens.
+  assert.match(banner.message, /Deep Compare index reached the --max-index-entries limit/);
+  assert.match(banner.message, /Another part of the analysis did not complete/);
+  assert.doesNotMatch(banner.message, /deep-index-truncated|worker-failure/);
+  assert.match(banner.message, /does not cover every input/);
+  assert.match(banner.message, /1 of 2 files processed/);
   assert.match(banner.message, /b\.py/);
 });
 
@@ -196,7 +200,7 @@ test("truncated diff banner preserves reason and known omitted bytes", () => {
   assert.ok(banner);
   assert.match(banner.message, /large-a\.py/);
   assert.match(banner.message, /max-diff-html-size/);
-  assert.match(banner.message, /4096/);
+  assert.match(banner.message, /4,096 bytes omitted/);
 });
 
 test("missing fields use safe fallbacks instead of throwing", () => {
@@ -224,4 +228,43 @@ test("help text does not overstate checksums or classify copying", () => {
   assert.doesNotMatch(helpSource, /cryptographic chain of custody/i);
   assert.doesNotMatch(helpSource, /identified as a ["']clone["']/i);
   assert.doesNotMatch(helpSource, /if the plagiarist/i);
+});
+
+function excludeReport({ binaryHandling, requested, results }) {
+  const raw = fixture("report-v2.json");
+  const rows = Array.from({ length: results }, (_, i) => ({
+    file_a: `f${i}.py`, file_b: `f${i}.py`, name_similarity: 100, ratio: 1, additions: 0, deletions: 0,
+    html_diff: "", error: null, binary: false,
+    truncation: { truncated: false, reason: null, original_bytes: null, omitted_bytes: null },
+  }));
+  return {
+    ...raw,
+    metadata: { ...raw.metadata, ...(binaryHandling ? { binary_handling: binaryHandling } : {}) },
+    results: rows,
+    summary: { ...raw.summary, matched_pairs: results },
+    analysis_status: {
+      ...raw.analysis_status,
+      diff: { requested_pair_count: requested, successful_pair_count: requested, failed_pair_count: 0, failed_pairs: [] },
+    },
+  };
+}
+
+test("binary-handling exclude may leave fewer result rows than processed pairs", () => {
+  // pipeline.py counts an excluded binary pair as processed but writes no row.
+  const report = model.parseLiveReport(excludeReport({ binaryHandling: "exclude", requested: 2, results: 1 }));
+  assert.equal(report.results.length, 1);
+  assert.throws(
+    () => model.parseLiveReport(excludeReport({ binaryHandling: "exclude", requested: 1, results: 2 })),
+    /at least results\.length/,
+  );
+});
+
+test("every other binary policy still requires one row per processed pair", () => {
+  for (const binaryHandling of ["hash", "error", undefined]) {
+    assert.throws(
+      () => model.parseLiveReport(excludeReport({ binaryHandling, requested: 2, results: 1 })),
+      /must equal results\.length/,
+      String(binaryHandling),
+    );
+  }
 });
