@@ -136,6 +136,9 @@ DATASETS: dict[str, dict] = {
         "inner_zip_sha256": "1b96b320fd05d164b3a7ee17d8cc36992b728d3be099dc7ec39ddb7fae2ec4a4",
         "zip_subdir": "IR-Plag-Dataset",
         "expected_files": 467,
+        # _tree_sha256 of the extracted tree; equals the IR-Plag digest published
+        # in example/validation/holdout.json (measured 2026-11-10).
+        "expected_tree_sha256": "97e2619618dbe9314285457f38f0b75a6d17927c42a775b98b293e58addf17e5",
     },
 
     # 5. SOCO 2014 training set (PAN@FIRE 2014, Zenodo record 7433031) — the
@@ -149,6 +152,9 @@ DATASETS: dict[str, dict] = {
         "zip_subdir": "fire14-source-code-training-dataset",
         "extract_to": "fire14-source-code-training-dataset",
         "expected_files": 340,
+        # _tree_sha256 of the tree extracted from the pinned zip above (computed
+        # from the archive itself, 2026-11-10).
+        "expected_tree_sha256": "c9fee2d4818eb5da069a67e92ba191ff9e4e26950e150df989ce18eebcd3623e",
     },
 
     # 6. SQLite amalgamation (two adjacent versions)
@@ -225,9 +231,34 @@ def _safe_extract_zip(zip_path: Path, dest: Path, subdir: str = "") -> int:
     return count
 
 
-def _pinned_layout_ok(target: Path, expected: int) -> bool:
-    """A pinned dataset counts as present only if the full file set is there."""
-    return target.is_dir() and sum(1 for p in target.rglob("*") if p.is_file()) == expected
+def _tree_sha256(root: Path) -> str:
+    """sha256 over sorted "<posix relative path>\\0<file sha256>\\n" lines.
+
+    Sorted by the POSIX path string so the digest is the same on every OS. Must
+    stay identical to tree_sha256 in tests/validation/error_rate.py, which
+    checks the calibration corpus against the pins below before measuring it.
+    """
+    h = hashlib.sha256()
+    entries = sorted((p.relative_to(root).as_posix(), p) for p in root.rglob("*") if p.is_file())
+    for rel, f in entries:
+        h.update(f"{rel}\0{hashlib.sha256(f.read_bytes()).hexdigest()}\n".encode())
+    return h.hexdigest()
+
+
+def _pinned_layout_ok(target: Path, expected: int, expected_tree: str | None = None) -> bool:
+    """A pinned dataset counts as present only if its exact pinned bytes are there.
+
+    A file count alone would accept an edited or swapped file, so when the
+    dataset pins its extracted tree the digest must match as well.
+    """
+    if not target.is_dir():
+        return False
+    if sum(1 for p in target.rglob("*") if p.is_file()) != expected:
+        return False
+    if expected_tree is not None and _tree_sha256(target) != expected_tree:
+        print(f"  {target} differs from the pinned tree digest; it will be re-extracted")
+        return False
+    return True
 
 
 def download_dataset(name: str, config: dict, *, force: bool = False) -> bool:
@@ -236,11 +267,12 @@ def download_dataset(name: str, config: dict, *, force: bool = False) -> bool:
     # Pinned datasets extract into dest/<extract_to> (or dest itself).
     target = dest / config["extract_to"] if "extract_to" in config else dest
     expected = config.get("expected_files")
+    expected_tree = config.get("expected_tree_sha256")
 
     # Check if already exists. For a pinned dataset an older or partial layout
     # (e.g. a case-01-only IR-Plag download) is replaced, not silently reused.
     if expected is not None:
-        if _pinned_layout_ok(target, expected) and not force:
+        if _pinned_layout_ok(target, expected, expected_tree) and not force:
             print(f"[{name}] Already present ({expected} files) — skipping (use --clean to re-download)")
             return True
         if target.exists():
@@ -294,6 +326,11 @@ def download_dataset(name: str, config: dict, *, force: bool = False) -> bool:
         print(f"  Extracted {count} files")
         if expected is not None and count != expected:
             print(f"  FAIL: expected {expected} files, extracted {count}; removing partial copy")
+            shutil.rmtree(target, ignore_errors=True)
+            return False
+        if expected_tree is not None and _tree_sha256(target) != expected_tree:
+            print("  FAIL: extracted tree does not match the pinned tree digest; "
+                  "removing it")
             shutil.rmtree(target, ignore_errors=True)
             return False
         return count > 0

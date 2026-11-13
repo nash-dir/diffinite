@@ -1,53 +1,72 @@
-# Diffinite — Source Code Diff Report
+# Source Code Comparison Report
+
+## Particulars
+
+| Item | Value |
+|---|---|
+| Directory A | `AOSP_Google` |
+| Directory B | `OpenJDK_Oracle` |
+| Report generated | 2026-11-10 04:28 UTC |
+| Tool | Diffinite 0.14.0 |
+| Comparison unit | line |
+| Comments | stripped |
+| Matched pairs | 5 |
+| Unmatched files | 0 in A; 0 in B |
 
 ## Analysis Configuration
 
-| Parameter | Value |
-|-----------|-------|
-| **Execution Mode** | `deep` |
-| **K-gram (K)** | `5` |
-| **Window (W)** | `4` |
-| **Threshold (min Jaccard)** | `5.0%` |
-| **Threshold provenance** | `legacy-uncalibrated` |
-| **Normalize fingerprints** | `off` |
-| **Line diff autojunk** | `on` |
-| **Ignore policy** | `0 rule(s); SHA-256=none` |
-| **Selection filter** | `none; 0 path(s); SHA-256=none` |
-| **Analysis status** | `incomplete` |
-| **Completeness detail** | Collection: 0 file/directory failure(s) |
-| **Completeness detail** | Diff pairs: 5/5 processed; 0 worker failure(s) |
-| **Completeness detail** | Deep files: 10/10 processed; 0 file/worker failure(s); 0 skipped as binary content |
-| **Completeness detail** | Truncation: 1 inline diff payload(s); deep index complete |
+| Setting | Value |
+|---|---|
+| Mode | deep |
+| K-gram size (K) | 5 |
+| Window size (W) | 4 |
+| Jaccard threshold | 5% |
+| Threshold source | Default (5%) |
+| Identifier normalization | off |
+| Line diff autojunk | on |
+| Ignore policy | 0 rules; SHA-256 none |
+| Selection filter | none; 0 paths; SHA-256 none |
 
-> ℹ **Threshold disclosure:** Raw threshold 5 is the historical compatibility default and is not a calibrated safety threshold. Low-threshold results are similarity candidates for manual review, not legal copying determinations.
+## Analysis Status
 
-> ⚠ **Incomplete analysis / 불완전 결과:** diff-payload-truncated. This report must not be read as a complete analysis.
+| Item | Value |
+|---|---|
+| State | Complete |
+| Inputs not read | 0 |
+| File pairs compared | 5 of 5 |
+| File pairs failed | 0 |
+| Inline diffs truncated | 0 |
+| Deep Compare files processed | 10 of 10 |
+| Deep Compare files failed | 0 |
+| Deep Compare files skipped (binary or not decodable as text) | 0 |
+| Deep Compare files with fewer tokens than the k-gram size | 0 |
+| Deep Compare pairs at or above the threshold | 5 |
+| Deep Compare index | Complete |
 
-- **Dir A:** `AOSP_Google`
-- **Dir B:** `OpenJDK_Oracle`
-- **Comparison unit:** line
-- **Comments:** stripped
-- **Matched pairs:** 5
-- **Unmatched:** 0 (A) / 0 (B)
+## Scope and Limitations
+
+1. Similarity figures in this report measure textual and token overlap between the files compared. They do not establish copying, derivation or infringement.
+2. Short files and small code fragments can show high similarity even when written independently, because language syntax and common idioms leave little room for variation.
+3. Deep Compare lists file pairs whose Jaccard similarity is at least 5%, the default threshold. No false-positive rate has been measured for this threshold.
 
 ## Summary
 
-| # | File A | File B | Name Sim. | Line match (difflib) | +Added | −Deleted |
-|---|--------|--------|:---------:|:--------------------:|:------:|:--------:|
-| 1 | `ArrayList.java` | `ArrayList.java` | 100.0 | 7.0% | +1069 | −601 |
-| 2 | `Collections.java` | `Collections.java` | 100.0 | 2.4% | +3878 | −3362 |
-| 3 | `List.java` | `List.java` | 100.0 | 6.3% | +570 | −323 |
-| 4 | `Math.java` | `Math.java` | 100.0 | 7.4% | +1421 | −1197 |
-| 5 | `String.java` | `String.java` | 100.0 | 3.4% | +2989 | −1958 |
+| # | File A | File B | Name similarity | Line match | Added | Deleted |
+|--:|--------|--------|--:|--:|--:|--:|
+| 1 | `ArrayList.java` | `ArrayList.java` | 100.0% | 7.0% | +1,069 | −601 |
+| 2 | `Collections.java` | `Collections.java` | 100.0% | 2.4% | +3,878 | −3,362 |
+| 3 | `List.java` | `List.java` | 100.0% | 6.3% | +570 | −323 |
+| 4 | `Math.java` | `Math.java` | 100.0% | 7.4% | +1,421 | −1,197 |
+| 5 | `String.java` | `String.java` | 100.0% | 3.4% | +2,989 | −1,958 |
 
-## Deep Compare — N:M Cross-Match Results
+## Deep Compare: Cross-Match Results
 
-| A File | B File(s) | Shared Hashes | Jaccard | A in B | B in A |
-|--------|-----------|:-------------:|:-------:|:------:|:------:|
+| File A | File B | Shared hashes | Jaccard | A in B | B in A |
+|--------|--------|--:|--:|--:|--:|
 | `ArrayList.java` | `ArrayList.java` | 122 | 7.96% | 16.46% | 13.36% |
-| `Collections.java` | `Collections.java` | 1096 | 22.00% | 37.83% | 34.47% |
+| `Collections.java` | `Collections.java` | 1,096 | 22.00% | 37.83% | 34.47% |
 | `List.java` | `List.java` | 17 | 11.64% | 20.48% | 21.25% |
 | `Math.java` | `Math.java` | 78 | 7.19% | 9.87% | 20.91% |
 | `String.java` | `String.java` | 304 | 8.78% | 16.34% | 15.94% |
 
-> **A in B** = shared ÷ unique fingerprints of the A file; **B in A** = shared ÷ unique fingerprints of the B file. Rows are selected by the Jaccard threshold only; the containment columns are descriptive and have no calibrated threshold.
+A in B is the number of shared hashes divided by the number of unique hashes of the A file; B in A is the same ratio for the B file. Rows are selected by the Jaccard threshold only.

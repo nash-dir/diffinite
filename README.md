@@ -119,6 +119,14 @@ The cover page contains a summary table for each matched file pair:
 | **Line match (difflib)** — labelled *Word match* under `--by-word` | `difflib.SequenceMatcher.ratio()` as a percentage — `2 × matched lines ÷ (lines A + lines B)`; with `--by-word` the unit is whitespace-separated words instead of lines. `100%` = identical. difflib's `autojunk` heuristic (on by default) looks only at File B: when File B has fewer than 200 lines (words under `--by-word`), blank and brace-only lines count as matches, so unrelated small files can still score 10–30%; when File B has 200 or more, any line occurring in more than about 1% of File B's lines (typically blanks and `}`) is ignored, so unrelated large files usually score only a few percent (see the negative control under [Benchmarks](#benchmarks)). `--no-autojunk` counts every line at all file sizes. |
 | **Added / Deleted** | Number of lines (or words, with `--by-word`) added to or deleted from File A to produce File B. |
 
+Pairs that were not compared by difflib never show a percentage or `+0` / `−0`:
+
+- **SHA-256 only** — a pair that is binary / not decodable as text (with `--binary-handling hash`, the default) or larger than `--max-file-size` shows `Not compared by difflib (<reason>); SHA-256 identical` or `… SHA-256 different` instead of a line-match value, and its +/− columns show `—`. Identical bytes are not reported as `100%`.
+- **Error** — a pair that could not be read or decoded (including `--binary-handling error`) shows *Not compared* with the error, its +/− columns show `—`, and the run is marked *incomplete*.
+- **Excluded** — with `--binary-handling exclude`, a matched binary pair is not compared and has no row of its own; it is listed by name under *Matched pairs not compared* in the completeness section (see [Completeness Disclosure](#completeness-disclosure)).
+
+A non-identical ratio is never rounded up to `100%`: values below 1 are capped at the largest value the display precision allows (for example `99.99%`).
+
 ### Diff Pages
 
 Each matched pair gets a side-by-side diff page with:
@@ -144,6 +152,20 @@ When running in `deep` mode (default), the report includes an N:M cross-matching
 | **Jaccard** | `|A∩B| / |A∪B|` — the fraction of shared Winnowing fingerprints. |
 
 Jaccard similarity is a well-defined set metric. Its interpretation depends on the domain, code size, and language. Diffinite reports the raw value without attaching qualitative labels.
+
+### Completeness Disclosure
+
+Every report (PDF cover, HTML, Markdown, JSON `analysis_status`) states what was *not* analysed, by name, so no input is dropped silently:
+
+| Line | What it lists |
+|------|---------------|
+| **Collection** | Files or directories that were listed but not collected: symbolic links and Windows link-type reparse points (junctions), non-regular files (FIFOs, sockets, devices), entries whose `stat` failed (reported by errno name, e.g. `EACCES`, so the text is the same on every machine), and on Windows any name ending in `.` or a space (Windows cannot open such a name by its plain path). Without `--allow-partial` the run stops; with it the report is marked *incomplete*. Entries excluded by `--ignore-file` are not failures and are not listed here. |
+| **Diff pairs** | `processed / requested`, the number of **failed** pairs (worker failure or read/decode error, each listed with its reason) and the number of pairs **excluded** by `--binary-handling exclude` (each listed by name). Requested = processed + failed + excluded. |
+| **Deep files** | `processed / requested`, file or worker failures, files **skipped (binary or not decodable as text)** with the reason, and files **below the k-gram size**, which were read but produce no fingerprints and so cannot appear in the Deep Compare table. |
+| **Selection filter** | With `--filter-json`, how many unmatched files of A and B the filtered report leaves out. |
+| **Lang-aware fallback** | With `--normalize --lang-aware`, files whose Pygments lexer failed and were tokenized by the built-in regex tier instead. |
+
+A report with any failure is labelled *incomplete*; the counts and names above say which part is missing.
 
 ### Page Annotations
 
@@ -228,6 +250,7 @@ Korean, Japanese, and Chinese text is rendered correctly in PDF output. By defau
 | `--hash` | off | Embed a table of SHA-256 digests of the analyzed input files in the HTML/PDF report. A digest lets anyone check, against a separately kept copy, that a file's bytes have not changed; it is not a signature and does not by itself establish authenticity or chain of custody. |
 | `--uncompared-files {inline,separate,none}` | `inline` | Control how unmatched files are displayed: inline in the main report, written to a separate `*_uncompared.txt` file, or omitted. |
 | `--bundle PATH` | — | Create an evidence bundle ZIP at `PATH` containing source files, generated reports, and the integrity manifest. |
+| `--bundle-sources {full,none}` | `full` | `none` leaves the source files out of the `--bundle` ZIP (for sources held under a protective order). The manifest inside still lists every input file's SHA-256, so the result can be checked against a separately retained copy. |
 | `--allow-partial` | off | Permit an explicitly **incomplete** report after a worker/file failure. Without this flag, such failures stop report generation. |
 | `--dir-alias-a TEXT` / `--dir-alias-b TEXT` | — | Display alias for directory A/B in reports (avoids exposing absolute paths). |
 
@@ -235,12 +258,76 @@ Korean, Japanese, and Chinese text is rendered correctly in PDF output. By defau
 
 | Option | Default | Description |
 |--------|:-------:|-------------|
-| `--ignore-file PATH` | — | Path to a `.diffignore` file with glob patterns (e.g. `node_modules`, `*.pyc`) to exclude from analysis. |
-| `--binary-handling {exclude,hash,error}` | `hash` | How to handle non-decodable (binary) files: skip, show SHA-256 match status, or report a decode error. |
+| `--ignore-file PATH` | — | Path to a `.diffignore` file with glob patterns (e.g. `node_modules`, `*.pyc`) to exclude from analysis. Matching rules are under [Ignore patterns](#ignore-patterns). The file's SHA-256 and the patterns are recorded in the report metadata, and every excluded file or directory is disclosed (see [Excluded inputs](#excluded-inputs)). |
+| `--include PATTERN` | none | Collect only files matching `PATTERN` (same syntax as the ignore file; repeatable). Applied during collection, so it also limits hashing, the manifest and the bundle. Every file left out is disclosed, as for `--ignore-file`. |
+| `--sensitive-files {exclude,include,error}` | `exclude` | Files that usually hold secrets: `exclude` leaves them out and discloses their paths, `include` compares them like any other file, `error` stops before writing anything when one is found. See [Excluded inputs](#excluded-inputs). |
+| `--binary-handling {exclude,hash,error}` | `hash` | How to handle matched pairs that are binary (not decodable as text): `exclude` leaves the pair uncompared and lists it by name as *excluded*; `hash` shows `SHA-256 identical` / `SHA-256 different` instead of a percentage; `error` records a decode error, shows `Not compared (…)` and marks the run incomplete. Unreadable files are never excluded, and pairs over `--max-file-size` are always compared by SHA-256 only. |
 | `--max-diff-html-size N` | `2.0` | Max HTML diff size (MB) before truncation. Prevents xhtml2pdf OOM/`RecursionError` on huge diffs. |
 | `--metrics-only` | off | Phase 1 only: compute similarities and emit JSON, skipping HTML/PDF rendering. |
 | `--filter-json PATH` | — | Phase 2: restrict output to the file-A paths listed in a JSON array (pairs with `--metrics-only`). |
 | `--unreadable-log PATH` | — | Write the privacy-safe list of files that could not be read. When produced, the log is hashed in the manifest and included in the evidence bundle. A stale log is removed when the current run has no such failures. |
+
+#### Ignore patterns
+
+The ignore file is read as UTF-8 (a leading byte-order mark is allowed). Each line is one pattern; blank lines and
+lines starting with `#` are skipped, and leading and trailing spaces are removed. Patterns follow a subset of
+`.gitignore` rules:
+
+- Matching is **case-sensitive on every OS**, so one policy file selects the same evidence set on Windows, macOS
+  and Linux. `Thumbs.db` does not exclude `THUMBS.DB`; list each spelling you need.
+- A pattern without `/` (`node_modules`, `*.log`) matches a file or directory name at any depth.
+- A trailing `/` (`build/`) matches directories only, at any depth.
+- A pattern that contains `/` elsewhere (`/build`, `src/*.py`) is anchored to the root of each input directory;
+  a leading `/` only marks the anchor.
+- `*`, `?` and `[...]` never match `/`: `src/*.py` excludes `src/a.py` but not `src/a/b.py`.
+- A leading `**/` matches zero or more directories (including the root level), `a/**/b` matches zero or more
+  directories in between, and a trailing `/**` matches everything inside a directory (but not the directory itself).
+- When a directory is excluded, everything under it is excluded, and an excluded linked directory is not reported
+  as a collection failure.
+- **Not supported:** `!` negation (re-include) and `\` escapes. `!foo` matches only an entry literally named `!foo`.
+
+#### Excluded inputs
+
+Three rules can leave an input out, applied in this order:
+
+1. `--ignore-file`: excludes files and whole directories. An excluded directory is listed once; its contents are
+   not walked.
+2. `--include`: when given, every file that no include pattern matches is excluded.
+3. `--sensitive-files` (default `exclude`): files that usually hold secrets. Names are matched ignoring case:
+   `.env`, `.env.*`, `*.env`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`, `id_rsa`, `id_dsa`,
+   `id_ecdsa`, `id_ecdsa_sk`, `id_ed25519`, `id_ed25519_sk`, `.npmrc`, `.pypirc`, `.netrc`, `_netrc`, `.git-credentials`, `.htpasswd`,
+   `credentials`, `credentials.json`, `*.tfvars`, `*.tfstate`, `*.tfstate.backup`; every file under a directory
+   named `.ssh`, `.aws`, `.azure`, `.gnupg` or `.kube`; `.config/gcloud/**` and `.docker/config.json`. A name ending
+   in `.example`, `.sample`, `.template`, `.dist` or `.pub` is kept. The list has a version number
+   (`sensitive_preset_version`), and the manifest records the version and the full list.
+
+An excluded input is not hashed, copied into the snapshot or the bundle, or compared. The Analysis Status table
+gives the count (**Inputs excluded by policy**), and by default the Markdown, HTML and PDF reports list each input
+with its side, path and the rule that removed it in an **Excluded Inputs** section. With `--uncompared-files separate`
+that list moves to the `*_uncompared.txt` file, and with `none` those reports give the count only. The JSON report
+(`analysis_status.exclusion`) and the manifest always carry the full list. A name that is not valid UTF-8 (possible
+on NTFS) is listed with the invalid character written as a `\udXXX` escape. An exclusion does not make the analysis
+incomplete; a file that becomes excluded, or stops being excluded, while the analysis runs stops it like any
+other source change.
+
+Content is never inspected to find secrets, and nothing inside a compared file is redacted: the reports show the
+exact bytes whose similarity was measured. If a sensitive file is itself in dispute, use `--sensitive-files include`.
+
+#### Integrity manifest: environment
+
+`manifest.sha256.json` records, under `"environment"`, the software versions that the fingerprints depend on, and
+the JSON report repeats the same object in its metadata:
+
+| Key | Meaning |
+|-----|---------|
+| `python_version` | Python version that ran the analysis. |
+| `pygments_version` | Pygments version (its lexers tokenize the source under `--normalize --lang-aware`). |
+| `unicodedata_version` | Unicode character database version (NFC normalisation and the character classes the tokenizer uses). |
+| `lang_aware_tiers` | Only when `--normalize --lang-aware` ran: the tokenizer tiers used for each file extension. |
+| `lang_aware_fallback_files` | Only when `--normalize --lang-aware` ran: the files whose Pygments lexer failed, so they were tokenized by the built-in regex tier instead. |
+
+A different value here can change fingerprints and scores, so re-running the same inputs with a different
+environment is not expected to reproduce the numbers exactly.
 
 Report checksum sidecars use `.sha256`. The legacy `.sig` sidecar is retained for
 compatibility but is deprecated: it contains only a plain SHA-256 checksum and is
@@ -428,6 +515,12 @@ python example/benchmark/run_benchmarks.py                # re-run all cases →
 python example/benchmark/run_benchmarks.py --check        # re-run and fail if any number or input differs
 ```
 
+`--check` writes nothing. It prints `N checked, M not verified, K drifted` and exits 1 if any case drifted (a
+number, input digest, threshold, comment mode, title or command differs, or a case exists on only one side). It
+also exits 1 if any case is **not verified**, meaning this run could not re-run it because its dataset is not
+downloaded — including cases that `results.json` itself records as skipped. Pass `--allow-skips` to accept
+not-verified cases (they are still listed); drift always fails.
+
 [`example/benchmark/RESULTS.md`](example/benchmark/RESULTS.md) lists, for every case, the exact command, the
 tool version and commit, and a SHA-256 *input digest* of both directories, so a reader can tell whether they
 ran on the same bytes. `results.json` is the machine-readable copy that `--check` compares against. The
@@ -570,11 +663,11 @@ diffinite example/unicode/left example/unicode/right \
 
 | Case | Highest Jaccard: default | `--normalize` | `--normalize --lang-aware` |
 |------|:-:|:-:|:-:|
-| Java → C# (near-mechanical port) | 27.9% | 51.2% | 30.9% |
-| Python → JavaScript (faithful port, renamed) | 2.7% | 7.7% | 4.3% |
-| Unrelated code, same file names (control) | 0.5% | 4.0% | 3.0% |
+| Java → C# (near-mechanical port) | 27.9% | 51.2% | 36.9% |
+| Python → JavaScript (faithful port, renamed) | 2.7% | 7.7% | 5.3% |
+| Unrelated code, same file names (control) | 0.5% | 4.0% | 3.3% |
 
-The Java → Kotlin file of the same case (idiomatic rewrite) scored 3.5–8.2%. Line-level Match is 6–15% for the ports and the control alike, so it does not separate them. **Reading**: a port between syntactically close languages (Java → C#) stands out from the control; ports between distant languages (Python → JavaScript, Java → Kotlin) overlap with the unrelated control and are not distinguishable by these measurements. Full per-pair values are in `RESULTS.md`.
+The Java → Kotlin file of the same case (idiomatic rewrite) scored 4.0–8.2%. Line-level Match is 6–15% for the ports and the control alike, so it does not separate them. **Reading**: a port between syntactically close languages (Java → C#) stands out from the control; ports between distant languages (Python → JavaScript, Java → Kotlin) overlap with the unrelated control and are not distinguishable by these measurements. Full per-pair values are in `RESULTS.md`.
 
 ---
 

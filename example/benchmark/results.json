@@ -1,11 +1,11 @@
 {
   "environment": {
     "diffinite_version": "0.14.0",
-    "git_commit": "26ebc7e",
+    "git_commit": "1f15233",
     "git_dirty": true,
     "python": "3.13.5",
     "platform": "Windows-11",
-    "generated_utc": "2026-11-09 15:36 UTC"
+    "generated_utc": "2026-11-10 04:29 UTC"
   },
   "cases": {
     "case_oracle": {
@@ -14,7 +14,7 @@
       "input_digest": "2c46e29f34caaf8f79b78bfa686673df90b7a09331a2e33a45e384798862a0a7",
       "unmatched_a": 0,
       "unmatched_b": 0,
-      "analysis_state": "incomplete",
+      "analysis_state": "complete",
       "threshold_pct": 5.0,
       "threshold_provenance": "legacy-uncalibrated",
       "comment_mode": "stripped",
@@ -628,33 +628,33 @@
         {
           "file_a": "csv_ledger.py",
           "file_b": "csvLedger.mjs",
-          "jaccard_pct": 4.26,
-          "a_in_b_pct": 9.15,
-          "b_in_a_pct": 7.37,
+          "jaccard_pct": 5.28,
+          "a_in_b_pct": 11.11,
+          "b_in_a_pct": 9.14,
           "inconclusive": false
         },
         {
           "file_a": "route_planner.py",
           "file_b": "route_planner.js",
-          "jaccard_pct": 3.88,
-          "a_in_b_pct": 8.7,
-          "b_in_a_pct": 6.55,
+          "jaccard_pct": 4.38,
+          "a_in_b_pct": 9.8,
+          "b_in_a_pct": 7.33,
           "inconclusive": false
         },
         {
           "file_a": "csv_ledger.py",
           "file_b": "route_planner.js",
-          "jaccard_pct": 2.39,
-          "a_in_b_pct": 6.54,
-          "b_in_a_pct": 3.64,
+          "jaccard_pct": 2.65,
+          "a_in_b_pct": 7.19,
+          "b_in_a_pct": 4.03,
           "inconclusive": false
         },
         {
           "file_a": "route_planner.py",
           "file_b": "csvLedger.mjs",
-          "jaccard_pct": 2.32,
-          "a_in_b_pct": 4.35,
-          "b_in_a_pct": 4.74,
+          "jaccard_pct": 2.36,
+          "a_in_b_pct": 4.41,
+          "b_in_a_pct": 4.84,
           "inconclusive": false
         }
       ]
@@ -761,17 +761,17 @@
         {
           "file_a": "InventoryLedger.java",
           "file_b": "InventoryLedger.cs",
-          "jaccard_pct": 30.93,
-          "a_in_b_pct": 47.71,
-          "b_in_a_pct": 46.79,
+          "jaccard_pct": 36.89,
+          "a_in_b_pct": 54.61,
+          "b_in_a_pct": 53.21,
           "inconclusive": false
         },
         {
           "file_a": "InventoryLedger.java",
           "file_b": "InventoryLedger.kt",
-          "jaccard_pct": 3.55,
-          "a_in_b_pct": 6.54,
-          "b_in_a_pct": 7.19,
+          "jaccard_pct": 3.96,
+          "a_in_b_pct": 7.24,
+          "b_in_a_pct": 8.03,
           "inconclusive": false
         }
       ]
@@ -913,32 +913,32 @@
         {
           "file_a": "Validator.java",
           "file_b": "Validator.cs",
-          "jaccard_pct": 2.95,
-          "a_in_b_pct": 6.14,
-          "b_in_a_pct": 5.38,
+          "jaccard_pct": 3.32,
+          "a_in_b_pct": 6.72,
+          "b_in_a_pct": 6.15,
           "inconclusive": false
         },
         {
           "file_a": "Validator.java",
           "file_b": "scheduler.js",
-          "jaccard_pct": 2.95,
-          "a_in_b_pct": 7.89,
-          "b_in_a_pct": 4.5,
+          "jaccard_pct": 2.6,
+          "a_in_b_pct": 6.72,
+          "b_in_a_pct": 4.06,
           "inconclusive": false
         },
         {
           "file_a": "scheduler.py",
           "file_b": "scheduler.js",
-          "jaccard_pct": 2.01,
-          "a_in_b_pct": 4.49,
-          "b_in_a_pct": 3.5,
+          "jaccard_pct": 1.74,
+          "a_in_b_pct": 3.92,
+          "b_in_a_pct": 3.05,
           "inconclusive": false
         },
         {
           "file_a": "scheduler.py",
           "file_b": "Validator.cs",
           "jaccard_pct": 0.35,
-          "a_in_b_pct": 0.64,
+          "a_in_b_pct": 0.65,
           "b_in_a_pct": 0.77,
           "inconclusive": false
         }

@@ -2,6 +2,8 @@
 
 Corpus: Karnalim IR-Plag, 7 cases. Negatives (independent same-domain submissions): **105** pairs. Positives (labelled copies L1–L6): **355** pairs. A negative scoring above threshold is a **false positive**.
 
+Measured corpus digest (sha256 over sorted POSIX path + file hash): `97e2619618dbe9314285457f38f0b75a6d17927c42a775b98b293e58addf17e5`, equal to the pin in example/download_examples.py.
+
 ## Headline — false-positive rate at the shipped default (`--threshold-deep 5`)
 
 - **raw**: false-positive rate **100.0%** (95% CI [96.5%, 100.0%], 105/105), recall (all levels) 100.0% at threshold 5.

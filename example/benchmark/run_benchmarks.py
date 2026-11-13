@@ -321,6 +321,67 @@ def strip_env(d: dict) -> dict:
     return {k: v for k, v in d.items() if k != "environment"}
 
 
+# Every per-case value that results.json records and RESULTS.md publishes.
+CHECKED_FIELDS = (
+    "title",
+    "command",
+    "input_digest",
+    "pairs",
+    "deep",
+    "unmatched_a",
+    "unmatched_b",
+    "analysis_state",
+    "threshold_pct",
+    "threshold_provenance",
+    "comment_mode",
+)
+
+
+def compare_results(committed: dict, data: dict) -> tuple[list[str], list[str], list[str]]:
+    """Compare a fresh run with results.json.
+
+    Returns ``(drift, checked, unverified)``: differences, the keys whose numbers
+    were re-derived and match, and keys this run could not re-derive because
+    the dataset is not downloaded (including keys results.json also records as
+    skipped). Nothing is silently passed over: a key present on only one side
+    is drift, and every other key is either checked, unverified or drift.
+    """
+    drift: list[str] = []
+    checked: list[str] = []
+    unverified: list[str] = []
+    for section in ("cases", "cross_language"):
+        old_section = committed.get(section, {})
+        new_section = data.get(section, {})
+        for key in sorted(old_section.keys() | new_section.keys()):
+            name = f"{section}/{key}"
+            old, now = old_section.get(key), new_section.get(key)
+            if now is None:
+                drift.append(f"{name}: in results.json but not produced by this run")
+                continue
+            if old is None:
+                drift.append(f"{name}: not in results.json (regenerate it)")
+                continue
+            if "skipped" in now:
+                # Not re-derived by this run. A case that results.json also
+                # records as skipped has no committed number either, but it is
+                # still not verified: it must not vanish from the summary.
+                unverified.append(name)
+                continue
+            if "skipped" in old:
+                drift.append(f"{name}: results.json records it as skipped (regenerate it)")
+                continue
+            before = len(drift)
+            for field in CHECKED_FIELDS:
+                if old.get(field) != now.get(field):
+                    reason = (
+                        "different input bytes" if field == "input_digest" else "result changed"
+                    )
+                    drift.append(f"{name}: {field} differs ({reason})")
+            if len(drift) == before:
+                checked.append(name)
+    return drift, checked, unverified
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -328,35 +389,30 @@ def main() -> int:
     ap.add_argument(
         "--check", action="store_true", help="re-run and compare with results.json; write nothing"
     )
+    ap.add_argument(
+        "--allow-skips",
+        action="store_true",
+        help="with --check, exit 0 even if some committed cases could not be re-run "
+        "because their dataset is not downloaded (they are still listed)",
+    )
     a = ap.parse_args()
     print("Running benchmarks…")
     data = collect(write_reports=not a.check)
     results_path = BENCH / "results.json"
     if a.check:
         committed = json.loads(results_path.read_text(encoding="utf-8"))
-        drift = []
-        for section in ("cases", "cross_language"):
-            for key, now in data[section].items():
-                old = committed.get(section, {}).get(key)
-                if old is None or "skipped" in now or "skipped" in old:
-                    continue
-                for field in (
-                    "input_digest",
-                    "pairs",
-                    "deep",
-                    "unmatched_a",
-                    "unmatched_b",
-                    "analysis_state",
-                ):
-                    if old.get(field) != now.get(field):
-                        reason = (
-                            "different input bytes" if field == "input_digest" else "result changed"
-                        )
-                        drift.append(f"{section}/{key}: {field} differs ({reason})")
+        drift, checked, unverified = compare_results(committed, data)
         if drift:
             print("DRIFT:\n  " + "\n  ".join(drift))
+        if unverified:
+            print(
+                "NOT VERIFIED (dataset not downloaded; run python example/download_examples.py):\n  "
+                + "\n  ".join(unverified)
+            )
+        print(f"{len(checked)} checked, {len(unverified)} not verified, {len(drift)} drifted")
+        if drift or (unverified and not a.allow_skips):
             return 1
-        print("OK: all available benchmarks reproduce results.json")
+        print("OK: every checked benchmark reproduces results.json")
         return 0
     env = environment()
     results_path.write_text(
