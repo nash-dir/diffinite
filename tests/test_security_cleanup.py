@@ -2,16 +2,16 @@
 
 from diffinite.languages import get_spec
 from diffinite.parser import strip_comments
-from diffinite.pipeline import _generate_markdown_report, _md_escape
+from diffinite.pipeline import _generate_markdown_report, _md_code
 
 
 class TestMarkdownEscaping:
-    def test_md_escape_neutralizes_dangerous_chars(self):
-        out = _md_escape("a`b|c<d>e")
-        assert "&lt;d&gt;" in out
-        assert "\\|" in out
-        assert "\\`" in out
-        assert "<" not in out and ">" not in out
+    def test_md_code_contains_dangerous_chars(self):
+        # The fence is longer than any backtick run in the name, so the name
+        # cannot leave the code span; inside a code span < and > are literal.
+        assert _md_code("a`b|c<d>e") == "``a`b|c<d>e``"
+        # Inside a GFM table cell the pipe is escaped so it cannot split the row.
+        assert _md_code("a`b|c<d>e", table=True) == "``a`b\\|c<d>e``"
 
     def test_markdown_report_escapes_dir_name(self, tmp_path):
         out_md = tmp_path / "r.md"
@@ -19,9 +19,9 @@ class TestMarkdownEscaping:
             [], [], [], "evil|<x>", "dirB", False, False, None, str(out_md),
         )
         text = out_md.read_text(encoding="utf-8")
-        assert "evil|<x>" not in text          # raw dangerous string gone
-        assert "&lt;x&gt;" in text             # angle brackets escaped
-        assert "evil\\|" in text               # pipe escaped (no table break)
+        # Code spans show the name literally and cannot be escaped from; in the
+        # particulars table the pipe is escaped so it cannot split the row.
+        assert "| Directory A | `evil\\|<x>` |" in text
 
 
 class TestNewlyRegisteredLanguages:

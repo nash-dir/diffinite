@@ -34,7 +34,7 @@ import tempfile
 import time
 import zipfile
 from pathlib import Path, PurePosixPath
-from typing import Optional
+from typing import Iterable, Optional
 
 from diffinite.models import FileHashEntry
 from diffinite import __version__
@@ -49,8 +49,26 @@ class SourceIntegrityError(RuntimeError):
     """Raised when source bytes no longer match the analysis snapshot."""
 
 
+def _is_drive_designator(part: str) -> bool:
+    """True when a path component starts with a Windows drive designator (``C:``).
+
+    Windows path joining (``ntpath.join``, ``pathlib``) restarts the path at such a
+    component, so ``dir/C:x`` extracts to ``C:x`` outside the destination. Other
+    colons (``foo:bar``) do not change where a file lands.
+    """
+    return len(part) >= 2 and part[1] == ":" and part[0].isascii() and part[0].isalpha()
+
+
 def _validate_archive_path(path: str, *, label: str) -> None:
-    """Reject paths that could escape or be reinterpreted during ZIP extraction."""
+    """Reject paths that could escape their root during ZIP extraction.
+
+    The same rule applies to every component: ``.``/``..``, backslashes and a
+    leading drive designator (``C:``) are rejected wherever they occur. Other
+    colons are accepted in any component; they are legal POSIX names, and a
+    Windows extractor that cannot create them fails or renames them visibly
+    (the manifest's per-path hash then does not match) rather than writing
+    outside the destination.
+    """
     logical = PurePosixPath(path)
     if (
         not path
@@ -58,7 +76,7 @@ def _validate_archive_path(path: str, *, label: str) -> None:
         or logical.is_absolute()
         or logical.as_posix() != path
         or any(part in {".", ".."} for part in logical.parts)
-        or (logical.parts and ":" in logical.parts[0])
+        or any(_is_drive_designator(part) for part in logical.parts)
     ):
         raise SourceIntegrityError(f"Unsafe {label} archive path: {path!r}")
 
@@ -105,6 +123,30 @@ def _reject_descendant_redirects(root: Path, path: Path, *, label: str) -> None:
             raise SourceIntegrityError(f"Unsafe {label} path uses a symlink or junction: {current}")
 
 
+def _resolve_below_existing_container(path: str | Path, *, label: str) -> Path:
+    """Resolve an internal output path, checking only the components it adds.
+
+    The nearest existing ancestor is the container the caller chose (for the
+    analysis snapshot, a fresh ``tempfile`` directory). Its own ancestors are
+    system layout, e.g. macOS ``/var`` -> ``/private/var``, so it is resolved
+    once instead of being rejected. Every component below it, including the
+    final one, must still not be a symlink or junction.
+    """
+    lexical = _lexical_absolute(path)
+    container = lexical.parent
+    while not os.path.lexists(container) and container != container.parent:
+        container = container.parent
+    try:
+        resolved_container = container.resolve(strict=True)
+    except OSError as exc:
+        raise SourceIntegrityError(f"Cannot resolve {label} container: {exc}") from exc
+    if not resolved_container.is_dir():
+        raise SourceIntegrityError(f"{label} container is not a directory: {container}")
+    target = resolved_container.joinpath(*lexical.relative_to(container).parts)
+    _reject_descendant_redirects(resolved_container, target, label=label)
+    return target
+
+
 def _paths_overlap(first: Path, second: Path) -> bool:
     return first == second or first.is_relative_to(second) or second.is_relative_to(first)
 
@@ -125,18 +167,73 @@ def _resolve_contained_file(root: Path, rel_path: str, *, label: str) -> Path:
     return resolved
 
 
-def _logical_report_paths(report_paths: list[str]) -> list[tuple[Path, str]]:
-    """Map report files to stable, privacy-safe manifest/archive names."""
+# Files the pipeline always writes directly inside a --no-merge split tree
+# (``<stem>_files/000_cover.pdf`` for PDF, ``<stem>_files/index.html`` for HTML).
+_SPLIT_TREE_MARKERS = frozenset({"000_cover.pdf", "index.html"})
+
+
+def _infer_split_roots(
+    report_paths: list[str],
+    base_dir: Optional[str | Path] = None,
+) -> list[Path]:
+    """Split trees evidenced by their own marker file in *report_paths*.
+
+    With *base_dir* (the manifest's directory), only a tree strictly below it
+    is accepted: a split tree is always created next to the report, so a
+    ``*_files`` folder that is the base itself or one of its ancestors (a case
+    folder such as ``Acme_files``) is never a split root.
+    """
+    base = _lexical_absolute(base_dir) if base_dir is not None else None
+    roots: list[Path] = []
+    for report_path in report_paths:
+        path = _lexical_absolute(report_path)
+        if path.name in _SPLIT_TREE_MARKERS and path.parent.name.endswith("_files"):
+            root = path.parent
+            if base is not None and (root == base or not root.is_relative_to(base)):
+                continue
+            roots.append(root)
+    return roots
+
+
+def _logical_report_paths(
+    report_paths: list[str],
+    split_roots: Optional[Iterable[str | Path]] = None,
+    *,
+    base_dir: Optional[str | Path] = None,
+) -> list[tuple[Path, str]]:
+    """Map report files to stable, privacy-safe manifest/archive names.
+
+    A report inside one of the known ``--no-merge`` split trees (*split_roots*,
+    the ``<stem>_files`` directories the pipeline created) is named
+    ``<root name>/<path below the root>``; every other report is named by its
+    file name only. An unrelated ancestor folder whose name happens to end in
+    ``_files`` (a case folder, a staging folder's parent, a source directory
+    inside a preserved tree) is never used, so it cannot leak into the manifest.
+    When *split_roots* is None, the roots are inferred from the marker file
+    each split tree always contains (``000_cover.pdf`` / ``index.html``),
+    restricted to trees strictly below *base_dir* when it is given. Explicit
+    *split_roots* (the trees this run created) are used as given. The writer
+    and every verifier must pass the same *split_roots* / *base_dir* so they
+    compute the same names.
+    """
+    roots = (
+        _infer_split_roots(report_paths, base_dir)
+        if split_roots is None
+        else [_lexical_absolute(root) for root in split_roots]
+    )
+    # Outermost root first, then by text, so the choice is deterministic.
+    roots = sorted(set(roots), key=lambda root: (len(root.parts), str(root)))
     used: set[str] = {"manifest.sha256.json"}
     mapped: list[tuple[Path, str]] = []
     for report_path in report_paths:
         path = Path(report_path)
+        lexical = _lexical_absolute(report_path)
         split_root = next(
-            (parent for parent in path.parents if parent.name.endswith("_files")),
+            (root for root in roots if lexical != root and lexical.is_relative_to(root)),
             None,
         )
         if split_root is not None:
-            logical = f"{split_root.name}/{path.relative_to(split_root).as_posix()}"
+            logical = f"{split_root.name}/{lexical.relative_to(split_root).as_posix()}"
         else:
             logical = path.name
         top_level = PurePosixPath(logical).parts[0]
@@ -258,9 +355,7 @@ def create_immutable_snapshot(
     if not root.is_dir():
         raise SourceIntegrityError(f"Snapshot source root is not a directory: {root}")
 
-    destination_lexical = _lexical_absolute(snapshot_dir)
-    _reject_redirecting_components(destination_lexical, label="snapshot output")
-    destination = destination_lexical.resolve(strict=False)
+    destination = _resolve_below_existing_container(snapshot_dir, label="snapshot output")
     if _paths_overlap(root, destination):
         raise SourceIntegrityError(f"Snapshot output overlaps its source root: {destination}")
     if destination.exists() and not destination.is_dir():
@@ -432,6 +527,9 @@ def write_manifest(
     root_label_b: Optional[str] = None,
     analysis_status: Optional[dict] = None,
     analysis_configuration: Optional[dict] = None,
+    *,
+    split_roots: Optional[Iterable[str | Path]] = None,
+    environment: Optional[dict] = None,
 ) -> str:
     """``manifest.sha256.json``을 생성한다.
 
@@ -449,6 +547,14 @@ def write_manifest(
             사람이 읽는 리포트가 쓰는 alias(``dir_alias_*``)와 일치시킨다.
         analysis_configuration: 실제 적용된 분석·수집 정책. 로컬 설정 파일의
             절대경로 대신 유효 규칙과 원본 SHA-256을 기록한다.
+        split_roots: 이번 실행이 만든 ``--no-merge`` 분할 트리(``<stem>_files``)
+            목록. 리포트 논리 경로 산정에 쓴다(``_logical_report_paths``).
+            검증 쪽도 같은 값을 넘겨야 같은 이름이 나온다. None이면 매니페스트
+            디렉토리 아래의 분할 트리만 마커 파일로 추론한다.
+        environment: 실행 환경 기록(python_version, pygments_version,
+            unicodedata_version, lang-aware 실행 시 lang_aware_tiers,
+            lang_aware_fallback_files). 주어지면 ``"environment"`` 키에 그대로
+            기록하고, None이면 키를 쓰지 않는다.
 
     Returns:
         생성된 매니페스트 파일의 절대경로.
@@ -467,7 +573,8 @@ def write_manifest(
 
     # 리포트 파일 해시
     report_entries = []
-    for p, logical_path in _logical_report_paths(report_paths):
+    split_roots = None if split_roots is None else list(split_roots)
+    for p, logical_path in _logical_report_paths(report_paths, split_roots, base_dir=out.parent):
         lexical_report = _lexical_absolute(p)
         _reject_redirecting_components(lexical_report, label="manifest report input")
         if lexical_report == out or lexical_report.resolve(strict=False) == resolved_out:
@@ -498,12 +605,11 @@ def write_manifest(
         "version": __version__,
         "created_at": datetime.datetime.now(tz=datetime.timezone.utc).isoformat(),
         "integrity_note": (
-            "Integrity is checked by comparing the per-file sha256 values below "
-            "with an independently kept copy; this manifest is not signed. "
-            "created_at is informational only: re-running on identical inputs "
-            "yields identical per-file hashes but a different created_at, so a "
-            "difference in the manifest-as-a-whole hash alone does not show that "
-            "any input or report changed."
+            "SHA-256 digests identify the exact files analyzed. A digest shows "
+            "that a file is unchanged only when it is compared with an "
+            "independently retained copy. The manifest is not a digital signature. "
+            "created_at records the run time, so a re-run on identical inputs gives "
+            "identical per-file digests but a different manifest digest."
         ),
         "source_a": {
             "root": root_label_a if root_label_a is not None else Path(dir_a).name,
@@ -535,6 +641,8 @@ def write_manifest(
         "analysis_status": analysis_status or {"state": "unknown"},
         "analysis_configuration": analysis_configuration or {"state": "unknown"},
     }
+    if environment is not None:
+        manifest["environment"] = environment
 
     out.parent.mkdir(parents=True, exist_ok=True)
     manifest_text = json.dumps(manifest, ensure_ascii=False, indent=2)
@@ -551,7 +659,7 @@ def write_manifest(
     except Exception:
         staged.unlink(missing_ok=True)
         raise
-    logger.info("Manifest → %s", out.resolve())
+    logger.info("  Manifest: %s", out.resolve())
     return str(out.resolve())
 
 
@@ -703,6 +811,9 @@ def create_evidence_bundle(
     manifest_path: str,
     report_paths: list[str],
     output_zip: str,
+    *,
+    split_roots: Optional[Iterable[str | Path]] = None,
+    include_sources: bool = True,
 ) -> str:
     """증거 번들 zip을 생성한다.
 
@@ -728,6 +839,10 @@ def create_evidence_bundle(
     Args:
         files_a / files_b: 매니페스트가 해시한 것과 동일한 상대경로 목록.
         output_zip: 생성할 zip 파일 경로.
+        split_roots: ``write_manifest``에 넘긴 것과 같은 분할 트리 목록.
+        include_sources: False이면 ``source_a/``·``source_b/`` 를 넣지 않는다
+            (``--bundle-sources none``). 매니페스트는 그대로 두 쪽 파일의
+            SHA-256을 담으므로, 따로 보관한 소스로 결과를 대조할 수 있다.
 
     Returns:
         생성된 zip 파일의 SHA-256 hex digest.
@@ -838,7 +953,11 @@ def create_evidence_bundle(
         if logical_path in expected_reports:
             raise SourceIntegrityError(f"Duplicate report manifest path: {logical_path}")
         expected_reports[logical_path] = digest
-    mapped_reports = _logical_report_paths(report_paths)
+    mapped_reports = _logical_report_paths(
+        report_paths,
+        None if split_roots is None else list(split_roots),
+        base_dir=_lexical_absolute(manifest_path).parent,
+    )
     if {logical for _path, logical in mapped_reports} != set(expected_reports):
         raise SourceIntegrityError("Report file list does not match the manifest")
 
@@ -907,7 +1026,7 @@ def create_evidence_bundle(
     staged_hash: Path | None = None
     try:
         with zipfile.ZipFile(str(staged), "w", zipfile.ZIP_DEFLATED) as archive:
-            for rel_path in files_a:
+            for rel_path in files_a if include_sources else ():
                 _write_verified(
                     archive,
                     _resolved_source(root_a, rel_path),
@@ -915,7 +1034,7 @@ def create_evidence_bundle(
                     expected_a[rel_path],
                     mtimes_a.get(rel_path),
                 )
-            for rel_path in files_b:
+            for rel_path in files_b if include_sources else ():
                 _write_verified(
                     archive,
                     _resolved_source(root_b, rel_path),
@@ -942,8 +1061,8 @@ def create_evidence_bundle(
             staged_hash.unlink(missing_ok=True)
         raise
 
-    logger.info("Evidence bundle → %s (%d bytes)", out.resolve(), out.stat().st_size)
+    logger.info("Evidence bundle: %s (%d bytes)", out.resolve(), out.stat().st_size)
     logger.info("Bundle SHA-256: %s", zip_hash)
-    logger.info("Hash file → %s", hash_file.resolve())
+    logger.info("Hash file: %s", hash_file.resolve())
 
     return zip_hash

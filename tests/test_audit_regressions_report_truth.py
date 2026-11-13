@@ -49,16 +49,16 @@ def test_json_and_markdown_split_line_and_deep_comment_modes(tmp_path):
     out_md = tmp_path / "r.md"
     _generate_markdown_report([], [], [], "A", "B", False, False, [], str(out_md), metadata=meta)
     md = out_md.read_text(encoding="utf-8")
-    assert "**Comments (line diff):** included" in md
-    assert "**Comments (Deep Compare):** stripped (lang-aware" in md
+    assert "| Comments (line diff) | included |" in md
+    assert "| Comments (Deep Compare) | stripped (lang-aware" in md
 
 
 def test_pdf_cover_splits_comment_modes_under_lang_aware():
     from diffinite.pdf_gen import build_cover_body
 
     html = build_cover_body([], [], [], "A", "B", False, False, metadata=_deep_meta())
-    assert "Comments (line diff):</strong> included" in html
-    assert "Comments (Deep Compare):</strong> stripped (lang-aware" in html
+    assert 'Comments (line diff)</td><td style="width: 78%;">included</td>' in html
+    assert 'Comments (Deep Compare)</td><td style="width: 78%;">stripped (lang-aware' in html
 
 
 def test_lang_aware_help_discloses_comment_drop(capsys):
@@ -68,7 +68,7 @@ def test_lang_aware_help_discloses_comment_drop(capsys):
         main(["--help"])
     out = " ".join(capsys.readouterr().out.split())
     assert "always discarded (regardless of --strip-comments)" in out
-    assert "restarts per file; cover pages unnumbered" in out
+    assert "counted separately for the cover section and for each file pair" in out
 
 
 # ── #2 Tier-2 text chunks go through Tier-1 ───────────────────────────────
@@ -125,10 +125,11 @@ def test_by_word_reports_label_word_match(tmp_path):
     out_md = tmp_path / "r.md"
     _generate_markdown_report([], [], [], "A", "B", True, False, None, str(out_md))
     md = out_md.read_text(encoding="utf-8")
-    assert "Word match (difflib)" in md and "Line match (difflib)" not in md
+    # One name per metric: "Word match" under --by-word, never "(difflib)".
+    assert "| Word match |" in md and "Line match" not in md and "(difflib)" not in md
 
     html = build_cover_body([], [], [], "A", "B", True, False)
-    assert "Word match (difflib)" in html and "Line match (difflib)" not in html
+    assert "Word match" in html and "Line match" not in html
 
 
 # ── #23 full digest in the hash table ─────────────────────────────────────
@@ -221,7 +222,7 @@ def test_disclosure_states_size_scope_per_pair_and_unchecked():
         lang_aware=False,
     )
     s = normalize_disclosure(NORMALIZE_DEFAULT_THRESHOLD, "user", assessment=assessment)
-    assert f"smaller file has ≤{CALIBRATION_MAX_TOKENS}" in s
+    assert f"smaller file had {CALIBRATION_MAX_TOKENS} tokens or fewer" in s
     assert f"largest file {CALIBRATION_MAX_FILE_TOKENS}" in s
     assert "not checked" in s
     assert "files ≤" not in s

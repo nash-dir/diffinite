@@ -53,7 +53,11 @@ register(LangSpec(
 register(LangSpec(
     name="YAML",
     extensions=(".yaml", ".yml"),
-    comment=CommentSpec(line_markers=("#",), block_start=None, block_end=None),
+    comment=CommentSpec(
+        line_markers=("#",), block_start=None, block_end=None,
+        # YAML 1.2 spec 6.6: a comment # must be separated from other tokens by white space.
+        line_marker_boundary="",
+    ),
 ))
 
 # ── TOML ──────────────────────────────────────────────────────────

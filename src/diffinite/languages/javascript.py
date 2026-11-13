@@ -39,7 +39,6 @@ register(LangSpec(
     name="JavaScript",
     extensions=(".js", ".jsx", ".mjs"),
     comment=_COMMENT,
-    has_ifdef_zero=True,
     keywords=_JS_KEYWORDS,
 ))
 
@@ -47,7 +46,6 @@ register(LangSpec(
     name="TypeScript",
     extensions=(".ts",),
     comment=_COMMENT,
-    has_ifdef_zero=True,
     keywords=_JS_KEYWORDS | _TS_EXTRA,
 ))
 
@@ -55,6 +53,5 @@ register(LangSpec(
     name="TSX",
     extensions=(".tsx",),
     comment=_COMMENT,
-    has_ifdef_zero=True,
     keywords=_JS_KEYWORDS | _TS_EXTRA,
 ))

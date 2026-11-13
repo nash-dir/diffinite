@@ -1,10 +1,13 @@
 ﻿"""C# language definition."""
 
-from diffinite.languages._spec import LangSpec
+from diffinite.languages._spec import LangSpec, LanguageCommentSpec
 from diffinite.languages._registry import register
-from diffinite.models import CommentSpec
 
-_COMMENT = CommentSpec(line_markers=("//",), block_start="/*", block_end="*/")
+_COMMENT = LanguageCommentSpec(
+    line_markers=("//",), block_start="/*", block_end="*/",
+    triple_quote_delims=('"',),  # C# 11 raw string literals
+    verbatim_string_prefixes=('@"', '@$"'),  # verbatim strings; $@" is '$' then '@"'
+)
 
 _KEYWORDS = frozenset({
     # Control flow

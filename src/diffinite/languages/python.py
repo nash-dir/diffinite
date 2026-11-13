@@ -4,7 +4,10 @@ from diffinite.languages._spec import LangSpec
 from diffinite.languages._registry import register
 from diffinite.models import CommentSpec
 
-_COMMENT = CommentSpec(line_markers=("#",), block_start=None, block_end=None)
+_COMMENT = CommentSpec(
+    line_markers=("#",), block_start=None, block_end=None,
+    triple_quote_delims=('"', "'"),  # """...""" and '''...''' strings
+)
 
 _KEYWORDS = frozenset({
     # Control flow

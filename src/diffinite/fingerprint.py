@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
+import unicodedata
 from typing import Sequence
 
 from diffinite.models import FingerprintEntry
@@ -80,7 +82,35 @@ def _fnv1a_64(s: str) -> int:
 # 쪼개지 않고 하나의 토큰으로 묶는다(비ASCII 소스의 핑거프린트 개수·밀도가
 # ASCII와 비교 가능해진다). 숫자(소수 포함)를 먼저 매칭해 식별자 규칙이 숫자를
 # 삼키지 않게 한다. 결과적으로 순수 ASCII 코드의 토큰화는 종전과 동일하다.
-TOKEN_RE = re.compile(r"[0-9]+(?:\.[0-9]+)?|\w+|[^\s]")
+# Python 의 ``\w`` 는 결합 문자(유니코드 범주 Mn/Mc/Me — 데바나가리 비라마·모음 기호,
+# NFD 악센트 등)를 매칭하지 않으므로, 식별자 대안에 결합 문자 클래스를 더해
+# ``नमस्ते`` 같은 식별자가 한 토큰으로 남게 한다. 클래스는 실행 중인 Python 의
+# ``unicodedata`` 데이터에서 만들어진다(``\w`` 자체와 같은 출처).
+def _combining_mark_class() -> str:
+    ranges: list[tuple[int, int]] = []
+    for cp in range(sys.maxunicode + 1):
+        if unicodedata.category(chr(cp))[0] != "M":
+            continue
+        if ranges and ranges[-1][1] == cp - 1:
+            ranges[-1] = (ranges[-1][0], cp)
+        else:
+            ranges.append((cp, cp))
+    return "".join(
+        re.escape(chr(a)) if a == b else f"{re.escape(chr(a))}-{re.escape(chr(b))}"
+        for a, b in ranges
+    )
+
+
+TOKEN_RE = re.compile(
+    r"[0-9]+(?:\.[0-9]+)?|(?:\w|[" + _combining_mark_class() + r"])+|[^\s]"
+)
+
+
+def _nfc(source: str) -> str:
+    """NFC 정규화 — NFC/NFD 표기 차이(예: macOS 저장본)가 토큰을 바꾸지 않게 한다."""
+    if unicodedata.is_normalized("NFC", source):
+        return source
+    return unicodedata.normalize("NFC", source)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -123,8 +153,14 @@ _COMMON_KEYWORDS = frozenset({
 # ──────────────────────────────────────────────────────────────────────
 # 토크나이징
 # ──────────────────────────────────────────────────────────────────────
+def _is_identifier_start(ch: str) -> bool:
+    # Letters, '_' and letter-numbers (category Nl, e.g. 'Ⅻ'): Unicode UAX #31
+    # lists Nl among identifier-start characters.
+    return ch.isalpha() or ch == "_" or unicodedata.category(ch) == "Nl"
+
+
 def _normalize_with_keywords(
-    raw_tokens: list[str], keywords: frozenset[str]
+    raw_tokens: list[str], keywords: frozenset[str], *, fold_case: bool = False
 ) -> list[str]:
     """정규식 토큰열을 주어진 키워드 세트로 Type-2 정규화한다.
 
@@ -133,12 +169,15 @@ def _normalize_with_keywords(
     ``LIT`` 다음에 ``ID`` 가 붙는 두 토큰이 된다 — 리터럴 전체 정규화는 ``--lang-aware``.
     ``keywords`` 만 바꿔 끼우면 기본(언어 무관) 정규화와 언어 인식 Tier-1 정규화를
     같은 코드로 처리할 수 있다.
+    ``fold_case=True`` 이면(대소문자 무시 언어) 키워드를 소문자로 비교·출력한다.
     """
     result: list[str] = []
     for tok in raw_tokens:
-        if tok in keywords:
+        if fold_case and tok.lower() in keywords:
+            result.append(tok.lower())   # 대소문자 무시 언어의 키워드 — 소문자로 통일
+        elif tok in keywords:
             result.append(tok)           # 키워드 — 유지
-        elif tok[0].isalpha() or tok[0] == '_':
+        elif _is_identifier_start(tok[0]):
             result.append("ID")          # 식별자 → ID
         elif tok[0].isdigit():
             result.append("LIT")         # 숫자 → LIT
@@ -147,6 +186,44 @@ def _normalize_with_keywords(
         else:
             result.append(tok)           # 연산자/구두점 — 유지
     return result
+
+
+# Registry language → Pygments lexer alias, used where a bare-filename lookup
+# picks another language. Measured with Pygments 2.20.0: ".r" → REBOL,
+# ".pl" → Prolog, ".pm" → Promela, while the registry says R and Perl
+# (audit 2026-11-10 #2). Choosing by language keeps the lexer tied to the
+# registry entry the rest of the tool uses for that extension.
+_PYGMENTS_ALIAS_BY_LANG: dict[str, str] = {
+    "R": "r",
+    "Perl": "perl",
+}
+
+# Registry languages whose keywords are case-insensitive, so ``SELECT`` and
+# ``select`` are the same keyword. Sources: ISO/IEC 9075 (SQL key words),
+# PHP manual "List of Keywords" (keywords are case-insensitive), WHATWG HTML
+# (tag and attribute names are ASCII case-insensitive), CSS Syntax Level 3
+# (keywords and property names are ASCII case-insensitive; SCSS/LESS inherit).
+_CASE_INSENSITIVE_LANGS: frozenset[str] = frozenset({
+    "SQL", "PHP", "HTML", "CSS", "SCSS", "LESS",
+})
+
+TIER2_PREFIX = "pygments:"
+"""``tokenize_lang_aware`` 의 tier 값이 Tier-2 일 때의 접두사 (뒤에 lexer alias)."""
+TIER1_PREFIX = "registry:"
+"""``tokenize_lang_aware`` 의 tier 값이 Tier-1 폴백일 때의 접두사 (뒤에 폴백 사유)."""
+
+
+def pygments_version() -> str | None:
+    """설치된 Pygments 버전 (미설치면 ``None``).
+
+    ``--lang-aware`` 지문은 Pygments lexer 가 내는 토큰 타입에 좌우되므로,
+    보고서·증거 매니페스트가 이 값을 기록해야 재실행 차이를 설명할 수 있다.
+    """
+    try:
+        import pygments
+    except ImportError:
+        return None
+    return getattr(pygments, "__version__", None)
 
 
 def _lang_keywords(ext: str | None) -> frozenset[str]:
@@ -159,67 +236,143 @@ def _lang_keywords(ext: str | None) -> frozenset[str]:
     return spec.keywords if spec is not None else _all_keywords()
 
 
-def _normalize_lang_aware(source: str, ext: str | None) -> list[str] | None:
+def _registry_case_insensitive(ext: str | None) -> bool:
+    spec = _get_spec(ext) if ext else None
+    return spec is not None and spec.name in _CASE_INSENSITIVE_LANGS
+
+
+def _tier1(raw_tokens: list[str], ext: str | None) -> list[str]:
+    """Tier-1 (레지스트리 키워드) 정규화."""
+    return _normalize_with_keywords(
+        raw_tokens, _lang_keywords(ext), fold_case=_registry_case_insensitive(ext))
+
+
+class _LexerErrorToken(ValueError):
+    """Pygments 가 ``Token.Error`` 를 냈다 — 이 파일은 렉싱에 실패한 것으로 본다."""
+
+
+def _pick_lexer(ext: str):
+    """확장자에 대한 Pygments lexer — 등록 언어에 별칭이 있으면 그 언어로 고른다.
+
+    Returns:
+        ``(lexer, None)`` 또는 ``(None, fallback_reason)``.
+    """
+    try:
+        import pygments.lexers as _lexers
+    except ImportError:
+        return None, "pygments-not-installed"
+    spec = _get_spec(ext)
+    alias = _PYGMENTS_ALIAS_BY_LANG.get(spec.name) if spec is not None else None
+    try:
+        if alias is not None:
+            return _lexers.get_lexer_by_name(alias), None
+        return _lexers.get_lexer_for_filename("a" + ext), None
+    except Exception:  # noqa: BLE001 — no lexer for this ext: expected, silent
+        return None, "no-lexer"
+
+
+def _normalize_lang_aware(source: str, ext: str | None) -> tuple[list[str] | None, str]:
     """언어 인식 Tier-2 정규화: Pygments lexer 토큰 타입으로 분류한다.
 
     ``Keyword*``(``i32``·``pub``·``fn``·``func``·``fun`` 등 타입/선언 키워드 포함)는
-    원문 보존, ``Name*``→``ID``, ``Number``→``LIT``, ``String`` 하위 토큰(따옴표·본문·
-    이스케이프·보간 조각)은 **각각** ``STR`` (docstring 포함), 주석은
-    ``--strip-comments`` 설정과 무관하게 **항상 폐기**.
+    원문 보존(대소문자 무시 언어는 소문자로 통일), ``Name*``→``ID``, ``Number``→``LIT``,
+    연속된 ``String`` 하위 토큰(따옴표·본문·이스케이프)은 **하나의** ``STR``
+    (docstring 포함; 보간식 안의 이름 등 다른 토큰이 끼면 거기서 끊긴다),
+    주석은 ``--strip-comments`` 설정과 무관하게 **항상 폐기**.
     ``Text``/``Other``/``Generic`` 덩어리(예: ``.txt``·``.html`` 본문)는 통째로 한 토큰이
     되지 않도록 Tier-1 토크나이저·정규화(언어 키워드 세트)를 거친다.
-    이로써 함수 선언이 식별자와 구분되어, 비-JVM/Python/JS 언어의 위양성을 줄인다.
 
-    ``ext`` 가 없거나, Pygments lexer를 찾지 못하거나, 렉싱 중 어떤 예외라도 나면
-    ``None`` 을 반환하여 호출쪽이 Tier-1(레지스트리 키워드)로 폴백하게 한다 —
-    포렌식 실행이 파일 하나의 렉서 오류로 중단되지 않도록.
+    lexer 는 레지스트리 언어로 고른다(``_PYGMENTS_ALIAS_BY_LANG``) — 파일 이름만으로
+    고르면 ``.r``/``.pl``/``.pm`` 이 다른 언어의 lexer 로 간다.
+
+    Returns:
+        ``(tokens, tier)``. Tier-2 성공이면 ``tier`` 는 ``"pygments:<alias>"``.
+        ``ext`` 가 없거나, Pygments/lexer 가 없거나, lexer 가 ``Token.Error`` 를 내거나
+        렉싱 중 예외가 나면 ``(None, "registry:<사유>")`` — 호출쪽이 Tier-1 로 폴백한다.
+        lexer 가 존재하는데 실패한 경우는 경고 로그도 남긴다(같은 확장자의 다른
+        파일과 토큰 알파벳이 달라지므로).
     """
     if not ext:
-        return None
+        return None, TIER1_PREFIX + "no-extension"
+    lexer, reason = _pick_lexer(ext)
+    if lexer is None:
+        return None, TIER1_PREFIX + str(reason)
     try:
-        from pygments.lexers import get_lexer_for_filename
         from pygments.token import Token
     except ImportError:
-        return None
-    try:
-        lexer = get_lexer_for_filename("a" + ext)
-    except Exception:  # noqa: BLE001 — no lexer for this ext: expected, silent
-        return None                          # → Tier-1 (registry keywords)
+        return None, TIER1_PREFIX + "pygments-not-installed"
+
+    spec = _get_spec(ext)
+    if spec is not None:
+        fold_case = spec.name in _CASE_INSENSITIVE_LANGS
+    else:
+        # Unregistered extension: the lexer's own regex flags say whether its
+        # author treated the language's keywords as case-insensitive.
+        fold_case = bool(getattr(lexer, "flags", 0) & re.IGNORECASE)
+    aliases = getattr(lexer, "aliases", None) or [type(lexer).__name__]
+    tier = TIER2_PREFIX + aliases[0]
 
     out: list[str] = []
     tier1_keywords = _lang_keywords(ext)
+    in_str = False
     try:
         for tok_type, val in lexer.get_tokens(source):
             s = val.strip()
             if not s:
-                continue                     # 공백/개행
+                continue                     # 공백/개행 (문자열 연속 상태 유지)
             if tok_type in Token.Comment:
                 continue                     # 주석 폐기 (입력이 미정제여도 안전)
+            if tok_type in Token.Error:
+                # Error tokens mean the lexer could not lex this text (e.g. the
+                # Kotlin/C#/Ruby lexers on Hangul identifiers); keeping them raw
+                # would silently skip normalization for the rest of the line.
+                raise _LexerErrorToken(s)
+            if tok_type in Token.Literal.String:
+                if not in_str:
+                    out.append("STR")        # 연속 문자열 하위 토큰 → STR 하나
+                in_str = True
+                continue
+            in_str = False
             if tok_type in Token.Keyword:
-                out.append(s)                # 키워드(타입·선언 포함) — 유지
+                out.append(s.lower() if fold_case else s)  # 키워드 — 유지
             elif tok_type in Token.Name:
                 out.append("ID")             # 식별자/함수명 → ID
             elif tok_type in Token.Literal.Number:
                 out.append("LIT")            # 숫자 리터럴 → LIT
-            elif tok_type in Token.Literal.String:
-                out.append("STR")            # 문자열 리터럴 → STR
             elif (tok_type in Token.Text or tok_type in Token.Other
                   or tok_type in Token.Generic):
                 # 분류되지 않은 텍스트 덩어리 — 한 토큰으로 붙이면 파일이 K 미만
                 # 토큰으로 뭉개져 지문이 0개가 된다. Tier-1 로 쪼개 정규화한다.
                 out.extend(_normalize_with_keywords(
-                    TOKEN_RE.findall(s), tier1_keywords))
+                    TOKEN_RE.findall(s), tier1_keywords, fold_case=fold_case))
             else:
                 out.append(s)                # 연산자/구두점/기타 — 유지
-    except Exception:  # noqa: BLE001 — lexer EXISTS but failed mid-stream
+    except Exception as exc:  # noqa: BLE001 — lexer EXISTS but failed mid-stream
         # This file falls back to Tier-1 while its same-extension siblings may use
         # Tier-2 — a different token alphabet, risking a silent false negative. A
-        # forensic run must not abort, but the inconsistency must be observable.
+        # forensic run must not abort, but the inconsistency must be observable:
+        # it is logged here and returned as the tier for the caller to record.
+        reason = "lexer-error-token" if isinstance(exc, _LexerErrorToken) else "lexer-exception"
         logger.warning(
-            "lang-aware lexing failed for extension %r; this file uses the Tier-1 "
-            "fallback (different token alphabet than lexed files)", ext)
-        return None
-    return out
+            "--lang-aware lexing failed for extension %r (%s); this file uses the "
+            "registry keyword fallback, whose tokens differ from lexed files", ext, reason)
+        return None, TIER1_PREFIX + reason
+    return out, tier
+
+
+def tokenize_lang_aware(source: str, ext: str | None) -> tuple[list[str], str]:
+    """``--lang-aware`` 정규화 토큰과, 실제로 쓰인 tier 를 함께 돌려준다.
+
+    Returns:
+        ``(tokens, tier)`` — ``tier`` 는 ``"pygments:<lexer alias>"`` (Tier-2) 또는
+        ``"registry:<폴백 사유>"`` (Tier-1). 호출쪽(Deep Compare)이 파일별로 어떤
+        tier 가 쓰였는지 보고서에 기록할 수 있게 한다.
+    """
+    source = _nfc(source)
+    tier2, tier = _normalize_lang_aware(source, ext)
+    if tier2 is not None:
+        return tier2, tier
+    return _tier1(TOKEN_RE.findall(source), ext), tier
 
 
 def tokenize(
@@ -230,6 +383,8 @@ def tokenize(
     lang_aware: bool = False,
 ) -> list[str]:
     """소스코드를 토큰 시퀀스로 분할한다.
+
+    입력은 먼저 NFC 로 정규화된다(NFC/NFD 표기만 다른 같은 식별자가 같은 토큰).
 
     ``normalize=False`` (기본):
         원문 토큰 그대로 반환. raw_winnowing 채널에 사용. ``lang_aware`` 는 무시된다
@@ -246,11 +401,13 @@ def tokenize(
 
     ``lang_aware=True`` (``normalize`` 와 함께일 때만 의미 있음):
         하드코딩된 ``_COMMON_KEYWORDS`` 대신 **언어별** 키워드 인식을 쓴다.
-        Tier-2(Pygments lexer)를 우선 시도하고, 해당 ``ext`` 의 lexer가 없으면
-        Tier-1(레지스트리 ``LangSpec.keywords``)로 폴백한다. **opt-in 전용**이며
-        기본 경로의 핑거프린트(기존 보고서 재현성)는 바뀌지 않는다.
+        Tier-2(Pygments lexer)를 우선 시도하고, 해당 ``ext`` 의 lexer가 없거나 lexer 가
+        ``Token.Error`` 를 내면 Tier-1(레지스트리 ``LangSpec.keywords``)로 폴백한다.
+        **opt-in 전용**이며 기본 경로의 핑거프린트는 바뀌지 않는다.
         Tier-2 는 ``--strip-comments`` 와 무관하게 lexer 주석 토큰을 **항상 버리고**,
-        문자열 리터럴(docstring 포함)을 ``STR`` 로 접는다.
+        연속된 문자열 리터럴(docstring 포함)을 ``STR`` 하나로 접는다. 대소문자 무시
+        언어(SQL·PHP·HTML·CSS 계열)는 두 tier 모두 키워드를 소문자로 통일한다.
+        사용된 tier 가 필요하면 :func:`tokenize_lang_aware` 를 쓴다.
 
     주의:
         문자열 **내용**은 정규화하지 않는다 — 따옴표만 ``STR``로 바뀌고 그 사이
@@ -261,16 +418,12 @@ def tokenize(
         코드처럼 지문에 포함되므로, 제외하려면 ``parser.strip_comments()``를 먼저
         호출할 것. 단 ``lang_aware=True`` 의 Tier-2 경로는 주석을 항상 버린다.
     """
-    raw_tokens = TOKEN_RE.findall(source)
+    if normalize and lang_aware:
+        return tokenize_lang_aware(source, ext)[0]
+
+    raw_tokens = TOKEN_RE.findall(_nfc(source))
     if not normalize:
         return raw_tokens
-
-    if lang_aware:
-        tier2 = _normalize_lang_aware(source, ext)
-        if tier2 is not None:
-            return tier2
-        return _normalize_with_keywords(raw_tokens, _lang_keywords(ext))
-
     return _normalize_with_keywords(raw_tokens, _COMMON_KEYWORDS)
 
 
@@ -388,11 +541,32 @@ def extract_fingerprints(
             모든 파일을 동일 핑거프린트로 만들어 유사도를 조작하므로 조용히
             통과시키지 않는다.)
     """
+    return extract_fingerprints_with_tier(
+        source, k, w, normalize=normalize, ext=ext, lang_aware=lang_aware)[0]
+
+
+def extract_fingerprints_with_tier(
+    source: str,
+    k: int = DEFAULT_K,
+    w: int = DEFAULT_W,
+    *,
+    normalize: bool = False,
+    ext: str | None = None,
+    lang_aware: bool = False,
+) -> tuple[list[FingerprintEntry], str | None]:
+    """:func:`extract_fingerprints` 와 같되, ``--lang-aware`` 에서 실제로 쓰인 tier
+    (``"pygments:<alias>"`` 또는 ``"registry:<사유>"``)도 돌려준다.
+    ``normalize and lang_aware`` 가 아니면 tier 는 ``None``.
+    """
     if k < 1:
         raise ValueError(f"k-gram size must be >= 1, got {k}")
     if w < 1:
         raise ValueError(f"winnowing window must be >= 1, got {w}")
 
-    tokens = tokenize(source, normalize=normalize, ext=ext, lang_aware=lang_aware)
+    tier: str | None = None
+    if normalize and lang_aware:
+        tokens, tier = tokenize_lang_aware(source, ext)
+    else:
+        tokens = tokenize(source, normalize=normalize)
     hashes = rolling_hash(tokens, k)
-    return winnow(hashes, w)
+    return winnow(hashes, w), tier

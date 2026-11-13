@@ -65,7 +65,8 @@ class TestBuildCoverHtml:
         """The headline column must name difflib so the line-level ratio is not
         misread as semantic similarity (forensic clarity)."""
         html = _cover()
-        assert "Line match (difflib)" in html
+        assert "Line match</th>" in html
+        assert "(difflib)" not in html
         assert "Content Match" not in html
 
     def test_metadata_banner_surfaces_autojunk(self):
@@ -78,8 +79,7 @@ class TestBuildCoverHtml:
             dir_a="a", dir_b="b", by_word=False, strip_comments=False,
             metadata=meta,
         )
-        assert "autojunk=" in html
-        assert "off" in html  # autojunk=False rendered
+        assert 'Line diff autojunk</td><td style="width: 78%;">off</td>' in html
 
     def _cover_with_meta(self, *, normalize, exec_mode, strip_comments=True):
         from diffinite.models import AnalysisMetadata
@@ -117,7 +117,7 @@ class TestBuildCoverHtml:
     def test_contains_additions_deletions(self):
         html = _cover()
         assert "+10" in html
-        assert "-5" in html
+        assert "\u22125" in html  # U+2212 MINUS SIGN, not a hyphen
 
     def test_empty_results(self):
         html = _cover(results=[])

@@ -32,7 +32,7 @@ import logging
 import re
 from typing import Optional
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 
 from diffinite.models import CommentSpec
 
@@ -109,7 +109,7 @@ _IF_OPEN_PATTERN = re.compile(r"#\s*if(?:n?def)?\b")
 _ELSE_PATTERN = re.compile(r"#\s*(?:else|elif)\b")
 
 
-def _strip_ifdef_zero(text: str) -> str:
+def _strip_ifdef_zero(text: str, code_starts: Optional[list[bool]] = None) -> str:
     """``#if 0 … #endif`` 블록을 제거한다. 라인 수는 보존 (빈 줄로 대체).
 
     중첩 ``#if``/``#ifdef``/``#ifndef``/``#endif``를 depth 카운터로 추적하여
@@ -121,6 +121,11 @@ def _strip_ifdef_zero(text: str) -> str:
         ``/* ... */``와 달리 중첩이 가능하다.
         이 함수가 없으면 ``#if 0`` 내부의 코드가 유사도 계산에 포함되어
         위양성이 증가한다.
+
+    Args:
+        code_starts: ``_strip_2pass_states``가 돌려준 줄별 플래그. False인 줄은
+            문자열(C# 축자 ``@"`` 문자열, 원시 문자열, 백슬래시로 이어진 문자열 등) 안에서 시작하므로
+            어떤 지시문(``#if``/``#else``/``#endif``)으로도 보지 않는다.
     """
     result: list[str] = []
     lines = text.split("\n")
@@ -130,6 +135,11 @@ def _strip_ifdef_zero(text: str) -> str:
     while i < len(lines):
         line = lines[i]
         stripped = line.lstrip()
+        if code_starts is not None and i < len(code_starts) and not code_starts[i]:
+            # 문자열 안에서 시작한 줄 — 지시문이 아니라 문자열 내용이다.
+            result.append(line if depth == 0 else "")
+            i += 1
+            continue
 
         if depth == 0:
             if _IF0_PATTERN.match(line):
@@ -214,6 +224,32 @@ _OBJECT_LITERAL_PREV_CHARS = frozenset("(,[=:+-*/%&|^!~?")
 _OBJECT_LITERAL_PREV_KEYWORDS = frozenset({"return", "yield", "case", "throw"})
 
 
+# Rust 문자 리터럴 'x', '\n', '\x7f', '\u{1F600}' (Rust Reference, "Character literals":
+# \x takes exactly 2 hex digits; \u{} takes up to 6 hex digits, '_' allowed, hence {1,8}).
+_RUST_CHAR_LITERAL = re.compile(r"'(?:\\u\{[0-9A-Fa-f_]{1,8}\}|\\x[0-9A-Fa-f]{2}|\\.|[^'\\\n])'")
+
+# C++11 raw string opener (C++ standard [lex.string]): optional encoding prefix,
+# R", a d-char-sequence of at most 16 chars (no space, parens, backslash,
+# tab/vtab/formfeed/newline), then '('.
+_CPP_RAW_STRING_OPEN = re.compile(r'(?:u8|u|U|L)?R"([^\s()\\]{0,16})\(')
+
+
+def _marker_allowed(
+    line: str,
+    pos: int,
+    boundary: Optional[str],
+    not_after: str,
+    exceptions: tuple[str, ...],
+) -> bool:
+    """``line[pos]``에서 시작하는 라인 주석 마커가 그 언어에서 실제 주석인지."""
+    prev = line[pos - 1] if pos > 0 else ""
+    if prev and prev in not_after:
+        return False
+    if boundary is not None and prev and not prev.isspace() and prev not in boundary:
+        return False
+    return not any(line.startswith(e, pos) for e in exceptions)
+
+
 def _is_word_char(ch: str) -> bool:
     """식별자/숫자 토큰을 이루는 문자인지 (``\\w`` 또는 ``$``)."""
     return ch.isalnum() or ch in "_$"
@@ -261,6 +297,39 @@ def _has_any_marker(line: str, spec: CommentSpec) -> bool:
     return False
 
 
+def has_comment_rules(extension: str) -> bool:
+    """이 확장자에 ``strip_comments``가 적용할 주석 규칙이 있는지.
+
+    False이면 ``strip_comments``는 원문을 그대로 돌려준다 — 보고서는 이런
+    파일의 주석이 남았음을 밝혀야 한다(``models.stripped_comment_mode``).
+    """
+    spec = COMMENT_SPECS.get(extension)
+    return spec is not None and bool(spec.line_markers or spec.block_start)
+
+
+def extensions_without_comment_rules(extensions: Iterable[str]) -> list[str]:
+    """주석 규칙이 없는 확장자들을 정렬·중복 제거해 반환한다 (보고서 공개용)."""
+    return sorted({ext for ext in extensions if not has_comment_rules(ext)})
+
+
+def comment_extensions_for_pair(ext_a: str, ext_b: str) -> tuple[str, str]:
+    """매칭된 파일 쌍의 각 쪽에 적용할 주석 규칙의 확장자를 고른다.
+
+    각 파일은 자기 언어의 규칙으로 제거한다(.py vs .js 쌍을 상대 문법으로
+    파싱하지 않도록). 한쪽 확장자에만 규칙이 없으면(``Foo.java`` vs
+    ``Foo.java.orig``) 그쪽은 상대의 확장자를 빌려 쓴다 — 라인 채널과 Deep
+    Compare 채널이 같은 쌍에 같은 규칙을 쓰도록 두 채널 모두 이 함수를 쓴다.
+    양쪽 모두 규칙이 없으면 그대로 반환한다(``strip_comments``가 원문 유지).
+    """
+    rules_a = has_comment_rules(ext_a)
+    rules_b = has_comment_rules(ext_b)
+    if not rules_a and rules_b:
+        return ext_b, ext_b
+    if not rules_b and rules_a:
+        return ext_a, ext_a
+    return ext_a, ext_b
+
+
 def strip_comments(
     text: str,
     extension: str,
@@ -269,8 +338,8 @@ def strip_comments(
 ) -> str:
     """소스코드에서 주석을 제거한다.
 
-    C-family 확장자에서는 ``#if 0 … #endif`` 블록을 사전 제거한 후
-    2-pass 주석 제거를 수행한다.
+    2-pass 주석 제거 후, C/C++/C# 확장자에서는 ``#if 0 … #endif`` 블록을
+    추가로 제거한다(주석 안의 ``#if 0``은 지시문이 아니므로 주석 제거가 먼저).
 
     Args:
         squash_blanks: True이면 3줄 이상의 연속 빈 줄을 1줄로 축소.
@@ -279,18 +348,17 @@ def strip_comments(
     Returns:
         주석이 제거된 텍스트. 확장자에 대한 주석 사양이 없으면 원문 그대로 반환.
     """
-    spec = COMMENT_SPECS.get(extension)
-    if spec is None:
+    if not has_comment_rules(extension):
         return text
+    spec = COMMENT_SPECS[extension]
 
-    if not spec.line_markers and not spec.block_start:
-        return text
+    result, code_starts = _strip_2pass_states(text, spec)
 
-    # Pre-pass: C-family #if 0 블록 제거
+    # Post-pass: C/C++/C# #if 0 블록 제거. 주석 제거 *후*에 실행한다 — C 번역
+    # 단계 3(주석 → 공백)이 단계 4(전처리 지시문)보다 먼저이므로, 주석 안에
+    # 적힌 '#if 0' 예시는 지시문이 아니다. 두 단계 모두 라인 수를 보존한다.
     if _has_ifdef_zero(extension):
-        text = _strip_ifdef_zero(text)
-
-    result = _strip_2pass(text, spec)
+        result = _strip_ifdef_zero(result, code_starts)
 
     if squash_blanks:
         result = _squash_blank_lines(result)
@@ -299,7 +367,17 @@ def strip_comments(
 
 
 def _strip_2pass(text: str, spec: CommentSpec) -> str:
+    """주석을 제거한 텍스트만 돌려준다 (``_strip_2pass_states`` 참조)."""
+    return _strip_2pass_states(text, spec)[0]
+
+
+def _strip_2pass_states(text: str, spec: CommentSpec) -> tuple[str, list[bool]]:
     """최적화된 2-pass 주석 제거기.
+
+    Returns:
+        (주석 제거 텍스트, 줄별 플래그). 플래그는 그 줄이 일반 코드 상태(문자열·
+        템플릿·블록 주석·보간 바깥)에서 시작했는지이다 — ``#if 0`` 후처리가 문자열
+        안의 ``#if 0`` 줄을 지시문으로 오인하지 않도록 쓴다.
 
     라인 단위로 분할하여:
     1. ``CODE`` 상태 + 마커 없음 → 즉시 통과 (fast-path)
@@ -335,6 +413,22 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
     template_delims = spec.template_delims
     has_regex = spec.has_regex_literals
     block_anchored = spec.block_markers_line_anchored
+    nested_blocks = spec.nested_block_comments
+    triple_delims = spec.triple_quote_delims
+    template_escapes = spec.template_escapes
+    char_strict = spec.char_literals_strict
+    marker_boundary = spec.line_marker_boundary
+    marker_not_after = spec.line_marker_not_after
+    marker_exceptions = spec.line_marker_exceptions
+    block_depth = 0  # IN_BLOCK_COMMENT 중첩 깊이 (nested_block_comments 언어)
+    # LanguageCommentSpec 확장 필드 (일반 CommentSpec이면 종전 동작).
+    template_interp = getattr(spec, "template_interpolation", True)
+    verbatim_prefixes: tuple[str, ...] = getattr(spec, "verbatim_string_prefixes", ())
+    verbatim = False  # IN_STRING이 C# @"..." (이스케이프 없음, "" = 따옴표, 여러 줄)
+    cpp_raw = getattr(spec, "cpp_raw_strings", False)
+    # IN_STRING이 C++ 원시 문자열이면 그 닫는 시퀀스 ``)delim"`` (아니면 None).
+    raw_close: Optional[str] = None
+    code_starts: list[bool] = []
 
     def _value_end():
         # 문자열/정규식/템플릿은 '값'이므로 이후 / 는 나눗셈이다.
@@ -344,6 +438,7 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
         in_word = False
 
     for line_idx, line in enumerate(lines):
+        code_starts.append(state is _State.CODE and not template_brace_depths)
         # ── Fast-path ──
         if state is _State.CODE and not template_brace_depths and not _has_any_marker(line, spec):
             out_parts.append(line)
@@ -376,12 +471,19 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
 
             # ── IN_BLOCK_COMMENT: 종료 마커 탐색 ──
             if state is _State.IN_BLOCK_COMMENT:
+                if nested_blocks and block_start and line.startswith(block_start, pos):
+                    block_depth += 1
+                    pos += len(block_start)
+                    continue
                 if (
                     block_end
                     and (not block_anchored or pos == 0)
                     and line[pos : pos + len(block_end)] == block_end
                 ):
                     pos += len(block_end)
+                    block_depth -= 1
+                    if nested_blocks and block_depth > 0:
+                        continue
                     state = _State.CODE
                     # 컴파일러처럼 주석을 공백으로 취급한다: 'int/*x*/y' 가 존재하지
                     # 않는 식별자 'inty' 로 붙지 않도록, 양쪽이 모두 단어 문자일 때만
@@ -436,10 +538,39 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
             # ── IN_STRING: 이스케이프 및 닫힘 처리 ──
             if state is _State.IN_STRING:
                 assert string_delim is not None
+                if raw_close is not None:
+                    # C++ 원시 문자열: 이스케이프 없음, )delim" 에서만 닫힌다.
+                    end = line.find(raw_close, pos)
+                    if end < 0:
+                        line_out.append(line[pos:])
+                        pos = length
+                        continue
+                    end += len(raw_close)
+                    line_out.append(line[pos:end])
+                    pos = end
+                    state = _State.CODE
+                    string_delim = None
+                    raw_close = None
+                    _value_end()
+                    continue
+                if verbatim:
+                    if ch == '"' and line.startswith('""', pos):
+                        line_out.append('""')  # 이중 따옴표 = 문자 그대로의 따옴표
+                        pos += 2
+                        continue
+                    line_out.append(ch)
+                    pos += 1
+                    if ch == '"':
+                        state = _State.CODE
+                        string_delim = None
+                        verbatim = False
+                        _value_end()
+                    continue
                 if escaped:
                     line_out.append(ch)
-                    escaped = False
                     pos += 1
+                    # CRLF 파일: 줄 끝의 백슬래시 다음 CR 은 줄 이음이다 (CR 은 줄바꿈의 일부).
+                    escaped = ch == "\r" and pos == length
                     continue
                 if ch == "\\":
                     escaped = True
@@ -470,16 +601,16 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
             if state is _State.IN_TEMPLATE_LITERAL:
                 if escaped:
                     line_out.append(ch)
-                    escaped = False
                     pos += 1
+                    escaped = ch == "\r" and pos == length  # CRLF 줄 이음 (위와 동일)
                     continue
-                if ch == "\\":
+                if ch == "\\" and template_escapes:
                     escaped = True
                     line_out.append(ch)
                     pos += 1
                     continue
                 # ${} 표현식 진입 → CODE로 전환, depth 증가
-                if ch == "$" and pos + 1 < length and line[pos + 1] == "{":
+                if template_interp and ch == "$" and pos + 1 < length and line[pos + 1] == "{":
                     line_out.append("${")
                     pos += 2
                     template_brace_depths.append(0)
@@ -503,10 +634,35 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
                 pos += 1
                 continue
 
+            # ── CODE: C# 축자 문자열 @"..." 열림 ──
+            if verbatim_prefixes and any(line.startswith(vp, pos) for vp in verbatim_prefixes):
+                vp = next(vp for vp in verbatim_prefixes if line.startswith(vp, pos))
+                line_out.append(vp)
+                pos += len(vp)
+                state = _State.IN_STRING
+                string_delim = '"'
+                verbatim = True
+                continue
+
+            # ── CODE: C++ 원시 문자열 R"delim( 열림 ──
+            # 접두사 앞이 식별자 문자이면(예: fooR"...") 원시 문자열 접두사가 아니다.
+            if (
+                cpp_raw
+                and ch in "uULR"
+                and not (pos > 0 and _is_word_char(line[pos - 1]))
+                and (m := _CPP_RAW_STRING_OPEN.match(line, pos))
+            ):
+                line_out.append(m.group(0))
+                pos = m.end()
+                state = _State.IN_STRING
+                string_delim = '"'
+                raw_close = ")" + m.group(1) + '"'
+                continue
+
             # ── CODE: 문자열 열림 감지 ──
             if ch in string_delims:
                 triple = ch * 3
-                if line[pos : pos + 3] == triple:
+                if ch in triple_delims and line[pos : pos + 3] == triple:
                     line_out.append(triple)
                     pos += 3
                     state = _State.IN_STRING
@@ -517,6 +673,16 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
                 state = _State.IN_STRING
                 string_delim = ch
                 continue
+
+            # Rust: 완전한 문자 리터럴('x', '\n', '\u{..}')만 리터럴로 통째로 보존하고,
+            # 그 외의 ' (라이프타임 'a, 레이블 'outer)는 일반 코드 문자로 둔다.
+            if char_strict and ch == "'":
+                m = _RUST_CHAR_LITERAL.match(line, pos)
+                if m:
+                    line_out.append(m.group(0))
+                    pos = m.end()
+                    _value_end()
+                    continue
 
             # 백틱 템플릿 리터럴 (JS/Go)
             if ch in template_delims:
@@ -594,13 +760,16 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
                 and line[pos : pos + len(block_start)] == block_start
             ):
                 state = _State.IN_BLOCK_COMMENT
+                block_depth = 1
                 pos += len(block_start)
                 continue
 
             # ── CODE: 라인 주석 시작 ──
             marker_matched = False
             for marker in line_markers:
-                if line[pos : pos + len(marker)] == marker:
+                if line[pos : pos + len(marker)] == marker and _marker_allowed(
+                    line, pos, marker_boundary, marker_not_after, marker_exceptions
+                ):
                     state = _State.IN_LINE_COMMENT
                     pos += len(marker)
                     marker_matched = True
@@ -627,12 +796,25 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
         if state is _State.IN_LINE_COMMENT:
             state = _State.CODE
 
+        # 줄 끝의 백슬래시는 다음 줄 첫 문자를 이스케이프하지 않는다: 문자열/템플릿
+        # 안이면 줄 이음(C 번역 단계 2, Python·JS 동일)이고, 그 외에는 의미가 없다.
+        line_continued = escaped
+        escaped = False
+
         # C1 안전장치: 닫히지 않은 단일 구분자 문자열은 줄 끝에서 복구
         # 트리플-쿼트(""", ''') 문자열은 여러 줄에 걸치므로 예외.
         # 깨진 소스코드에서 이후 전체 라인의 주석 제거가 무효화되는 것을 방지.
-        if state is _State.IN_STRING and string_delim is not None and len(string_delim) == 1:
+        # 단, 백슬래시로 이어진 줄(line_continued)은 문자열이 다음 줄로 계속된다.
+        if (
+            state is _State.IN_STRING
+            and string_delim is not None
+            and len(string_delim) == 1
+            and not line_continued
+            and not verbatim
+            and raw_close is None
+        ):
             _logger.debug(
-                "Unclosed string (delim=%r) at end of line %d — resetting parser to CODE state.",
+                "Unclosed string (delim=%r) at end of line %d; resetting the parser to code state.",
                 string_delim,
                 line_idx + 1,
             )
@@ -647,7 +829,7 @@ def _strip_2pass(text: str, spec: CommentSpec) -> str:
 
         out_parts.append("".join(line_out))
 
-    return "\n".join(out_parts)
+    return "\n".join(out_parts), code_starts
 
 
 # 3줄 이상 연속 빈 줄 → 단일 빈 줄로 축소
