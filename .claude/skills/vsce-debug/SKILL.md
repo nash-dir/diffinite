@@ -32,7 +32,7 @@ Standard library only. Prints PASS / WARN / FAIL; exit 1 if any FAIL.
 |---|---|---|---|
 | 1 | `preflight` | `npm ci` done | version drift (package.json / pyproject / CHANGELOG / **local bundle**), Node vs vsce/ovsx engines, `out/` older than `src/`, forbidden or missing files in `vsce ls` |
 | 2 | `inspect <vsix> --target <t>` | a packaged VSIX | manifest Version/TargetPlatform, bundle only in win32-x64, bundled analyzer version, forbidden files, local user paths leaked into text files |
-| 3 | `runtime` | Windows bundle in `bin/` | bundled `import diffinite` version, `--help` under a cp1252 console, sample analysis JSON accepted by the extension's own strict `parseLiveReport` |
+| 3 | `runtime` | Windows bundle in `bin/` | bundled `import diffinite` version, `--help` with stdout/stderr forced to strict cp1252 inside the isolated (`-I`) interpreter, sample analysis JSON accepted by the extension's own strict `parseLiveReport` |
 | 3b | `host-smoke <vsix>` | `code` CLI | VSIX installs into a throw-away profile and lists as `nash-dir.diffinite@<version>` with its runtime |
 | 4 | `npm run test:host` (in vscode-extension) | installed VS Code | see Level 4 below |
 | 5 | `registry [version]` | network | Marketplace latest + which of win32-x64 / linux-x64 / darwin-arm64 exist for that version (`vsce show` hides per-target gaps); Open VSX namespace/extension state |
@@ -90,9 +90,12 @@ opened as the workspace ("Run Extension" launch config) and the same log paths.
   `ovsx create-namespace nash-dir` → claim ownership via an issue at
   github.com/EclipseFdn/open-vsx.org → add the `OVSX_PAT` secret. Until then the
   release step skips silently (green run, nothing published).
-- Publish retries in `release.yml` have no `--skip-duplicate`; a retry after a
-  server-side success fails with "already exists". Verify with `registry` instead of
-  re-running the job.
+- Publishing in `release.yml` is rerunnable: before every attempt it queries the
+  registry (`vsce show` / the Open VSX API) and skips a VSIX whose version is already
+  listed for its target only if the registry copy is byte-identical; different bytes
+  fail the run. Every VSIX is attempted, the step fails once at the end, and PyPI
+  publishes only after the marketplaces succeed. After a red publish job, check with
+  `registry`, then re-run the failed jobs.
 
 ## Failure catalogue → check
 

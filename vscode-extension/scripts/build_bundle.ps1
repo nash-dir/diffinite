@@ -21,10 +21,24 @@
     8. Post-prune Version & Report Smoke Tests
 #>
 param(
+    # Single source of the bundled Python version: ci.yml and release.yml call
+    # this script without -pythonVersion, so both build the same runtime.
     [string]$pythonVersion = "3.12.9"
 )
 
 $ErrorActionPreference = "Stop"
+
+# SHA-256 of python.org's python-<version>-embed-amd64.zip for every version
+# this script may bundle. A version without a pinned hash is rejected before
+# anything is downloaded or deleted.
+$pinnedPythonHashes = @{
+    # 공식 Python 3.12.9 릴리스 SHA256 해시값 (python.org 제공)
+    "3.12.9" = "615861FB801E8B04C847598DB4E1E46E4B046295017CAA37CB5486DDE72B5865"
+}
+if (-not $pinnedPythonHashes.ContainsKey($pythonVersion)) {
+    throw "No pinned SHA-256 for Python $pythonVersion. Add the python.org hash of python-$pythonVersion-embed-amd64.zip to `$pinnedPythonHashes in build_bundle.ps1."
+}
+$expectedPythonHash = $pinnedPythonHashes[$pythonVersion]
 
 $workspaceRoot = (Resolve-Path "$PSScriptRoot\..\..").Path
 $extRoot = "$workspaceRoot\vscode-extension"
@@ -42,8 +56,6 @@ New-Item -ItemType Directory -Path $binPythonDir | Out-Null
 # -------------------------------------------------------------------------
 $downloadUrl = "https://www.python.org/ftp/python/$pythonVersion/python-$pythonVersion-embed-amd64.zip"
 $zipPath = "$binPythonDir\python-embed.zip"
-# 공식 Python 3.12.9 릴리스 SHA256 해시값 (python.org 제공)
-$expectedPythonHash = "615861FB801E8B04C847598DB4E1E46E4B046295017CAA37CB5486DDE72B5865"
 
 Write-Host "Downloading Embedded Python v$pythonVersion..."
 Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath

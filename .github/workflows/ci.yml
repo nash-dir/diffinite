@@ -5,6 +5,9 @@ on:
     branches: [ "master" ]
   pull_request:
     branches: [ "master" ]
+  # release.yml calls this workflow so a tag cannot ship without the same
+  # audit, version matrix, lint, typecheck and bundle checks as master.
+  workflow_call:
 
 permissions:
   contents: read
@@ -104,6 +107,8 @@ jobs:
         tests/test_audit_regressions_report_truth.py
         tests/test_download_examples.py
         tests/test_report_preset_invariance.py
+        tests/test_audit2_tooling.py
+        tests/test_input_policy.py
         example/benchmark/run_benchmarks.py
         example/download_examples.py
 
@@ -125,6 +130,7 @@ jobs:
         tests/test_audit_regressions_report_truth.py
         tests/test_download_examples.py
         tests/test_report_preset_invariance.py
+        tests/test_input_policy.py
         example/benchmark/run_benchmarks.py
 
     - name: Python typecheck
@@ -156,7 +162,8 @@ jobs:
     - name: Test Bundle Generation & Smoke Test
       shell: pwsh
       run: |
-        ./vscode-extension/scripts/build_bundle.ps1 -pythonVersion "3.12.9"
+        # The bundled Python version and its hash pin live only in the script.
+        ./vscode-extension/scripts/build_bundle.ps1
 
     - name: Test VSIX Packaging
       working-directory: vscode-extension

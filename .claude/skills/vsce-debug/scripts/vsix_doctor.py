@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -223,6 +222,25 @@ def cmd_inspect(a: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------- runtime
+# -I ignores every PYTHON* variable, so PYTHONIOENCODING=cp1252 has no effect on
+# an isolated interpreter. Instead the streams are re-wrapped as strict cp1252
+# inside the process before the module runs; a non-cp1252 character in the
+# output then raises UnicodeEncodeError and the process exits non-zero.
+CP1252_PRELUDE = (
+    "import io, sys; "
+    "sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='cp1252', errors='strict'); "
+    "sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='cp1252', errors='strict'); "
+)
+
+
+def run_help_under_cp1252(py: Path, module: str = "diffinite") -> subprocess.CompletedProcess:
+    """Run ``<py> -I -m <module> --help`` with strict cp1252 stdout/stderr."""
+    code = (CP1252_PRELUDE + "import runpy; "
+            f"sys.argv = [{module!r}, '--help']; "
+            f"runpy.run_module({module!r}, run_name='__main__', alter_sys=True)")
+    return subprocess.run([str(py), "-I", "-c", code], capture_output=True)
+
+
 def cmd_runtime(_: argparse.Namespace) -> None:
     py = EXT / "bin" / "python" / "python.exe"
     if not py.exists():
@@ -234,9 +252,10 @@ def cmd_runtime(_: argparse.Namespace) -> None:
     report("PASS" if got == pyproject_version() else "FAIL",
            f"bundled `import diffinite` -> {got or ver.stderr.strip()[-200:]} vs pyproject {pyproject_version()}")
 
-    env = dict(os.environ, PYTHONIOENCODING="cp1252")  # F7: legacy console code page
-    h = subprocess.run([str(py), "-I", "-m", "diffinite", "--help"], capture_output=True, text=True, env=env)
-    report("PASS" if h.returncode == 0 else "FAIL", f"--help under cp1252 console exit {h.returncode} (F7)")
+    h = run_help_under_cp1252(py)  # F7: legacy console code page
+    report("PASS" if h.returncode == 0 else "FAIL",
+           f"--help under cp1252 console exit {h.returncode} (F7)"
+           + (f": {h.stderr.decode('utf-8', 'replace').strip()[-200:]}" if h.returncode else ""))
 
     with tempfile.TemporaryDirectory(prefix="vsix-doctor-") as tmp:
         t = Path(tmp)

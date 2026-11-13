@@ -108,6 +108,8 @@ def test_every_external_action_is_pinned_to_an_immutable_commit():
     for workflow in (CI_WORKFLOW, WORKFLOW):
         action_refs = re.findall(r"(?m)^\s*-?\s*uses:\s*([^\s#]+)", workflow)
         assert action_refs
+        # A same-repository reusable workflow is versioned with the commit itself.
+        action_refs = [ref for ref in action_refs if not ref.startswith("./.github/workflows/")]
         assert all(re.search(r"@[0-9a-f]{40}$", ref) for ref in action_refs), action_refs
 
 
@@ -212,7 +214,8 @@ def test_build_and_privileged_publish_jobs_are_separated():
 
     pypi_publish = _job("publish-pypi")
     assert re.search(
-        r"(?m)^    needs:\n      - build-python\n      - upload-vsix-release$",
+        r"(?m)^    needs:\n      - build-python\n      - upload-vsix-release\n"
+        r"      - publish-marketplaces$",
         pypi_publish,
     )
     assert "actions/checkout" not in pypi_publish
