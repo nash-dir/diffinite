@@ -3,8 +3,9 @@ name: CI Pipeline
 on:
   push:
     branches: [ "master" ]
+  # Every pull request, whatever its base: a PR into a feature branch (e.g. #3
+  # into hardening-0.14) otherwise merges without any test run.
   pull_request:
-    branches: [ "master" ]
   # release.yml calls this workflow so a tag cannot ship without the same
   # audit, version matrix, lint, typecheck and bundle checks as master.
   workflow_call:

@@ -363,3 +363,16 @@ def test_bates_stamping_keeps_content_streams_compressed(tmp_path):
     reader, filtered = _contents_filtered(split)
     assert all(filtered)
     assert reader.pages[-1].extract_text().rstrip().endswith("X-0007-C")
+
+
+def test_pdf_css_does_not_use_inherit():
+    """xhtml2pdf 0.2.28 crashes resolving "inherit" for cache-hit cells.
+
+    ('Element' object has no attribute 'cssElement'.) The PDF CSS states
+    values explicitly; the screen-only CSS is never given to xhtml2pdf.
+    """
+    import re
+
+    from diffinite.pdf_gen import _CSS_BODY
+
+    assert not re.search(r":\s*inherit\b", _CSS_BODY)

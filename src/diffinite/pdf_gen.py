@@ -264,7 +264,7 @@ class _FontPlan:
         rules = []
         if self.mono:
             rules.append(
-                f'.difftbl, td.digest, table.key td.sw, .{_MARKER_CLASS} '
+                f'.difftbl, .code pre, td.digest, table.key td.sw, .{_MARKER_CLASS} '
                 f'{{ font-family: "{self.mono[0]}", "Courier"; }}'
             )
             rules.append(f'.g-mono {{ font-family: "{self.mono[0]}"; }}')
@@ -638,8 +638,11 @@ div.unmatched p {
     margin: 0;
     padding: 0 0 0 8pt;
     text-indent: -8pt;
-    font-size: inherit;
-    font-family: inherit;
+    /* The .difftbl code face and size, stated rather than "inherit": xhtml2pdf
+       0.2.28 crashes resolving "inherit" against a cell whose styles came from
+       its CSS cache ('Element' object has no attribute 'cssElement'). */
+    font-size: 7pt;
+    font-family: "UserMono", "Consolas", "Courier New", monospace;
     white-space: pre-wrap;
     word-wrap: break-word;
 }
