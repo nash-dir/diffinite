@@ -6,6 +6,8 @@
  * summary says "unknown" instead of guessing.
  */
 import { DiffiniteReport, buildReportViewModel } from "./analysisModel";
+import { analysisStateLabel, countLabel, thresholdLabel, thresholdSourceLabel } from "./labels";
+import { STATUS_LABELS } from "./notices";
 
 export interface SummaryFact {
   label: string;
@@ -22,7 +24,14 @@ export interface ReviewSummary {
 }
 
 function count(value: number | null): string {
-  return value === null ? "unknown" : String(value);
+  return value === null ? "unknown" : countLabel(value);
+}
+
+function sensitiveFilesLabel(mode: string, excluded: number): string {
+  if (mode === "exclude") { return `Excluded (${countLabel(excluded)} found)`; }
+  if (mode === "include") { return "Included (compared like any other file)"; }
+  if (mode === "error") { return "Stop the run when found (none found)"; }
+  return "unknown";
 }
 
 export function buildReviewSummary(report: DiffiniteReport): ReviewSummary {
@@ -32,35 +41,78 @@ export function buildReviewSummary(report: DiffiniteReport): ReviewSummary {
   const binaryPairs = report.results.filter((r) => r.binary).length;
   const skipped = status.collection.failed_file_count;
 
-  const stateText = status.state === "complete" ? "Complete"
-    : status.state === "incomplete" ? "Incomplete" : "Unknown";
+  const stateText = analysisStateLabel(status.state);
 
   // Pairs the matcher produced (same relative path, else name similarity above
   // the filename threshold). Pairs dropped by --binary-handling exclude are
-  // counted as requested but have no result row.
+  // counted as requested but have no result row. Current reports state the
+  // number; older ones (no excluded_pair_count) counted them as successful,
+  // so it is derived there from the rows that are missing.
   const requested = status.diff.requested_pair_count;
   const failed = status.diff.failed_pair_count;
-  const excluded = requested !== null && failed !== null
-    ? requested - failed - report.results.length : null;
+  const excluded = status.diff.excluded_pair_count !== null
+    ? status.diff.excluded_pair_count
+    : requested !== null && failed !== null
+      ? requested - failed - report.results.length : null;
+
+  // The reports' "File pairs failed" row counts the failed pairs recorded in
+  // the status, which include every pair shown with an error (older reports
+  // without that count fall back to the error rows).
+  const failedPairs = Math.max(failed ?? 0, errorPairs);
 
   const facts: SummaryFact[] = [
-    { label: "Analysis state", value: stateText, attention: status.state !== "complete" },
-    { label: "Matched pairs (same path or similar name)", value: String(requested ?? report.summary.matched_pairs), attention: false },
-    { label: "Files only in A (no match)", value: String(report.summary.unmatched_a_count), attention: false },
-    { label: "Files only in B (no match)", value: String(report.summary.unmatched_b_count), attention: false },
-    { label: "Pairs with errors", value: String(errorPairs), attention: errorPairs > 0 },
-    { label: "Inputs skipped while collecting", value: count(skipped), attention: skipped === null || skipped > 0 },
-    { label: "Hash-only pairs (binary or over the size limit; no line diff)", value: String(binaryPairs), attention: binaryPairs > 0 },
+    { label: STATUS_LABELS.state, value: stateText, attention: status.state !== "complete" },
+    { label: "Matched pairs (same path or similar name)", value: countLabel(requested ?? report.summary.matched_pairs), attention: false },
+    { label: "Files only in A (no match)", value: countLabel(report.summary.unmatched_a_count), attention: false },
+    { label: "Files only in B (no match)", value: countLabel(report.summary.unmatched_b_count), attention: false },
+    { label: STATUS_LABELS.pairsFailed, value: countLabel(failedPairs), attention: failedPairs > 0 },
+    { label: STATUS_LABELS.inputsNotRead, value: count(skipped), attention: skipped === null || skipped > 0 },
+    { label: "Hash-only pairs (binary or over the size limit; no line diff)", value: countLabel(binaryPairs), attention: binaryPairs > 0 },
   ];
   if (excluded !== null && excluded > 0) {
-    facts.push({ label: "Matched pairs left out by the binary-file policy", value: String(excluded), attention: true });
+    facts.push({ label: STATUS_LABELS.pairsExcluded, value: countLabel(excluded), attention: true });
   }
+  // A selective run lists only the selected A files among the unmatched and
+  // omits the B list; the report states how many it left out.
+  const omittedA = status.selection.omitted_unmatched_a_count;
+  const omittedB = status.selection.omitted_unmatched_b_count;
+  if ((omittedA ?? 0) > 0 || (omittedB ?? 0) > 0) {
+    facts.push({
+      label: STATUS_LABELS.selectionOmitted,
+      value: `${count(omittedA)} in A; ${count(omittedB)} in B`,
+      attention: true,
+    });
+  }
+  // Inputs the collection policy left out are not compared; the reports list
+  // each one with its rule, so the count is always stated here.
+  const excludedInputs = status.exclusion.excluded_count;
+  facts.push({
+    label: STATUS_LABELS.inputsExcluded,
+    value: count(excludedInputs),
+    attention: excludedInputs === null || excludedInputs > 0,
+  });
+  const rules = meta.ignore_patterns.length;
+  facts.push({
+    label: "Exclusion list rules applied (~/.diffignore)",
+    value: meta.ignore_file_sha256 === null ? "none" : countLabel(rules),
+    attention: rules > 0,
+  });
+  const sensitiveExcluded = status.exclusion.excluded.filter((e) => e.source === "sensitive-preset").length;
+  facts.push({
+    label: "Sensitive files (.env, private keys, credential files)",
+    value: sensitiveFilesLabel(meta.sensitive_files, sensitiveExcluded),
+    attention: false,
+  });
 
   if (meta.exec_mode === "deep") {
     const rows = buildReportViewModel(report).deepRows;
+    const skippedBinary = status.deep.skipped_binary_file_count;
+    const belowKgram = status.deep.unfingerprinted_file_count;
     facts.push(
-      { label: "Deep Compare similarity candidates", value: String(rows.filter((r) => r.kind === "candidate").length), attention: false },
-      { label: "Deep Compare inconclusive (판단 유보)", value: String(rows.filter((r) => r.kind === "inconclusive").length), attention: false },
+      { label: STATUS_LABELS.deepReported, value: countLabel(rows.length), attention: false },
+      { label: "Deep Compare pairs marked inconclusive", value: countLabel(rows.filter((r) => r.kind === "inconclusive").length), attention: false },
+      { label: STATUS_LABELS.deepSkipped, value: count(skippedBinary), attention: skippedBinary === null || skippedBinary > 0 },
+      { label: STATUS_LABELS.deepBelowKgram, value: count(belowKgram), attention: belowKgram === null || belowKgram > 0 },
     );
   } else {
     facts.push({ label: "Deep Compare (cross-file)", value: meta.exec_mode === "simple" ? "Not run (Simple mode)" : "unknown", attention: false });
@@ -70,17 +122,26 @@ export function buildReviewSummary(report: DiffiniteReport): ReviewSummary {
   const settings: string[] = [
     `Mode: ${meta.exec_mode}`,
     `Comparison unit: ${report.comparison_unit}; comments: ${report.comment_mode}`,
-    `Line-diff autojunk heuristic: ${onOff(meta.autojunk)}`,
+    `Line diff autojunk: ${onOff(meta.autojunk)}`,
   ];
   if (meta.exec_mode === "deep") {
     settings.push(
-      `Fingerprint K=${count(meta.k)}, W=${count(meta.w)}; identifier normalization: ${onOff(meta.normalize)}`,
-      `Candidate threshold (Jaccard): ${meta.threshold === null ? "unknown" : `${meta.threshold.toFixed(1)}%`} ` +
-        `(source: ${meta.threshold_provenance})`,
+      `K-gram size (K): ${count(meta.k)}; window size (W): ${count(meta.w)}; identifier normalization: ${onOff(meta.normalize)}`,
+      `Jaccard threshold: ${meta.threshold === null ? "unknown" : thresholdLabel(meta.threshold)}`,
+      `Threshold source: ${thresholdSourceLabel(meta.threshold_provenance)}`,
     );
   }
+  if (meta.ignore_file_sha256 !== null) {
+    settings.push(
+      `Exclusion list SHA-256: ${meta.ignore_file_sha256}`,
+      `Exclusion rules: ${meta.ignore_patterns.length ? meta.ignore_patterns.join("; ") : "none active"}`,
+    );
+  }
+  if (meta.include_patterns.length) {
+    settings.push(`Include filter: ${meta.include_patterns.join("; ")}`);
+  }
   if (report.dir_a || report.dir_b) {
-    settings.push(`A: ${report.dir_a}`, `B: ${report.dir_b}`);
+    settings.push(`Directory A: ${report.dir_a}`, `Directory B: ${report.dir_b}`);
   }
 
   return { facts, settings, errorPairs, binaryPairs };

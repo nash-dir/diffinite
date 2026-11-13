@@ -61,23 +61,92 @@ export const THEME_CSS = `
     --diff-add-border: var(--vscode-diffEditor-insertedTextBorder, transparent);
     --diff-del-border: var(--vscode-diffEditor-removedTextBorder, transparent);
     --diff-move-border: var(--vscode-diffEditor-move-border, #8b8b8b);
+    /* VS Code has no theme color for a word-level changed line or for changed
+       whitespace. A warm neutral over the editor background (#f5f0e0 on white,
+       near the reports' #f3eedb) and a grey (#dfdfdf on white, near the
+       reports' #dedede) keep both apart from the added and removed tints. */
+    --diff-chg-line: rgba(190,160,60,.16);
+    --diff-ws-text: rgba(128,128,128,.25);
+    /* High Contrast themes define contrastActiveBorder; elsewhere it is unset. */
+    --focus-ring: var(--vscode-contrastActiveBorder, var(--focus));
+
+    /* Spacing scale (4px base, as in the VS Code workbench). */
+    --sp-1: 4px;
+    --sp-2: 8px;
+    --sp-3: 12px;
+    --sp-4: 16px;
+    --sp-5: 24px;
+    --sp-6: 32px;
+
+    /* Type scale, anchored on the editor UI font size the user configured. */
+    --fs-base: var(--vscode-font-size, 13px);
+    --fs-sm: 12px;
+    --fs-xs: 11px;
+    --fs-h2: 13px;
+    --fs-h1: 16px;
+    --control-h: 26px;
   }
   body {
     font-family: var(--vscode-font-family, "Segoe UI", "Noto Sans KR", sans-serif);
+    font-size: var(--fs-base);
+    line-height: 1.45;
     color: var(--fg);
     background: var(--bg);
+    /* Never slant or embolden a font that has no italic or bold face (CJK file names). */
+    font-synthesis: none;
   }
-  :focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
-  button { font-family: inherit; }
-  .btn-primary { border: 1px solid var(--btn-border) !important; }
+  /* Keyboard focus is always visible; mouse focus does not draw a ring. */
+  :focus { outline: none; }
+  :focus-visible { outline: 1px solid var(--focus-ring); outline-offset: 1px; }
+  input:focus-visible, select:focus-visible, textarea:focus-visible { outline-offset: -1px; }
+
+  /* Buttons: one primary action per view, everything else secondary. */
+  button { font-family: inherit; font-size: var(--fs-base); line-height: 18px; }
+  .btn-primary, .btn-secondary {
+    min-height: var(--control-h); padding: 3px 12px; border-radius: 2px; cursor: pointer;
+    white-space: nowrap;
+  }
+  .btn-primary { background: var(--btn-bg); color: var(--btn-fg); border: 1px solid var(--btn-border) !important; }
+  .btn-primary:hover:not(:disabled) { background: var(--btn-hover); }
+  .btn-secondary { background: var(--btn2-bg); color: var(--btn2-fg); border: 1px solid var(--btn-border); }
+  .btn-secondary:hover:not(:disabled) { background: var(--btn2-hover); }
+  .btn-link {
+    background: none; border: 1px solid transparent; color: var(--accent); padding: 0 2px;
+    cursor: pointer; text-decoration: none;
+  }
+  .btn-link:hover { text-decoration: underline; }
   button:disabled { opacity: .5; cursor: default; }
+
   input, select, textarea {
     font-family: inherit;
+    font-size: var(--fs-base);
     background: var(--input-bg);
     color: var(--input-fg);
     border: 1px solid var(--input-border);
+    border-radius: 2px;
   }
+  input[type="checkbox"], input[type="radio"] { accent-color: var(--btn-bg); margin: 0; }
+  /* High Contrast buttons are transparent, so draw checked controls in the text color. */
+  body[class*="vscode-high-contrast"] input[type="checkbox"],
+  body[class*="vscode-high-contrast"] input[type="radio"] { accent-color: var(--fg); }
   code, .mono { font-family: var(--code-font); }
+
+  /* Figures line up in columns and do not shift when they change. */
+  .num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  .dim { color: var(--fg-dim); }
+
+  /* Notices are neutral. Only a condition that limits what the result covers
+     (kind "warning", e.g. an incomplete analysis) gets a heavier rule, in the
+     text color rather than a signal color, so nothing reads as a verdict. */
+  .notice {
+    margin: var(--sp-2) 0; padding: var(--sp-2) var(--sp-3);
+    border: 1px solid var(--border); border-radius: 0;
+  }
+  .notice.warning { border-left: 3px solid var(--fg); }
+  .notice-title { display: block; font-weight: 600; margin-bottom: 2px; }
+  .notice-body { overflow-wrap: anywhere; }
+
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 `;
 
 /**

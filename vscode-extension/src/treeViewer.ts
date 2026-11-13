@@ -1,7 +1,7 @@
 /**
  * Tree Viewer (Phase 1 review and selection UI)
  *
- * Shows the metrics-only JSON report: a summary of what was analysed, the
+ * Shows the metrics-only JSON report: a summary of what was analyzed, the
  * analysis caveats, and a filterable table of matched pairs. The user picks
  * the pairs to render in the final report, and can open any pair in VS
  * Code's own diff editor without leaving this panel.
@@ -9,8 +9,12 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import { DiffiniteReport } from "./runner";
-import { buildReportViewModel, similarityText } from "./analysisModel";
+import { buildReportViewModel, hasLineCounts, similarityText } from "./analysisModel";
+import {
+  addedCountLabel, changeUnit, countLabel, deletedCountLabel, matchMetricName, nameSimilarityLabel, overlapLabel, plural,
+} from "./labels";
 import { buildReviewSummary } from "./reviewSummary";
+import { INCONCLUSIVE_NOTICE, SCREEN_NOTICES } from "./notices";
 import { escHtml, getNonce, THEME_CSS } from "./webviewUtils";
 
 export interface SourceDirs { dirA: string; dirB: string; }
@@ -25,12 +29,65 @@ export function resolveInside(root: string, relative: string): string | null {
   return target;
 }
 
-/** Same order as the table: content similarity, then name similarity, both descending. */
+/** Same order as the table: line (or word) match, then name similarity, both descending. */
 export function sortForReview(report: DiffiniteReport): DiffiniteReport["results"] {
   return [...report.results].sort((a, b) => {
     if (b.ratio !== a.ratio) { return b.ratio - a.ratio; }
     return b.name_similarity - a.name_similarity;
   });
+}
+
+/**
+ * A file in A that has no 1:1 pair but that Phase 2 can still analyze: it has
+ * Deep Compare (N:M) matches, or it is unmatched. Without a row of its own it
+ * could not be selected, and its cross-file matches would drop out of the
+ * final report.
+ */
+export interface UnpairedFileRow {
+  file_a: string;
+  /** Best Deep Compare match in B (highest Jaccard), if any. */
+  best: { file_b: string; jaccard: number } | null;
+  deepMatchCount: number;
+  hasCandidate: boolean;
+}
+
+/** A files with a Deep Compare match at or above the threshold that is not marked inconclusive. */
+export function deepCandidateFiles(report: DiffiniteReport): Set<string> {
+  return new Set(buildReportViewModel(report).deepRows
+    .filter((row) => row.kind === "candidate").map((row) => row.file_a));
+}
+
+export function buildUnpairedRows(report: DiffiniteReport): UnpairedFileRow[] {
+  const paired = new Set(report.results.map((row) => row.file_a));
+  const candidates = deepCandidateFiles(report);
+  const rows = new Map<string, UnpairedFileRow>();
+  for (const deep of report.deep_results) {
+    if (paired.has(deep.file_a) || rows.has(deep.file_a)) { continue; }
+    const best = [...deep.matches].sort((x, y) => y.jaccard - x.jaccard)[0];
+    rows.set(deep.file_a, {
+      file_a: deep.file_a,
+      best: best ? { file_b: best.file_b, jaccard: best.jaccard } : null,
+      deepMatchCount: deep.matches.length,
+      hasCandidate: candidates.has(deep.file_a),
+    });
+  }
+  for (const fileA of report.unmatched_a) {
+    if (paired.has(fileA) || rows.has(fileA)) { continue; }
+    rows.set(fileA, { file_a: fileA, best: null, deepMatchCount: 0, hasCandidate: false });
+  }
+  return [...rows.values()].sort((x, y) =>
+    Number(y.hasCandidate) - Number(x.hasCandidate)
+    || (y.best?.jaccard ?? -1) - (x.best?.jaccard ?? -1)
+    || x.file_a.localeCompare(y.file_a));
+}
+
+/** Every A path the Phase-2 filter may contain for this report. */
+export function selectableFilesA(report: DiffiniteReport): Set<string> {
+  return new Set([
+    ...report.results.map((row) => row.file_a),
+    ...report.deep_results.map((row) => row.file_a),
+    ...report.unmatched_a,
+  ]);
 }
 
 export class TreeViewerPanel {
@@ -39,6 +96,8 @@ export class TreeViewerPanel {
   private _disposables: vscode.Disposable[] = [];
   private _disposed = false;
   private _rows: DiffiniteReport["results"] = [];
+  private _unpaired: UnpairedFileRow[] = [];
+  private _selectable = new Set<string>();
   private _dirs: SourceDirs;
 
   // Callback invoked when user clicks "Generate report"
@@ -59,7 +118,7 @@ export class TreeViewerPanel {
 
     const panel = vscode.window.createWebviewPanel(
       "diffiniteTreeViewer",
-      "Diffinite — Review & Select",
+      "Diffinite: Review and Select",
       vscode.ViewColumn.Active,
       {
         enableScripts: true,
@@ -87,8 +146,9 @@ export class TreeViewerPanel {
       async (message) => {
         switch (message?.command) {
           case "generate": {
-            // Only accept file-A paths that are rows of this report.
-            const known = new Set(this._rows.map((r) => r.file_a));
+            // Only accept file-A paths this report lists (1:1 rows, Deep
+            // Compare rows and unmatched A files).
+            const known = this._selectable;
             const selectedFiles: string[] = Array.isArray(message.files)
               ? message.files.filter((f: unknown): f is string => typeof f === "string" && known.has(f))
               : [];
@@ -105,6 +165,15 @@ export class TreeViewerPanel {
             await this.openDiff(this._rows[index]);
             return;
           }
+          case "openDeepDiff": {
+            const index = message.index;
+            if (!Number.isInteger(index) || index < 0 || index >= this._unpaired.length) { return; }
+            const row = this._unpaired[index];
+            if (row.best) {
+              await this.openDiff({ file_a: row.file_a, file_b: row.best.file_b }, "best Deep Compare match");
+            }
+            return;
+          }
           case "cancel":
             this.dispose();
             return;
@@ -115,7 +184,10 @@ export class TreeViewerPanel {
     );
   }
 
-  private async openDiff(row: DiffiniteReport["results"][number]): Promise<void> {
+  private async openDiff(
+    row: { file_a: string; file_b: string },
+    relation = "original files",
+  ): Promise<void> {
     const fileA = resolveInside(this._dirs.dirA, row.file_a);
     const fileB = resolveInside(this._dirs.dirB, row.file_b);
     if (!fileA || !fileB) {
@@ -126,7 +198,7 @@ export class TreeViewerPanel {
       "vscode.diff",
       vscode.Uri.file(fileA),
       vscode.Uri.file(fileB),
-      `A: ${row.file_a} ↔ B: ${row.file_b} (original files)`,
+      `A: ${row.file_a} vs. B: ${row.file_b} (${relation})`,
       { viewColumn: vscode.ViewColumn.Beside, preview: true, preserveFocus: true },
     );
   }
@@ -144,6 +216,8 @@ export class TreeViewerPanel {
 
   private update(report: DiffiniteReport) {
     this._rows = sortForReview(report);
+    this._unpaired = buildUnpairedRows(report);
+    this._selectable = selectableFilesA(report);
     this._panel.webview.html = buildTreeViewerHtml(report, this._rows, getNonce());
   }
 }
@@ -157,21 +231,30 @@ export function buildTreeViewerHtml(
   const summary = buildReviewSummary(report);
 
   const bannersHtml = view.banners.map((banner) => `
-      <div class="banner ${banner.kind}" role="${banner.kind === "warning" ? "alert" : "note"}">
-        <strong>${escHtml(banner.title)}</strong><br>${escHtml(banner.message)}
+      <div class="notice ${banner.kind}" role="${banner.kind === "warning" ? "alert" : "note"}">
+        <span class="notice-title">${escHtml(banner.title)}</span>
+        <span class="notice-body">${escHtml(banner.message)}</span>
       </div>`).join("");
 
   const factsHtml = summary.facts.map((f) => `
-        <div class="fact${f.attention ? " attention" : ""}"><dt>${escHtml(f.label)}</dt><dd>${escHtml(f.value)}</dd></div>`).join("");
+        <div class="fact"><dt>${escHtml(f.label)}</dt><dd class="num">${escHtml(f.value)}</dd></div>`).join("");
   const settingsHtml = summary.settings.map((s) => `<li>${escHtml(s)}</li>`).join("");
+  // The inconclusive notice is stated only when a match on this screen is marked inconclusive.
+  const anyInconclusive = view.deepRows.some((row) => row.kind === "inconclusive");
+  const noticesHtml = [...SCREEN_NOTICES, ...(anyInconclusive ? [INCONCLUSIVE_NOTICE] : [])]
+    .map((n) => `<li>${escHtml(n)}</li>`).join("");
+  const unit = changeUnit(report.comparison_unit);
 
+  const metric = matchMetricName(report.comparison_unit);
+  const deepCandidates = deepCandidateFiles(report);
+  const unpaired = buildUnpairedRows(report);
   let rowsHtml = "";
   rows.forEach((r, idx) => {
     const ratioPct = similarityText(r);
-    const nameSimPct = r.name_similarity.toFixed(1) + "%";
-    // Pre-selection (unchanged from earlier versions): pairs whose content
-    // similarity is above 0%. The user can change any of them.
-    const defaultChecked = r.ratio > 0.0 ? "checked" : "";
+    const nameSimPct = nameSimilarityLabel(r.name_similarity);
+    // Pre-selection: pairs whose line (or word) match is above 0%, and A files
+    // with a Deep Compare match not marked inconclusive. The user can change any of them.
+    const defaultChecked = r.ratio > 0.0 || deepCandidates.has(r.file_a) ? "checked" : "";
     const status = r.error ? `Error: ${r.error}` : r.binary ? "Hash only" : "";
     const kind = r.error ? "error" : r.binary ? "binary" : "ok";
     rowsHtml += `
@@ -180,17 +263,45 @@ export function buildTreeViewerHtml(
               aria-label="Include ${escHtml(r.file_a)} in the report"></td>
           <td class="c-path mono">${escHtml(r.file_a)}</td>
           <td class="c-path mono">${escHtml(r.file_b)}</td>
-          <td class="c-num">${nameSimPct}</td>
-          <td class="c-num"><strong>${escHtml(ratioPct)}</strong></td>
-          <td class="c-num"><span class="added">+${r.additions}</span> <span class="deleted">&minus;${r.deletions}</span></td>
+          <td class="c-num num">${nameSimPct}</td>
+          <td class="c-num num c-primary">${escHtml(ratioPct)}</td>
+          <td class="c-num num">${hasLineCounts(r)
+            ? `<span class="added">${addedCountLabel(r.additions)}</span> <span class="deleted">${deletedCountLabel(r.deletions)}</span>`
+            : `<span class="dim" title="Not compared line by line">n/a</span>`}</td>
           <td class="c-status${r.error ? " error" : ""}">${escHtml(status)}</td>
           <td class="c-act"><button type="button" class="btn-link open-diff" data-index="${idx}"
-              title="Open the two original files in VS Code's diff editor">Diff</button></td>
+              title="Open the two original files in VS Code's diff editor"
+              aria-label="Open ${escHtml(r.file_a)} and ${escHtml(r.file_b)} in the diff editor">Open</button></td>
         </tr>`;
   });
 
-  const emptyHtml = rows.length === 0
-    ? `<p class="empty">No matched file pairs. There is nothing to select for a pair-by-pair report.</p>`
+  unpaired.forEach((u, idx) => {
+    const target = u.best
+      ? `Deep Compare: ${u.best.file_b}${u.deepMatchCount > 1 ? ` and ${countLabel(u.deepMatchCount - 1)} more` : ""}`
+      : "No 1:1 pair";
+    const status = u.deepMatchCount > 0
+      ? `No 1:1 pair; ${plural(u.deepMatchCount, "Deep Compare match", "Deep Compare matches")}${u.hasCandidate ? "" : " (inconclusive)"}`
+      : "Only in A (no match)";
+    const jaccard = u.best ? `Jaccard ${overlapLabel(u.best.jaccard)}` : "n/a";
+    rowsHtml += `
+        <tr data-kind="nopair" data-search="${escHtml((u.file_a + "\n" + (u.best?.file_b ?? "")).toLowerCase())}">
+          <td class="c-inc"><input type="checkbox" class="file-cb" value="${escHtml(u.file_a)}" ${u.hasCandidate ? "checked" : ""}
+              aria-label="Include ${escHtml(u.file_a)} in the report"></td>
+          <td class="c-path mono">${escHtml(u.file_a)}</td>
+          <td class="c-path mono dim">${escHtml(target)}</td>
+          <td class="c-num num dim">n/a</td>
+          <td class="c-num num c-primary">${escHtml(jaccard)}</td>
+          <td class="c-num num dim">n/a</td>
+          <td class="c-status">${escHtml(status)}</td>
+          <td class="c-act">${u.best ? `<button type="button" class="btn-link open-deep-diff" data-index="${idx}"
+              title="Open A and its best Deep Compare match in VS Code's diff editor"
+              aria-label="Open ${escHtml(u.file_a)} and ${escHtml(u.best.file_b)} in the diff editor">Open</button>` : ""}</td>
+        </tr>`;
+  });
+  const totalRows = rows.length + unpaired.length;
+
+  const emptyHtml = totalRows === 0
+    ? `<p class="empty">No matched file pairs and no other files in A. There is nothing to select.</p>`
     : "";
 
   return `<!DOCTYPE html>
@@ -203,29 +314,35 @@ export function buildTreeViewerHtml(
 </head>
 <body>
   <main>
-    <h1>Review results and select files for the report</h1>
-    <p class="dim">Analysis finished. Check the summary, then choose which pairs the report will include.</p>
+    <header class="page-head">
+      <h1>Review results and select files for the report</h1>
+      <p class="dim">Check the summary, then select the pairs the report will include.</p>
+    </header>
 
     <section aria-labelledby="sum-h">
       <h2 id="sum-h">Summary</h2>
+      ${bannersHtml}
       <dl class="facts">${factsHtml}
       </dl>
       <details>
         <summary>Settings used for this analysis</summary>
         <ul class="settings">${settingsHtml}</ul>
       </details>
-      ${bannersHtml}
-      <p class="dim note">Values are measurements of textual similarity. They do not say whether code was copied or whether any right was infringed.</p>
+      <h3 class="notices-h">Scope and limitations</h3>
+      <ol class="notices">${noticesHtml}</ol>
     </section>
 
     <section aria-labelledby="sel-h">
       <h2 id="sel-h">Select pairs</h2>
       <div class="selection-note">
-        <strong>How the selection is used:</strong>
-        the report renders only the checked pairs (matched by the file in A).
-        Lists of unmatched files are omitted from a selective report.
-        Pre-selected: pairs with content similarity above 0%, and hash-only pairs whose SHA-256 hashes are identical.
-        <em>Diff</em> opens the original files in VS Code's diff editor, without Diffinite's preprocessing.
+        The report covers only the checked files in A, with their 1:1 pair and their Deep Compare matches.
+        Files in A without a 1:1 pair are listed after the pairs, so renamed or moved files can be included.
+        Deep Compare matches of unchecked files are not in the report.
+        In a selective report, the list of files only in B is omitted and the list of files only in A shows only the selected A files;
+        the report states how many unmatched files were omitted.
+        Pre-selected: pairs with ${metric.toLowerCase()} above 0%, hash-only pairs with identical SHA-256 digests,
+        and files in A with a Deep Compare match that is not marked inconclusive.
+        Open, in the Diff column, shows the original files in the VS Code diff editor, without preprocessing.
       </div>
       <div class="toolbar" role="toolbar" aria-label="Filter and select">
         <input type="search" id="search" placeholder="Search file names in A or B" aria-label="Search file names">
@@ -235,28 +352,31 @@ export function buildTreeViewerHtml(
           <option value="unchecked">Show: not selected</option>
           <option value="error">Show: errors (${summary.errorPairs})</option>
           <option value="binary">Show: hash only (${summary.binaryPairs})</option>
+          <option value="nopair">Show: no 1:1 pair (${unpaired.length})</option>
         </select>
-        <button type="button" class="btn-secondary" id="btn-all">Select shown</button>
-        <button type="button" class="btn-secondary" id="btn-none">Clear shown</button>
-        <span id="shown-count" class="dim" aria-live="polite"></span>
+        <span class="toolbar-group">
+          <button type="button" class="btn-secondary" id="btn-all">Select shown</button>
+          <button type="button" class="btn-secondary" id="btn-none">Clear shown</button>
+        </span>
+        <span id="shown-count" class="dim shown-count" aria-live="polite"></span>
       </div>
       ${emptyHtml}
       <div class="table-wrap">
-        <table>
+        <table class="pairs">
           <colgroup>
-            <col style="width:40px"><col><col><col style="width:68px"><col style="width:96px">
-            <col style="width:92px"><col style="width:96px"><col style="width:48px">
+            <col class="w-inc"><col><col><col class="w-num"><col class="w-num-l">
+            <col class="w-num-l"><col class="w-status"><col class="w-act">
           </colgroup>
           <thead>
             <tr>
-              <th scope="col" class="c-inc">Inc.</th>
+              <th scope="col" class="c-inc">Include</th>
               <th scope="col">File A (original)</th>
               <th scope="col">File B (compared)</th>
-              <th scope="col" class="c-num" title="Similarity of the file names (0–100)">Name sim.</th>
-              <th scope="col" class="c-num" title="Share of matching lines (or words). Hash-only pairs show only whether the SHA-256 hashes are identical.">Content sim.</th>
-              <th scope="col" class="c-num" title="+ lines only in B, − lines only in A">Changes</th>
+              <th scope="col" class="c-num" title="Similarity of the file names">Name similarity</th>
+              <th scope="col" class="c-num" title="Share of matching ${report.comparison_unit === "word" ? "words" : "lines"}. Hash-only pairs show only whether the SHA-256 digests are identical.">${escHtml(metric)}</th>
+              <th scope="col" class="c-num" title="${escHtml(`+: ${unit} only in B. −: ${unit} only in A.`)}">Changes</th>
               <th scope="col">Status</th>
-              <th scope="col"><span class="sr-only">Actions</span></th>
+              <th scope="col" class="c-act">Diff</th>
             </tr>
           </thead>
           <tbody id="file-list">${rowsHtml}
@@ -267,7 +387,7 @@ export function buildTreeViewerHtml(
   </main>
 
   <footer class="footer">
-    <div aria-live="polite"><strong id="sel-count">0</strong> of ${rows.length} pairs selected</div>
+    <div class="footer-status" aria-live="polite"><span id="sel-count" class="sel-count">0</span> of ${plural(totalRows, "A file")} selected</div>
     <div class="footer-actions">
       <button type="button" class="btn-secondary" id="btn-cancel">Close</button>
       <button type="button" class="btn-primary" id="btn-generate">Generate report</button>
@@ -281,51 +401,72 @@ export function buildTreeViewerHtml(
 
 const TREE_CSS = `
   * { box-sizing: border-box; }
-  body { margin: 0; font-size: 13px; }
-  main { padding: 16px 20px 8px; }
-  h1 { font-size: 18px; font-weight: 600; margin: 0 0 4px; }
-  h2 { font-size: 14px; font-weight: 600; margin: 18px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
-  .dim { color: var(--fg-dim); }
-  .note { font-size: 12px; margin: 8px 0 0; }
-  .facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; margin: 0; }
-  .fact { border: 1px solid var(--border); background: var(--bg-surface); border-radius: 4px; padding: 5px 8px;
-          display: flex; flex-direction: column-reverse; justify-content: flex-end; }
-  .fact dt { color: var(--fg-dim); font-size: 11px; line-height: 1.3; }
-  .fact dd { margin: 0; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
-  .fact.attention { border-color: var(--warning); border-left-width: 4px; }
-  details { margin: 10px 0; }
-  summary { cursor: pointer; color: var(--accent); }
-  .settings { margin: 6px 0 0; padding-left: 20px; color: var(--fg-dim); font-size: 12px; }
-  .banner { margin: 8px 0; padding: 8px 10px; border-radius: 4px; border: 1px solid var(--info); border-left-width: 4px; }
-  .banner.warning { border-color: var(--warning); }
-  .selection-note { font-size: 12px; padding: 8px 10px; border-left: 3px solid var(--accent); background: var(--bg-surface); margin-bottom: 10px; }
-  .toolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
-  .toolbar input[type=search] { flex: 1 1 220px; min-width: 0; padding: 4px 6px; }
-  .toolbar select { padding: 3px 4px; }
-  .table-wrap { overflow-x: auto; }
-  table { width: 100%; min-width: 600px; border-collapse: collapse; table-layout: fixed; font-size: 12px; }
-  th, td { border: 1px solid var(--border); padding: 5px 6px; text-align: left; vertical-align: top; }
-  th { background: var(--bg-surface); position: sticky; top: 0; z-index: 1; font-weight: 600; }
-  tbody tr:hover { background: var(--hover-bg); }
-  .c-inc { text-align: center; }
-  .c-num { text-align: right; }
+  html, body { overflow-x: hidden; }
+  body { margin: 0; min-height: 100vh; display: flex; flex-direction: column; }
+  main { flex: 1; padding: var(--sp-4) var(--sp-5) var(--sp-4); max-width: 1400px; width: 100%; }
+  .page-head { margin-bottom: var(--sp-4); }
+  h1 { font-size: var(--fs-h1); font-weight: 600; margin: 0 0 var(--sp-1); line-height: 1.3; }
+  .page-head p { margin: 0; }
+  h2 { font-size: var(--fs-h2); font-weight: 600; margin: var(--sp-5) 0 var(--sp-2);
+       padding-bottom: var(--sp-1); border-bottom: 1px solid var(--border); }
+  section:first-of-type h2 { margin-top: 0; }
+  .note { font-size: var(--fs-sm); margin: var(--sp-2) 0 0; }
+
+  /* Summary facts: one label | value ledger, figures right-aligned. A single
+     column keeps every rule aligned when a long label wraps. */
+  .facts { margin: var(--sp-3) 0 0; max-width: 760px; border-top: 1px solid var(--border); }
+  .fact { display: grid; grid-template-columns: minmax(0, 1fr) minmax(8ch, max-content); column-gap: var(--sp-5);
+          align-items: baseline; padding: 3px var(--sp-2); border-bottom: 1px solid var(--border); }
+  .fact dt { color: var(--fg-dim); min-width: 0; overflow-wrap: anywhere; }
+  .fact dd { margin: 0; overflow-wrap: anywhere; white-space: normal; }
+  .notices-h { font-size: var(--fs-sm); font-weight: 600; margin: var(--sp-4) 0 var(--sp-1); }
+  .notices { margin: 0; padding-left: var(--sp-5); font-size: var(--fs-sm); color: var(--fg-dim); max-width: 120ch; }
+  .notices li { margin: 2px 0; }
+
+  details { margin: var(--sp-3) 0 0; }
+  summary { cursor: pointer; color: var(--fg); width: fit-content; }
+  summary:hover { color: var(--accent); }
+  .settings { margin: var(--sp-2) 0 0; padding-left: var(--sp-5); color: var(--fg-dim); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+  .settings li { margin: 2px 0; }
+
+  .selection-note { font-size: var(--fs-sm); color: var(--fg-dim); max-width: 120ch; margin: 0 0 var(--sp-3); }
+
+  .toolbar { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; margin-bottom: var(--sp-2); }
+  .toolbar input[type=search] { flex: 1 1 240px; min-width: 0; height: var(--control-h); padding: 2px 6px; }
+  .toolbar select { height: var(--control-h); padding: 0 4px; max-width: 100%; }
+  .toolbar-group { display: inline-flex; gap: var(--sp-1); }
+  .shown-count { font-size: var(--fs-sm); margin-left: auto; }
+
+  /* Pair table: rules between rows only, as in VS Code lists and tables. */
+  .table-wrap { overflow-x: auto; border-top: 1px solid var(--border); }
+  table.pairs { width: 100%; min-width: 780px; border-collapse: collapse; table-layout: fixed; }
+  .w-inc { width: 64px; } .w-num { width: 120px; } .w-num-l { width: 104px; } .w-status { width: 136px; } .w-act { width: 56px; }
+  .pairs th, .pairs td { padding: 4px var(--sp-2); text-align: left; vertical-align: top; border-bottom: 1px solid var(--border); }
+  .pairs th { position: sticky; top: 0; z-index: 1; background: var(--bg); font-size: var(--fs-sm); font-weight: 600;
+              color: var(--fg-dim); vertical-align: bottom; }
+  .pairs tbody tr:hover { background: var(--hover-bg); }
+  .pairs td.mono { font-size: var(--fs-sm); }
+  .c-inc { text-align: center !important; }
+  .c-inc input { vertical-align: middle; }
+  .c-num { text-align: right !important; }
+  .c-primary { color: var(--fg); }
   .c-path { overflow-wrap: anywhere; word-break: break-word; }
-  .c-status { font-size: 11px; overflow-wrap: anywhere; }
+  .c-status { font-size: var(--fs-sm); color: var(--fg-dim); overflow-wrap: anywhere; }
   .c-status.error { color: var(--error); }
-  .added { color: var(--added-fg); }
-  .deleted { color: var(--deleted-fg); }
-  .empty { padding: 12px; border: 1px dashed var(--border); }
+  .c-act { text-align: right !important; }
+  .added, .deleted { color: inherit; }
+  .empty { padding: var(--sp-3); border: 1px dashed var(--border); color: var(--fg-dim); }
   tr[hidden] { display: none; }
-  button { border-radius: 2px; padding: 4px 12px; cursor: pointer; border: 1px solid transparent; }
-  .btn-primary { background: var(--btn-bg); color: var(--btn-fg); font-weight: 600; }
-  .btn-primary:hover:not(:disabled) { background: var(--btn-hover); }
-  .btn-secondary { background: var(--btn2-bg); color: var(--btn2-fg); border-color: var(--border); }
-  .btn-secondary:hover:not(:disabled) { background: var(--btn2-hover); }
-  .btn-link { background: none; color: var(--accent); padding: 0 2px; text-decoration: underline; }
-  .footer { position: sticky; bottom: 0; display: flex; justify-content: space-between; align-items: center; gap: 12px;
-            padding: 10px 20px; background: var(--bg-surface); border-top: 1px solid var(--border); }
-  .footer-actions { display: flex; gap: 8px; }
-  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+  .footer { position: sticky; bottom: 0; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center;
+            gap: var(--sp-2) var(--sp-3); padding: var(--sp-2) var(--sp-5); background: var(--bg-surface); border-top: 1px solid var(--border); }
+  .sel-count { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .footer-actions { display: flex; gap: var(--sp-2); margin-left: auto; }
+  @media (max-width: 600px) {
+    main { padding: var(--sp-3) var(--sp-4); }
+    .footer { padding: var(--sp-2) var(--sp-4); }
+    .shown-count { margin-left: 0; flex-basis: 100%; }
+  }
 `;
 
 const TREE_JS = `
@@ -343,7 +484,7 @@ const TREE_JS = `
     let count = 0;
     boxes.forEach(cb => { if (cb.checked) count++; });
     countLabel.textContent = String(count);
-    genBtn.textContent = 'Generate report (' + count + ' pairs)';
+    genBtn.textContent = 'Generate report (' + count + (count === 1 ? ' file)' : ' files)');
     genBtn.disabled = count === 0;
   }
 
@@ -356,13 +497,13 @@ const TREE_JS = `
       let visible = !q || row.dataset.search.indexOf(q) !== -1;
       if (visible && mode === 'checked') visible = cb.checked;
       if (visible && mode === 'unchecked') visible = !cb.checked;
-      if (visible && (mode === 'error' || mode === 'binary')) visible = row.dataset.kind === mode;
+      if (visible && (mode === 'error' || mode === 'binary' || mode === 'nopair')) visible = row.dataset.kind === mode;
       row.hidden = !visible;
       if (visible) shown++;
     });
     const hiddenSelected = boxes.filter((cb, i) => cb.checked && rows[i].hidden).length;
     shownLabel.textContent = 'Showing ' + shown + ' of ' + rows.length +
-      (hiddenSelected ? ' · ' + hiddenSelected + ' selected pair(s) hidden by the filter' : '');
+      (hiddenSelected ? '; ' + hiddenSelected + (hiddenSelected === 1 ? ' selected row is' : ' selected rows are') + ' hidden by the filter' : '');
   }
 
   function setShown(checked) {
@@ -375,6 +516,8 @@ const TREE_JS = `
   document.getElementById('file-list').addEventListener('click', (e) => {
     const btn = e.target.closest('.open-diff');
     if (btn) vscode.postMessage({ command: 'openDiff', index: Number(btn.dataset.index) });
+    const deepBtn = e.target.closest('.open-deep-diff');
+    if (deepBtn) vscode.postMessage({ command: 'openDeepDiff', index: Number(deepBtn.dataset.index) });
   });
   search.addEventListener('input', applyFilter);
   filter.addEventListener('change', applyFilter);

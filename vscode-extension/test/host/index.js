@@ -66,11 +66,11 @@ async function run() {
     let tabs = [];
     for (let i = 0; i < 50; i++) {
       tabs = vscode.window.tabGroups.all.flatMap((g) => g.tabs.map((t) => t.label));
-      if (tabs.some((t) => /Help|Manual/i.test(t)) && tabs.some((t) => /Diffinite — Analysis/.test(t))) { break; }
+      if (tabs.some((t) => /Help|Manual/i.test(t)) && tabs.some((t) => /^Diffinite: Analysis$/.test(t))) { break; }
       await new Promise((r) => setTimeout(r, 100));
     }
     assert.ok(tabs.some((t) => /Help|Manual/i.test(t)), `help tab missing: ${tabs}`);
-    assert.ok(tabs.some((t) => /Diffinite — Analysis/.test(t)), `options tab missing: ${tabs}`);
+    assert.ok(tabs.some((t) => /^Diffinite: Analysis$/.test(t)), `options tab missing: ${tabs}`);
     return { tabs };
   });
 
@@ -103,6 +103,14 @@ async function run() {
     fs.writeFileSync(filter, JSON.stringify(selected()), "utf8");
     const opts = { ...model.defaultAnalysisOptions(), filterJson: filter, workers: 1 };
     phase2 = await runner.runAnalysis(dirA, dirB, opts, noProgress, neverCancelled);
+    // An empty result would make the checks below pass vacuously: phase 2 must
+    // return exactly the pairs selected from phase 1.
+    assert.ok(phase2.results.length > 0, "phase 2 returned no pairs");
+    assert.deepEqual(
+      phase2.results.map((r) => r.file_a).sort(),
+      selected().slice().sort(),
+      "phase 2 did not return the selected pairs",
+    );
     assert.ok(phase2.results.every((r) => typeof r.html_diff === "string"));
     const context = { subscriptions: [], extensionPath: ext.extensionPath };
     mod("resultViewer.js").showResults(context, phase2, { ...opts, selectedFiles: selected() }, { dirA, dirB });
@@ -130,6 +138,39 @@ async function run() {
     const opts = { ...model.defaultAnalysisOptions(), metricsOnly: true, workers: 1, binaryHandling: "exclude", mode: "simple" };
     const r = await runner.runAnalysis(path.join(fixtures, "binx", "A"), path.join(fixtures, "binx", "B"), opts, noProgress, neverCancelled);
     return { rows: r.results.length, requested: r.analysis_status.diff.requested_pair_count };
+  });
+
+  await step(results, "sensitive files: excluded by default, stop and include modes", async () => {
+    const root = fs.mkdtempSync(path.join(fixtures, "sensitive-"));
+    for (const side of ["A", "B"]) {
+      fs.mkdirSync(path.join(root, side), { recursive: true });
+      fs.writeFileSync(path.join(root, side, "a.py"), "def f():\n    return 1\n", "utf8");
+      fs.writeFileSync(path.join(root, side, ".env"), "API_KEY=HOST_SENTINEL\n", "utf8");
+    }
+    const [a, b] = [path.join(root, "A"), path.join(root, "B")];
+    const base = { ...model.defaultAnalysisOptions(), metricsOnly: true, workers: 1, mode: "simple" };
+
+    const excluded = await runner.runAnalysis(a, b, base, noProgress, neverCancelled);
+    assert.deepEqual(excluded.results.map((r) => r.file_a), ["a.py"]);
+    assert.equal(excluded.analysis_status.exclusion.excluded_count, 2);
+    assert.equal(excluded.metadata.sensitive_files, "exclude");
+    const fact = mod("reviewSummary.js").buildReviewSummary(excluded).facts
+      .find((f) => f.label === "Inputs excluded by policy");
+    assert.equal(fact.value, "2");
+
+    let err = null;
+    try {
+      await runner.runAnalysis(a, b, { ...base, sensitiveFiles: "error" }, noProgress, neverCancelled);
+    } catch (e) {
+      err = e;
+    }
+    assert.ok(err, "error mode did not stop the analysis");
+    const kind = mod("failureClassifier.js").classifyFailure(err).kind;
+    assert.equal(kind, "sensitive-found", `classified as ${kind}: ${err.message}`);
+
+    const included = await runner.runAnalysis(a, b, { ...base, sensitiveFiles: "include" }, noProgress, neverCancelled);
+    assert.deepEqual(included.results.map((r) => r.file_a).sort(), [".env", "a.py"]);
+    return { excluded: 2, errorKind: kind, includedRows: included.results.length };
   });
 
   await step(results, "cancellation is reported as cancelled", async () => {

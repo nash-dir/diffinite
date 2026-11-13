@@ -1,13 +1,16 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
 import { showOptionsPanel } from "./optionsPanel";
-import { runAnalysis, DiffiniteOptions } from "./runner";
+import { runAnalysisWithInputs, DiffiniteOptions } from "./runner";
+import type { IgnoreSnapshot } from "./analysisModel";
+import { compareReviewedRuns, readIgnoreSnapshot, snapshotRules } from "./inputFreeze";
 import { showResults } from "./resultViewer";
 import { TreeViewerPanel } from "./treeViewer";
-import { scanAndEstimate, estimatePhase2Time } from "./dirScanner";
+import { scanAndEstimate, estimatePhase2Time, ScanResult } from "./dirScanner";
 import { createTempJsonFile } from "./tempFiles";
 import { RunGate } from "./runGate";
 import { showFailure } from "./failureNotice";
+import { plural } from "./labels";
 
 const phase1RunGate = new RunGate();
 
@@ -33,7 +36,7 @@ export async function executePipeline(
 ): Promise<void> {
   // Prevent parallel Phase 1 execution if a TreeViewer is already pending user action
   if (TreeViewerPanel.currentPanel) {
-    vscode.window.showWarningMessage("Diffinite: An evidence selection panel (Tree Viewer) is already open. Please complete or close it before running a new analysis.");
+    vscode.window.showWarningMessage("Diffinite: The Review and Select panel is open. Generate the report or close the panel before starting a new analysis.");
     return;
   }
   if (!phase1RunGate.tryEnter()) {
@@ -43,64 +46,64 @@ export async function executePipeline(
 
   try {
     if (!dirA || !dirB) {
-      vscode.window.showErrorMessage("Diffinite: Both Directory A and Directory B must be specified.");
+      vscode.window.showErrorMessage("Diffinite: Enter both Directory A and Directory B.");
       return;
     }
     if (!fs.existsSync(dirA) || !fs.statSync(dirA).isDirectory()) {
-      vscode.window.showErrorMessage(`Directory A is invalid or not a directory: ${dirA}`);
+      vscode.window.showErrorMessage(`Diffinite: Directory A does not exist or is not a folder: ${dirA}`);
       return;
     }
     if (!fs.existsSync(dirB) || !fs.statSync(dirB).isDirectory()) {
-      vscode.window.showErrorMessage(`Directory B is invalid or not a directory: ${dirB}`);
+      vscode.window.showErrorMessage(`Diffinite: Directory B does not exist or is not a folder: ${dirB}`);
       return;
     }
 
-    // Predict time complexity
-    const scanMsg = vscode.window.setStatusBarMessage("Diffinite: Scanning files for time estimation...");
-    const scan = scanAndEstimate(dirA, dirB);
-    scanMsg.dispose();
-  
-    // 5 MB: rough heuristic for "a side-by-side HTML diff gets slow", not measured.
-    // Non-blocking notice only; memory protection is the CLI's --max-file-size.
-    if (scan.maxPairSizeMB >= 5) {
-      vscode.window.showWarningMessage(
-        `Diffinite large-file notice: a same-path file pair is ${scan.maxPairSizeMB.toFixed(1)}MB. ` +
-        `Rendering HTML diff tables for files this large may be slow. Analysis continues. ` +
-        `(Rough est. Simple: ~${scan.simpleTimeSeconds}s | Deep: ~${scan.deepTimeSeconds}s)`
-      );
-    } else {
-      vscode.window.showInformationMessage(
-        `Diffinite rough estimate (${scan.matchedPairsCount} files share an identical relative path; ` +
-        `actual pairing is done by the analyzer): ` +
-        `[Simple Mode: ~${scan.simpleTimeSeconds}s] [Deep Mode: ~${scan.deepTimeSeconds}s]`
-      );
+    // Freeze the exclusion list once. Phase 1, Phase 2 and every export of
+    // this analysis use these exact bytes, whatever happens to the file later.
+    let ignoreSnapshot: IgnoreSnapshot | null;
+    try {
+      ignoreSnapshot = readIgnoreSnapshot();
+    } catch (err: unknown) {
+      void showFailure("analysis (Phase 1)", err);
+      return;
     }
 
-    const expectedPhase1Secs = options.mode === "deep" ? scan.deepPhase1Secs : scan.simplePhase1Secs;
-
     try {
-      // Phase 1: Metrics Only (Fast Scan)
-      const phase1Opts = { ...options, metricsOnly: true };
-      const phase1Start = Date.now();
-    
-    const report1 = await vscode.window.withProgress(
-      {
-        location: vscode.ProgressLocation.Notification,
-        title: "Diffinite (Phase 1): Scanning and matching files…",
-        cancellable: true,
-      },
-      (progress, token) => runAnalysis(dirA, dirB, phase1Opts, progress, token)
-    );
-    
-    const actualPhase1Secs = Math.max(0.1, (Date.now() - phase1Start) / 1000);
-    const safeExpectedSecs = Math.max(0.1, expectedPhase1Secs);
-    const cpuMultiplier = actualPhase1Secs / safeExpectedSecs;
+      // Phase 1: Metrics Only (Fast Scan). Unmatched lists are always kept
+      // inline here so every A file the user may select is visible for review.
+      const phase1Opts: DiffiniteOptions = {
+        ...options, metricsOnly: true, uncomparedFiles: "inline", ignoreSnapshot,
+      };
+      let expectedPhase1Secs = 0;
+      let phase1Start = Date.now();
 
-    // Show Tree Viewer instead of Result Viewer
+      const phase1 = await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: "Diffinite (Phase 1): Scanning and matching files",
+          cancellable: true,
+        },
+        async (progress, token) => {
+          progress.report({ message: "Counting files for a time estimate" });
+          const scan = await scanAndEstimate(dirA, dirB, snapshotRules(ignoreSnapshot), token);
+          if (!scan) { throw new Error("Analysis canceled by user."); }
+          showEstimate(scan);
+          expectedPhase1Secs = options.mode === "deep" ? scan.deepPhase1Secs : scan.simplePhase1Secs;
+          phase1Start = Date.now();
+          return runAnalysisWithInputs(dirA, dirB, phase1Opts, progress, token);
+        },
+      );
+      const report1 = phase1.report;
+
+      const actualPhase1Secs = Math.max(0.1, (Date.now() - phase1Start) / 1000);
+      const safeExpectedSecs = Math.max(0.1, expectedPhase1Secs);
+      const cpuMultiplier = actualPhase1Secs / safeExpectedSecs;
+
+      // Show Tree Viewer instead of Result Viewer
       TreeViewerPanel.createOrShow(report1, { dirA, dirB }, async (selectedFiles) => {
         // Phase 2 callback: when user clicks "Generate Final Report"
         if (selectedFiles.length === 0) {
-          vscode.window.showInformationMessage("Diffinite: No files selected. Aborting.");
+          vscode.window.showInformationMessage("Diffinite: No files selected. No report was generated.");
           return;
         }
 
@@ -110,16 +113,29 @@ export async function executePipeline(
           const filterJsonPath = temporaryFilter.filePath;
           fs.writeFileSync(filterJsonPath, JSON.stringify(selectedFiles), "utf-8");
 
-          const phase2Opts = { ...options, filterJson: filterJsonPath };
+          const phase2Opts = { ...options, filterJson: filterJsonPath, ignoreSnapshot };
           const phase2EstSecs = estimatePhase2Time(selectedFiles, dirA, dirB, cpuMultiplier);
-          const report2 = await vscode.window.withProgress(
-          {
-            location: vscode.ProgressLocation.Notification,
-            title: `Diffinite (Phase 2): Rendering targeted report (${selectedFiles.length} files, rough est. ~${phase2EstSecs}s)…`,
-            cancellable: true,
-          },
-          (progress, token) => runAnalysis(dirA, dirB, phase2Opts, progress, token)
-        );
+          const phase2 = await vscode.window.withProgress(
+            {
+              location: vscode.ProgressLocation.Notification,
+              title: `Diffinite (Phase 2): Rendering the report for ${plural(selectedFiles.length, "file")}, estimated ${phase2EstSecs} s`,
+              cancellable: true,
+            },
+            (progress, token) => runAnalysisWithInputs(dirA, dirB, phase2Opts, progress, token)
+          );
+          const report2 = phase2.report;
+
+          // Phase 2 re-reads the source folders. Confirm it analysed the same
+          // inputs and paired the selected files as the user reviewed them.
+          const reviewWarnings = compareReviewedRuns(
+            phase1, phase2, selectedFiles, ignoreSnapshot?.sha256 ?? null,
+          );
+          if (reviewWarnings.length) {
+            void vscode.window.showWarningMessage(
+              "Diffinite: the final report does not match the analysis you reviewed.",
+              { modal: true, detail: reviewWarnings.join("\n\n") },
+            );
+          }
 
           // Final phase: show full interactive diff viewing results
           // Keep privileged local source paths in extension-host memory only;
@@ -127,8 +143,12 @@ export async function executePipeline(
           showResults(
             context,
             report2,
-            { ...options, selectedFiles: [...selectedFiles] },
+            {
+              ...options, selectedFiles: [...selectedFiles],
+              ignoreSnapshot, reviewedInputs: phase2.inputs,
+            },
             { dirA, dirB },
+            reviewWarnings,
           );
 
         } catch (err: unknown) {
@@ -143,5 +163,22 @@ export async function executePipeline(
     }
   } finally {
     phase1RunGate.leave();
+  }
+}
+
+function showEstimate(scan: ScanResult): void {
+  // 5 MB: rough heuristic for "a side-by-side HTML diff gets slow", not measured.
+  // Non-blocking notice only; memory protection is the CLI's --max-file-size.
+  if (scan.maxPairSizeMB >= 5) {
+    vscode.window.showWarningMessage(
+      `Diffinite: A file pair with the same path is ${scan.maxPairSizeMB.toFixed(1)} MB. ` +
+      `Diff tables for files of this size take longer to render. The analysis continues. ` +
+      `Estimated time: Simple ${scan.simpleTimeSeconds} s, Deep ${scan.deepTimeSeconds} s.`
+    );
+  } else {
+    vscode.window.showInformationMessage(
+      `Diffinite: Estimated time: Simple ${scan.simpleTimeSeconds} s, Deep ${scan.deepTimeSeconds} s ` +
+      `(${scan.matchedPairsCount} files share a relative path; the analyzer does the final pairing).`
+    );
   }
 }

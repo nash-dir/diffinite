@@ -8,6 +8,8 @@
  * value. `analysisArgs()` lets tests assert exactly that.
  */
 import { buildCoreArgs, DiffiniteOptions } from "./analysisModel";
+import { countLabel, plural } from "./labels";
+import { INTEGRITY_NOTICE } from "./notices";
 
 export type ReportPresetId = "configured" | "technical" | "evidence";
 export type ReportFormat = "pdf" | "html" | "md";
@@ -26,7 +28,7 @@ export const REPORT_PRESETS: readonly ReportPreset[] = [
   {
     id: "configured",
     label: "As configured (Options panel)",
-    audience: "Uses the output options chosen before the analysis. Same as earlier versions.",
+    audience: "Uses the output options chosen before the analysis.",
     overrides: {},
   },
   {
@@ -93,30 +95,27 @@ export function describeReportOutput(
   const lines: string[] = [];
   lines.push(scope.selectedPairs === null
     ? "Scope: every matched file pair from the analysis."
-    : `Scope: the ${scope.selectedPairs} file pair(s) selected in the Tree Viewer. ` +
-      "Lists of unmatched files are omitted from a selective report.");
-  lines.push("The export re-runs the same analysis with the same settings. The preset changes only layout options, never analysis settings.");
+    : `Scope: the ${plural(scope.selectedPairs, "file pair")} selected in the Tree Viewer. ` +
+      "The list of files only in B is omitted, and the list of files only in A shows only the selected A files; " +
+      "the report states how many unmatched files it left out.");
+  lines.push("The export re-runs the analysis on the source folders with the same settings and the exclusion list captured when the analysis started. It is published only if every input file still has the SHA-256 recorded for the results on screen; otherwise nothing is written. The preset changes only layout options, never analysis settings.");
 
   if (format === "pdf") {
-    lines.push(`Page numbers: ${options.pageNumber ? "yes" : "no"}. File numbers: ${options.fileNumber ? "yes" : "no"}.`);
+    const included = (on: boolean): string => (on ? "included" : "not included");
+    lines.push(`Page numbers: ${included(options.pageNumber)}. File numbers: ${included(options.fileNumber)}.`);
     if (options.batesNumber) {
-      const prefix = options.batesPrefix || "(none)";
-      const suffix = options.batesSuffix || "(none)";
-      lines.push(`Bates numbers: yes — prefix ${prefix}, suffix ${suffix}, starting at ${options.batesStart}.`);
+      const prefix = options.batesPrefix || "none";
+      const suffix = options.batesSuffix || "none";
+      lines.push(`Bates numbers: included, with prefix ${prefix} and suffix ${suffix}, starting at ${countLabel(options.batesStart)}.`);
     } else {
-      lines.push("Bates numbers: no.");
+      lines.push("Bates numbers: not included.");
     }
   } else {
     lines.push(`Page, file and Bates numbers: not applicable to ${format === "html" ? "HTML" : "Markdown"}.`);
   }
-  if (format === "md") {
-    lines.push("SHA-256 table of input files: not applicable to Markdown.");
-  } else {
-    lines.push(`SHA-256 table of input files: ${options.hash ? "yes" : "no"}.`);
-  }
+  lines.push(`SHA-256 table of input files: ${options.hash ? "included" : "not included"}.`);
   lines.push("An integrity manifest (<report file>.manifest.sha256.json) listing every input and output hash is always written.");
-  lines.push("The manifest is not signed. Its hashes let a reader check that files match this run only against a copy kept separately " +
-    "(for example one filed or exchanged at the time). They do not by themselves establish authenticity, chain of custody or admissibility.");
+  lines.push(INTEGRITY_NOTICE);
   if (options.noMerge && format !== "md") {
     lines.push(`Layout: one ${format.toUpperCase()} per file in a <name>_files folder (No Merge is on).`);
   }

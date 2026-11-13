@@ -100,14 +100,17 @@ test("unknown presets and formats from the webview are rejected", () => {
 test("export description states scope, format limits and the hash caveat", () => {
   const options = { ...model.defaultAnalysisOptions(), batesPrefix: "CASE-", batesStart: 7 };
   const pdf = presets.describeReportOutput(options, "pdf", { selectedPairs: 3 }).join("\n");
-  assert.match(pdf, /3 file pair\(s\) selected/);
-  assert.match(pdf, /unmatched files are omitted/);
-  assert.match(pdf, /prefix CASE-.*starting at 7/);
-  assert.match(pdf, /do not by themselves establish authenticity/);
+  assert.match(pdf, /the 3 file pairs selected/);
+  assert.match(pdf, /files only in B is omitted/);
+  assert.match(pdf, /Bates numbers: included, with prefix CASE-.*starting at 7/);
+  assert.match(pdf, /only when it is compared with an independently retained copy/);
+  assert.match(pdf, /not a digital signature/);
   const md = presets.describeReportOutput(options, "md", { selectedPairs: null }).join("\n");
   assert.match(md, /every matched file pair/);
-  assert.match(md, /not applicable to Markdown/);
-  assert.doesNotMatch(md, /Bates numbers: yes/);
+  // Markdown carries the SHA-256 table under --hash, like PDF and HTML.
+  assert.match(md, /SHA-256 table of input files: included\./);
+  assert.doesNotMatch(md, /SHA-256 table of input files: not applicable/);
+  assert.doesNotMatch(md, /Bates numbers: included/);
 });
 
 test("Bates text starting with '-' is passed as one --flag=value argument", () => {
@@ -121,9 +124,9 @@ test("Bates text starting with '-' is passed as one --flag=value argument", () =
 
 test("failures are classified from the analyzer's own messages", () => {
   const cases = [
-    ["Analysis cancelled by user.", "cancelled"],
+    ["Analysis canceled by user.", "cancelled"],
     ["Export cancelled, but analyzer PID 12 is still running after forced termination", "cancelled-incomplete"],
-    ["Analysis cancelled; the analyzer did not emit a close event before timeout.", "cancelled-incomplete"],
+    ["Analysis canceled; the analyzer did not emit a close event before timeout.", "cancelled-incomplete"],
     ["Failed to parse JSON report: Error: ENOENT: no such file or directory, open 'x.json'", "invalid-report"],
     ["Failed to publish complete export artifacts: Error: ENOENT: no such file or directory, rename 'a' -> 'b'", "unknown"],
     ["Failed to start diffinite. Check that the bundled binary exists\nspawn python ENOENT", "runtime-missing"],
@@ -176,31 +179,31 @@ test("summary counts come straight from the report", () => {
   assert.equal(fact("Matched pairs").value, "3");
   assert.equal(fact("Files only in A").value, "2");
   assert.equal(fact("Files only in B").value, "3");
-  assert.equal(fact("Pairs with errors").value, "1");
-  assert.equal(fact("Pairs with errors").attention, true);
+  assert.equal(fact("File pairs failed").value, "1");
+  assert.equal(fact("File pairs failed").attention, true);
   assert.equal(fact("Hash-only pairs").value, "1");
-  assert.equal(fact("Deep Compare similarity candidates").value, "1");
-  assert.equal(fact("Deep Compare inconclusive").value, "1");
+  assert.equal(fact("Deep Compare pairs at or above the threshold").value, "2");
+  assert.equal(fact("Deep Compare pairs marked inconclusive").value, "1");
   assert.equal(summary.errorPairs, 1);
   assert.equal(summary.binaryPairs, 1);
 });
 
 test("pairs dropped by the binary-file policy are shown, not silently missing", () => {
   const summary = buildReviewSummary(reportWith([result()], {}, 3));
-  const fact = summary.facts.find((f) => f.label.startsWith("Matched pairs left out"));
+  const fact = summary.facts.find((f) => f.label === "File pairs not compared (--binary-handling exclude)");
   assert.equal(fact.value, "2");
   assert.equal(fact.attention, true);
   assert.equal(summary.facts.find((f) => f.label.startsWith("Matched pairs (")).value, "3");
-  assert.equal(buildReviewSummary(reportWith([result()])).facts.some((f) => f.label.startsWith("Matched pairs left out")), false);
+  assert.equal(buildReviewSummary(reportWith([result()])).facts.some((f) => f.label === "File pairs not compared (--binary-handling exclude)"), false);
 });
 
 test("summary says unknown instead of guessing for legacy reports", () => {
   const legacy = model.parseReport(fixture("report-v1.json"));
   const summary = buildReviewSummary(legacy);
-  const state = summary.facts.find((f) => f.label === "Analysis state");
+  const state = summary.facts.find((f) => f.label === "State");
   assert.equal(state.value, "Unknown");
   assert.equal(state.attention, true);
-  assert.equal(summary.facts.find((f) => f.label.startsWith("Inputs skipped")).value, "unknown");
+  assert.equal(summary.facts.find((f) => f.label === "Inputs not read").value, "unknown");
 });
 
 test("simple mode reports Deep Compare as not run", () => {
@@ -245,7 +248,7 @@ test("tree viewer handles an empty result set", () => {
   const report = reportWith([]);
   const html = tree.buildTreeViewerHtml(report, [], "N");
   assert.match(html, /No matched file pairs/);
-  assert.match(html, /of 0 pairs selected/);
+  assert.match(html, /of 0 A files selected/);
 });
 
 test("tree viewer sorts by content then name similarity", () => {
@@ -282,7 +285,7 @@ test("result viewer offers every preset and format with a matching description",
       assert.ok(html.includes(`data-combo="${preset.id}:${format}"`), `${preset.id}:${format}`);
     }
   }
-  assert.match(html, /1 file pair\(s\) selected/);
+  assert.match(html, /the 1 file pair selected/);
 });
 
 test("hash-only and failed pairs are not shown as a content percentage", () => {

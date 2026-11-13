@@ -13,6 +13,9 @@ export type FailureKind =
   | "cancelled-incomplete"
   | "runtime-missing"
   | "unreadable-input"
+  | "sensitive-found"
+  | "output-write"
+  | "inputs-changed"
   | "partial-refused"
   | "pdf-failed"
   | "out-of-memory"
@@ -37,21 +40,22 @@ interface Rule {
 }
 
 // Order matters: the first match wins. Cancellation is checked first because
-// a cancelled run can also leave partial stderr from the killed process.
+// a canceled run can also leave partial stderr from the killed process.
 const RULES: readonly Rule[] = [
   {
     kind: "cancelled-incomplete",
     // runner.ts cancellationError() when the process tree could not be confirmed dead.
-    test: /cancelled; the analyzer did not emit a close event|cancelled, but analyzer PID/,
-    title: "Cancelled, but the analyzer may still be running",
+    // "cancel+ed" accepts the US spelling used now and the earlier "cancelled".
+    test: /cancel+ed; the analyzer did not emit a close event|cancel+ed, but analyzer PID/,
+    title: "Canceled, but the analyzer may still be running",
     action: "Close the analyzer process (see details for its PID) with the operating system's process manager. " +
       "Output files may still change until it exits; check them before use.",
   },
   {
     kind: "cancelled",
     // runner.ts clean cancellation messages.
-    test: /cancelled by user/,
-    title: "Cancelled",
+    test: /cancel+ed by user/,
+    title: "Canceled",
     action: "No report was written. Existing output files were left as they were.",
   },
   {
@@ -77,20 +81,45 @@ const RULES: readonly Rule[] = [
     action: "The analysis itself finished. Try HTML export, select fewer files, or set a different PDF font.",
   },
   {
+    kind: "inputs-changed",
+    // runner.ts runExport: the export's input hashes differ from the reviewed analysis.
+    test: /no longer match the reviewed analysis/,
+    title: "The source files changed since the analysis you reviewed",
+    action: "Nothing was exported. Run the analysis again and review the current files before exporting.",
+  },
+  {
+    kind: "sensitive-found",
+    // pipeline.py refusal under --sensitive-files error.
+    test: /Sensitive files found \(\d+\); nothing was written/,
+    title: "Sensitive files found; nothing was written",
+    action: "Set \"Sensitive files\" in the Options panel to Exclude to leave them out, " +
+      "or to Include to compare them.",
+  },
+  {
     kind: "unreadable-input",
-    // pipeline.py collection/hashing refusals and per-file PermissionError.
-    test: /Input collection was incomplete|Input hashing failed|PermissionError|Access Denied/,
+    // Only the messages Python emits for inputs (pipeline.py). Input-side
+    // PermissionErrors are caught there; a bare one is about output.
+    test: /Input collection was incomplete|Input hashing failed|Access Denied \(PermissionError\)/,
     title: "Some input files could not be read",
     action: "Check file permissions or exclude the files (.diffignore). " +
-      "\"Allow partial analysis\" produces a report marked incomplete instead.",
+      "\"Allow a report marked incomplete\" in the Options panel produces a report marked incomplete instead.",
+  },
+  {
+    kind: "output-write",
+    // A bare PermissionError / sharing violation (WinError 32) / failed
+    // output rollback (evidence.py) comes from writing the report.
+    test: /PermissionError|WinError 32|Output rollback was incomplete/,
+    title: "The report file or folder could not be written",
+    action: "Close the report if it is open in another program (for example a PDF viewer), " +
+      "or choose a folder you can write to.",
   },
   {
     kind: "partial-refused",
     // pipeline.py / deep_compare.py refusals without --allow-partial.
     test: /refusing a partial|worker\(s\) crashed|Deep Compare worker\/file failure|reached --max-index-entries/,
     title: "Analysis stopped: part of the comparison failed",
-    action: "No partial result was reported. Re-run, lower the worker count, or enable \"Allow partial analysis\" " +
-      "to get a report that is marked incomplete.",
+    action: "No partial result was reported. Run the analysis again, lower the worker count, or enable " +
+      "\"Allow a report marked incomplete\" in the Options panel.",
   },
   {
     kind: "integrity",
@@ -101,8 +130,8 @@ const RULES: readonly Rule[] = [
   },
   {
     kind: "invalid-argument",
-    // argparse usage errors exit with code 2.
-    test: /exited with code 2|failed \(code 2\)|diffinite: error:/,
+    // argparse usage errors exit with code 2 (exactly 2: not 20-29, 255, ...).
+    test: /exited with code 2(?!\d)|failed \(code 2\)|diffinite: error:/,
     title: "An option value was rejected",
     action: "Check the values in the Options panel.",
   },

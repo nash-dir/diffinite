@@ -22,10 +22,12 @@ Compare two directories of source code with [Winnowing fingerprints](https://the
 - **SHA-256 Integrity Hashes** — Every export writes a `<report file>.manifest.sha256.json` listing the SHA-256 of all inputs and outputs. With the **Hash** option (on by default in the GUI), HTML/PDF reports also embed a SHA-256 table of input files (not applicable to Markdown). This is an integrity check: a byte mismatch can be detected only against a copy of the manifest or hashes kept separately. The manifest is not signed, and hashes do not by themselves establish authenticity, chain of custody or admissibility.
 
 ### VS Code Integration
-- **Real-time Progress Bar** — Live percentage tracking during analysis, fed from Python backend stdout.
-- **Rough Time Hint** — Scans file sizes upfront and shows a rough Simple/Deep duration hint. The hint uses unmeasured rule-of-thumb constants and counts only files with an identical relative path; the Phase 2 hint is rescaled by how long Phase 1 actually took. It is not a measured or calibrated prediction.
+- **Real-time Progress Bar** — Pipeline steps and per-worker rendering progress, read from the analyzer's log and stdout.
+- **Rough Time Hint** — Counts file sizes upfront (in the background, cancellable, skipping files the exclusion list removes) and shows a rough Simple/Deep duration hint. The hint uses unmeasured rule-of-thumb constants and counts only files with an identical relative path; the Phase 2 hint is rescaled by how long Phase 1 actually took. It is not a measured or calibrated prediction.
 - **Large-File Notice** — Shows a non-blocking warning when a same-path file pair is 5 MB or larger; analysis continues. Memory protection itself comes from the CLI's `--max-file-size` (default 10 MB): oversized files are compared by SHA-256 only and left out of Deep Compare; in Deep mode that omission stops the run unless Allow partial analysis is on.
-- **Interactive Tree Viewer** — Review matched pairs and selectively choose which files to include in the final report.
+- **Interactive Tree Viewer** — Review matched pairs and choose which files in A to include in the final report. Files in A without a 1:1 pair (Deep Compare cross-file matches, e.g. renamed files, and unmatched files) are listed too; files with a Deep Compare similarity candidate are pre-selected. The report covers each checked file's 1:1 pair and its Deep Compare matches.
+- **Reviewed inputs are frozen** — The exclusion list is read once when the analysis starts; the final report and every export use those exact bytes. After the final report is built, the extension checks that the input files' SHA-256 values, the exclusion list and the pairing of the selected files match what you reviewed, and warns if not. An export is published only if its input files still match the results on screen.
+- **Exclusion list (`~/.diffignore`)** — If this file exists, its rules are applied to every analysis and export, and the Options panel, review summary and results header say so (rule count and SHA-256). *Edit Dictionary* (Options panel) creates it with every example commented out. A rule without `/` (e.g. `build`) matches that name at any depth; use `/build/` to match only at the top of A and B. Matching is case-sensitive on every OS (`Thumbs.db` and `thumbs.db` need one line each); `!` negation and `\` escapes are not supported. Excluded files are neither compared nor listed as unmatched.
 - **Multiple Report Formats** — Export to PDF, HTML, Markdown, or JSON.
 - **Forensic Annotations** — Page numbers, file numbers, Bates stamps (with configurable prefix/suffix/start number), filenames on every page.
 - **Bates Presets** — Save case-specific Bates configurations as reusable presets in VS Code settings.
@@ -40,7 +42,7 @@ Compare two directories of source code with [Winnowing fingerprints](https://the
 2. Run **"Diffinite: Compare Directories"**
 3. Select the original directory (A) and comparison directory (B)
 4. Configure options in the GUI panel (mode, thresholds, comment stripping, etc.)
-5. Review matched pairs in the interactive tree viewer
+5. Review matched pairs (and files in A without a 1:1 pair) in the interactive tree viewer
 6. Export your report (PDF/HTML/Markdown) with one click
 
 ---
@@ -151,7 +153,7 @@ All options are configurable through the built-in GUI panel. Defaults below are 
 | **Deep Threshold Mode** | `Auto` | Auto omits `--threshold-deep`, so Python remains the source of truth. Manual passes only the value explicitly entered by the user and is shown with `user` provenance. |
 | **Allow Partial** | off | Permit an explicitly **Incomplete analysis / 불완전 결과** after a worker or file failure. Off is fail-closed. |
 | **Bates Preset** | — | Select a saved preset to auto-fill prefix/suffix/start |
-| **Bates Prefix** | (empty) | Prefix for Bates numbering (e.g. `PLAINTIFF-`) |
+| **Bates Prefix** | (empty) | Prefix for Bates numbering (e.g. `PLAINTIFF-`). Prefix and suffix may use Windows-1252 Latin characters, or Hangul with ASCII; the panel refuses anything else, because the stamp cannot draw it. |
 | **Bates Suffix** | (empty) | Suffix for Bates numbering (e.g. `-CONFIDENTIAL`) |
 | **Starting Number** | `1` | First Bates number. A preset pre-fills it from `nextBatesNumber`; it is **not** updated after export, so set the next unused number before each export to avoid reusing a Bates range. |
 
