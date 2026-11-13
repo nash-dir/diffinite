@@ -1255,7 +1255,7 @@ def incomplete_notice(
     """
     sentences: list[str] = []
     incomplete = analysis_status is not None and analysis_status.state == "incomplete"
-    if incomplete:
+    if incomplete and analysis_status is not None:
         for reason in analysis_status.reasons:
             sentence = INCOMPLETE_REASON_TEXT.get(reason, _UNKNOWN_REASON_TEXT)
             if sentence not in sentences:
@@ -1572,10 +1572,17 @@ def _pdf_preserve_whitespace(pre_inner: str) -> str:
 
 
 def _dir_label(path: Optional[str]) -> str:
-    """The last component of a directory path, for pane headers ("" if none)."""
+    """The last component of a directory path, for pane headers ("" if none).
+
+    Parsed the same way on every OS: a report can be rendered on a different
+    machine than the one whose paths it records, and ``Path`` on Linux treats
+    a Windows path such as ``C:\\cases\\B`` as a single name. Both separators
+    therefore split components.
+    """
     if not path:
         return ""
-    return Path(str(path).rstrip("/\\")).name or str(path)
+    trimmed = str(path).rstrip("/\\")
+    return _re.split(r"[/\\]", trimmed)[-1] or str(path)
 
 
 def _prepare_diff_table(

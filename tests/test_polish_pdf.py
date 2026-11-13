@@ -229,3 +229,19 @@ def test_log_messages_have_no_forbidden_glyphs(name):
     for call in calls:
         for glyph in "\u2192\u2014\u2013\u2026\u00b7\u26a0\u2713\u22ef":
             assert glyph not in call, (name, glyph, call[:80])
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("C:\\cases\\OpenJDK_Oracle\\", "OpenJDK_Oracle"),
+        ("/cases/AOSP_Google", "AOSP_Google"),
+        ("/cases/AOSP_Google/", "AOSP_Google"),
+        ("relative\\mixed/dir", "dir"),
+        ("C:\\", "C:"),
+        ("", ""),
+    ],
+)
+def test_dir_label_is_the_same_on_every_os(path, expected):
+    """Windows and POSIX paths yield the same pane label on Linux and Windows."""
+    assert pdf_gen._dir_label(path) == expected

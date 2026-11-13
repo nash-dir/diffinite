@@ -104,3 +104,9 @@ files = [
 warn_unused_configs = true
 check_untyped_defs = true
 no_implicit_optional = true
+
+# These libraries ship no type information (no py.typed or stubs package in the
+# dev extras); their imports are treated as Any instead of failing the check.
+[[tool.mypy.overrides]]
+module = ["pygments.*", "reportlab.*", "xhtml2pdf.*"]
+ignore_missing_imports = true
