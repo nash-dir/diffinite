@@ -1,8 +1,8 @@
 {
   "name": "diffinite",
-  "displayName": "Diffinite — Source Code Comparison",
-  "description": "Forensic source-code comparison with Winnowing fingerprints and professional reports for IP litigation & code audit",
-  "version": "0.13.1",
+  "displayName": "Diffinite: Source Code Comparison",
+  "description": "Forensic source-code comparison with Winnowing fingerprints and reports for IP litigation and code audits",
+  "version": "0.14.0",
   "publisher": "nash-dir",
   "license": "Apache-2.0",
   "repository": {
@@ -15,11 +15,31 @@
   },
   "qna": "https://github.com/nash-dir/diffinite/issues",
   "icon": "icon.png",
-  "keywords": ["diff", "code comparison", "forensic", "winnowing", "plagiarism", "similarity", "source code", "litigation", "code audit", "side-by-side"],
+  "keywords": [
+    "diff",
+    "code comparison",
+    "forensic",
+    "winnowing",
+    "plagiarism",
+    "similarity",
+    "source code",
+    "litigation",
+    "code audit",
+    "side-by-side"
+  ],
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Other", "Visualization"],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Diffinite launches a local Python process that reads source trees and writes reports; enable it only after trusting the workspace."
+    }
+  },
+  "categories": [
+    "Other",
+    "Visualization"
+  ],
   "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
@@ -30,7 +50,7 @@
       },
       {
         "command": "diffinite.help",
-        "title": "Diffinite: Help / Manual"
+        "title": "Diffinite: Help"
       },
       {
         "command": "diffinite.editIgnoreList",
@@ -43,55 +63,80 @@
         "diffinite.pythonPath": {
           "type": "string",
           "default": "python",
-          "description": "Path to Python interpreter with diffinite installed"
+          "scope": "machine",
+          "description": "Path to a Python interpreter with the diffinite package installed."
         },
         "diffinite.defaultMode": {
           "type": "string",
           "default": "deep",
-          "enum": ["simple", "deep"],
-          "description": "Default execution mode"
+          "enum": [
+            "simple",
+            "deep"
+          ],
+          "description": "Default execution mode."
         },
         "diffinite.workers": {
           "type": "integer",
           "default": 4,
           "minimum": 1,
           "maximum": 32,
-          "description": "Number of CPU cores (processes) to use for parallel diff rendering."
+          "description": "Number of worker processes for parallel diff rendering."
         },
         "diffinite.noMerge": {
           "type": "boolean",
           "default": false,
-          "description": "Save individual PDF reports for each file instead of merging into a single PDF."
+          "description": "Save one report per file pair instead of a single merged report."
         },
         "diffinite.preserveTree": {
           "type": "boolean",
           "default": true,
-          "description": "When No Merge is active, preserve the original directory tree in output. Uncheck for flat output with index.html."
+          "description": "With No Merge, keep the original folder structure in the output. Clear for a flat folder with index.html."
         },
         "diffinite.pdfFont": {
           "type": "string",
           "default": "",
-          "description": "Absolute path to a .ttf/.otf font file for PDF text rendering. Leave empty to use built-in CJK fonts (e.g. C:/Windows/Fonts/malgun.ttf)."
+          "description": "Absolute path to a .ttf or .otf font file for PDF text, for example C:/Windows/Fonts/malgun.ttf. Leave empty to use the built-in CJK fonts."
         },
         "diffinite.pdfLang": {
           "type": "string",
           "default": "ko",
-          "enum": ["ko", "ja", "zh-cn", "en"],
-          "description": "Major language code to automatically resolve OS-specific fonts from expansion packs. Ignored if pdfFont is specified."
+          "enum": [
+            "ko",
+            "ja",
+            "zh-cn",
+            "en"
+          ],
+          "description": "Language used to select an installed system font for PDF text. Ignored when pdfFont is set."
         },
         "diffinite.batesPresets": {
           "type": "array",
           "default": [],
-          "description": "Saved Bates numbering presets (prefix/suffix/start number)",
+          "description": "Saved Bates numbering presets (prefix, suffix and starting number).",
           "items": {
             "type": "object",
             "properties": {
-              "name": { "type": "string", "description": "Preset display name (e.g. case ID)" },
-              "prefix": { "type": "string", "description": "Bates prefix (e.g. PLAINTIFF-)" },
-              "suffix": { "type": "string", "description": "Bates suffix (e.g. -CONFIDENTIAL)" },
-              "nextBatesNumber": { "type": "integer", "default": 1, "description": "Next Bates start number (auto-updated after export)" }
+              "name": {
+                "type": "string",
+                "description": "Preset name, for example a case number."
+              },
+              "prefix": {
+                "type": "string",
+                "description": "Bates prefix, for example PLAINTIFF-."
+              },
+              "suffix": {
+                "type": "string",
+                "description": "Bates suffix, for example -CONFIDENTIAL."
+              },
+              "nextBatesNumber": {
+                "type": "integer",
+                "default": 1,
+                "description": "Starting number filled in when this preset is selected. It is not updated automatically after an export; set it to the next unused number before each export."
+              }
             },
-            "required": ["name", "prefix"]
+            "required": [
+              "name",
+              "prefix"
+            ]
           }
         }
       }
@@ -100,12 +145,16 @@
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "lint": "eslint src"
+    "typecheck": "tsc --noEmit -p ./",
+    "test": "npm run compile && node --test test/*.test.js",
+    "test:host": "npm run compile && node test/host/run.js",
+    "watch": "tsc -watch -p ./"
   },
   "devDependencies": {
-    "@types/vscode": "^1.85.0",
     "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "3.2.2",
+    "ovsx": "1.0.2",
     "typescript": "^5.3.0"
   }
 }

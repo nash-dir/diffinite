@@ -1,23 +1,24 @@
 {
   "unit": "file-pair",
+  "corpus_sha256": "97e2619618dbe9314285457f38f0b75a6d17927c42a775b98b293e58addf17e5",
   "fp_le_5": {
     "floor_tokens": 74,
     "threshold": 78,
     "fp_rate": 4.65,
     "fp_ci95": [
-      1.49,
-      9.39
+      1.82,
+      11.36
     ],
     "fp_observed": [
       4,
-      105
+      86
     ],
     "recall": 34.9,
     "recall_by_level": {
       "L1": 90.0,
       "L2": 73.2,
-      "L3": 38.6,
-      "L4": 3.3,
+      "L3": 39.3,
+      "L4": 3.4,
       "L5": 0.0,
       "L6": 0.0
     },

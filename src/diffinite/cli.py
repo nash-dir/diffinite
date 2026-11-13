@@ -15,13 +15,29 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import sys
 
-from diffinite.calibration import NORMALIZE_DEFAULT_THRESHOLD
+from diffinite.calibration import (
+    NORMALIZE_CALIBRATION_K,
+    NORMALIZE_CALIBRATION_W,
+    NORMALIZE_DEFAULT_THRESHOLD,
+    RAW_LEGACY_THRESHOLD,
+    assess_normalize_calibration,
+    resolve_threshold_deep,
+    threshold_console_warning,
+)
 from diffinite.collector import FUZZY_THRESHOLD
 from diffinite.fingerprint import DEFAULT_K, DEFAULT_W
 from diffinite.models import AnalysisMetadata
+from diffinite.pdf_gen import PdfFontError, bates_font_for, register_pdf_font
 from diffinite.pipeline import run_pipeline
+
+# CPython concurrent.futures.process._MAX_WINDOWS_WORKERS = 63 - 2: Windows
+# WaitForMultipleObjects waits on at most 64 handles, and the pool uses 3.
+_MAX_WINDOWS_WORKERS = 61
+# --max-file-size is in MiB and becomes int(MB * 1024 * 1024) bytes downstream.
+_BYTES_PER_MB = 1024 * 1024
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,47 +45,43 @@ logging.basicConfig(
 )
 
 
-def _resolve_threshold_deep(
-    threshold_deep: float | None, normalize: bool
-) -> tuple[float, str]:
+def _resolve_threshold_deep(threshold_deep: float | None, normalize: bool) -> tuple[float, str]:
     """Resolve the deep Jaccard threshold and record its provenance.
 
     The raw and normalize channels have different false-positive profiles, so a
-    normalize run left at the raw-calibrated 5% has a measured ~100% false-positive
+    normalize run left at the historical raw 5% has a measured ~100% false-positive
     rate on independent code. When the user did not pass --threshold-deep, the
     normalize channel substitutes the ratified normalize default; otherwise the
     explicit value wins. Returns ``(value_0_100, provenance)`` where provenance is
-    one of ``"user" | "default" | "normalize-default"``.
+    one of ``"user" | "legacy-uncalibrated" | "normalize-default"``.
     """
-    if threshold_deep is not None:
-        return threshold_deep, "user"
-    if normalize:
-        return NORMALIZE_DEFAULT_THRESHOLD, "normalize-default"
-    return 5.0, "default"
+    return resolve_threshold_deep(threshold_deep, normalize)
 
 
 def main(argv: list[str] | None = None) -> None:
     """Parse arguments and run the pipeline."""
     # Console output must never crash on non-ASCII. Report content is written to
-    # UTF-8 files separately; this guards stdout/stderr — argparse --help, progress
-    # logs (which include glyphs like ✓), error messages — on legacy Windows code
+    # UTF-8 files separately; this guards stdout/stderr (argparse --help, progress
+    # logs that echo non-ASCII file names, error messages) on legacy Windows code
     # pages (e.g. cp1252) where such characters are unencodable. errors="replace"
     # degrades to '?' rather than raising UnicodeEncodeError.
     for _stream in (sys.stdout, sys.stderr):
         try:
-            _stream.reconfigure(encoding="utf-8", errors="replace")
+            reconfigure = getattr(_stream, "reconfigure")
+            reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError):
             pass  # captured/replaced streams (e.g. pytest) lack reconfigure
 
     parser = argparse.ArgumentParser(
         prog="diffinite",
         description=(
-            "Diffinite — Forensic source-code diff tool.\n"
-            "Compare two directories and generate a syntax-highlighted report "
-            "with optional N:M deep cross-matching.\n\n"
+            "Diffinite: forensic source-code comparison tool.\n"
+            "Compare two directories and generate a syntax-highlighted report, "
+            "optionally with Deep Compare, which compares every file in A with "
+            "every file in B.\n\n"
             "Modes:\n"
-            "  simple  Fast 1:1 file matching only.\n"
-            "  deep    1:1 + N:M Winnowing cross-matching (default)."
+            "  simple  Pairs files by name and compares each pair.\n"
+            "  deep    Also runs Deep Compare (default)."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -84,8 +96,9 @@ def main(argv: list[str] | None = None) -> None:
         choices=["simple", "deep"],
         default="deep",
         help=(
-            "Execution mode: 'simple' performs 1:1 file matching only; "
-            "'deep' (default) adds N:M Winnowing cross-matching."
+            "Execution mode: 'simple' compares the file pairs matched by name only; "
+            "'deep' (default) adds Deep Compare, which compares every file in A "
+            "with every file in B using Winnowing fingerprints."
         ),
     )
 
@@ -111,7 +124,11 @@ def main(argv: list[str] | None = None) -> None:
         "--strip-comments",
         action="store_true",
         default=False,
-        help="Strip comments before comparison (uses 2-pass parser)",
+        help=(
+            "Strip comments before comparison (uses 2-pass parser). Files whose "
+            "extension has no registered comment syntax (e.g. .gradle, .vue) are "
+            "compared with their comments; the report names those extensions."
+        ),
     )
     parser.add_argument(
         "--squash-blanks",
@@ -119,22 +136,22 @@ def main(argv: list[str] | None = None) -> None:
         default=False,
         help=(
             "Collapse runs of 3+ blank lines after comment stripping. "
-            "Only effective with --strip-comments. WARNING: changes line "
-            "numbers — do not use for forensic line-tracing."
+            "Only effective with --strip-comments. Warning: this changes line "
+            "numbers, so do not use it when line numbers must match the source."
         ),
     )
     parser.add_argument(
         "--threshold",
         type=float,
         default=FUZZY_THRESHOLD,
-        help=f"Fuzzy matching threshold 0–100 (default: {FUZZY_THRESHOLD})",
+        help=f"Fuzzy file-name matching threshold, 0 to 100 (default: {FUZZY_THRESHOLD})",
     )
     parser.add_argument(
         "--encoding",
         default="auto",
         help=(
             "Source file encoding. 'auto' (default) uses charset-normalizer "
-            "auto-detection with Korean-optimized fallback (utf-8 -> euc-kr -> cp949). "
+            "auto-detection, falling back to utf-8, then euc-kr, then cp949. "
             "Specify an explicit encoding (e.g. euc-kr, utf-8, cp949, shift_jis, "
             "gb2312) to force-decode all files with that encoding."
         ),
@@ -147,8 +164,9 @@ def main(argv: list[str] | None = None) -> None:
         help=(
             "Sort matched file pairs in the report. "
             "'filename' sorts by file basename, 'path' by full path, "
-            "'similarity' by name match score, 'ratio' by content "
-            "similarity. Default: insertion order (no sort)."
+            "'similarity' by name similarity, 'ratio' by line match (word match "
+            "with --by-word); pairs compared by SHA-256 only or not compared follow "
+            "in their existing order. Default: collection order (no sort)."
         ),
     )
     parser.add_argument(
@@ -159,33 +177,36 @@ def main(argv: list[str] | None = None) -> None:
         help="Sort direction (default: asc). Only effective with --sort-by.",
     )
 
-
     # ── Annotations ───────────────────────────────────────────────────
     parser.add_argument(
         "--page-number",
         action="store_true",
         default=False,
-        help="Show 'Page n / N' at the bottom-right of each page",
+        help=(
+            "Show 'Page n of N' at the bottom right. Pages are counted separately "
+            "for the cover section and for each file pair. Use --bates-number for "
+            "page identifiers that are unique across the report."
+        ),
     )
     parser.add_argument(
         "--file-number",
         action="store_true",
         default=False,
-        help="Show 'File n / N' at the bottom-left of each page",
+        help="Show 'File n of N' at the bottom left of each page",
     )
     parser.add_argument(
         "--bates-number",
         action="store_true",
         default=False,
-        help="Stamp Bates numbers at the bottom-center of each page",
+        help="Stamp Bates numbers at the bottom center of each page",
     )
     parser.add_argument(
         "--bates-prefix",
         type=str,
         default="",
         help=(
-            "Bates number prefix (e.g. 'PLAINTIFF-'). "
-            "Combined as: {prefix}{number}{suffix}"
+            "Bates number prefix (e.g. 'PLAINTIFF-'). Combined as: "
+            "{prefix}{number}{suffix}. Latin (Windows-1252) characters and Hangul only."
         ),
     )
     parser.add_argument(
@@ -193,8 +214,8 @@ def main(argv: list[str] | None = None) -> None:
         type=str,
         default="",
         help=(
-            "Bates number suffix (e.g. '-CONFIDENTIAL'). "
-            "Combined as: {prefix}{number}{suffix}"
+            "Bates number suffix (e.g. '-CONFIDENTIAL'). Combined as: "
+            "{prefix}{number}{suffix}. Latin (Windows-1252) characters and Hangul only."
         ),
     )
     parser.add_argument(
@@ -210,7 +231,7 @@ def main(argv: list[str] | None = None) -> None:
         "--filename",
         action="store_true",
         default=False,
-        help="Show the filename at the top-right of each page",
+        help="Show the path of File A at the top of each diff page",
     )
     parser.add_argument(
         "--collapse-identical",
@@ -228,7 +249,7 @@ def main(argv: list[str] | None = None) -> None:
         default=False,
         help=(
             "Detect moved code blocks and highlight them with distinct colors "
-            "(purple=original position, blue=moved position) instead of "
+            "(purple for the original position, blue for the moved position) instead of "
             "plain delete/add. Works in both simple and deep modes."
         ),
     )
@@ -251,8 +272,11 @@ def main(argv: list[str] | None = None) -> None:
         dest="binary_handling",
         help=(
             "How to handle binary (non-decodable) files: "
-            "'exclude' skips them entirely, 'hash' shows SHA-256 match "
-            "status, 'error' shows decode error (default: hash)."
+            "'exclude' leaves the pair uncompared and lists it in the report as "
+            "excluded, 'hash' shows SHA-256 match status, 'error' records a decode "
+            "error and counts the pair as failed (default: hash). Unreadable files "
+            "are never excluded, and pairs over --max-file-size are always "
+            "compared by SHA-256 only."
         ),
     )
     parser.add_argument(
@@ -261,32 +285,69 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help=(
             "Path to a .diffignore text file containing glob patterns "
-            "(e.g. node_modules, *.pyc) to completely exclude from analysis."
+            "(e.g. node_modules, *.pyc) to completely exclude from analysis. "
+            "Every excluded file or directory is listed in the reports (see --uncompared-files)."
+        ),
+    )
+    parser.add_argument(
+        "--include",
+        metavar="PATTERN",
+        action="append",
+        default=None,
+        dest="include_patterns",
+        help=(
+            "Collect only files matching PATTERN (same syntax as the ignore file; "
+            "repeatable, e.g. --include '*.java' --include 'src/**'). Applied "
+            "during collection, so it also limits hashing and the evidence "
+            "bundle. Every file left out is listed in the reports (see --uncompared-files)."
+        ),
+    )
+    parser.add_argument(
+        "--sensitive-files",
+        choices=["exclude", "include", "error"],
+        default="exclude",
+        dest="sensitive_files",
+        help=(
+            "Files that usually hold secrets (.env, private keys, credential "
+            "files; matched by name, ignoring case): 'exclude' (default) leaves "
+            "them out and discloses their paths in the reports, 'include' compares "
+            "them like any other file, 'error' stops before writing anything "
+            "when one is found."
         ),
     )
     parser.add_argument(
         "--metrics-only",
         action="store_true",
-        help="Phase 1: Compute similarities and output JSON but skip HTML rendering and PDF generation.",
+        help=(
+            "Compute similarities and write only the JSON report; the Markdown, "
+            "HTML and PDF reports are not produced."
+        ),
     )
     parser.add_argument(
         "--filter-json",
         metavar="PATH",
         default=None,
-        help="Phase 2: Path to a JSON array of specific file A paths to restrict the output to.",
+        help=(
+            "Path to a JSON array of File A paths. The reports cover only the "
+            "matched pairs whose File A is listed."
+        ),
     )
     parser.add_argument(
         "--unreadable-log",
         metavar="PATH",
         default=None,
-        help="Path to save the list of completely unreadable files (Permission errors).",
+        help="Path to save the list of files that could not be read (for example, permission errors).",
     )
     # 10.0MB is roughly 10M chars; difflib's O(N^2) complexity on >10MB causes OOM/CPU lock.
     parser.add_argument(
         "--max-file-size",
         type=float,
         default=10.0,
-        help="Maximum file size in MB. Files larger than this will bypass memory decode and fall back to hash comparison (default: 10.0 MB).",
+        help=(
+            "Maximum file size in MB. Oversized pairs use SHA-256 in the line "
+            "channel and are omitted from Deep Compare; the deep omission fails "
+            "closed unless --allow-partial is set (default: 10.0 MB)."
+        ),
     )
     # 2MB HTML is roughly ~100k DOM nodes. xhtml2pdf's html5lib parser is written in pure Python
     # and recursive traversing hits RecursionError or extreme GC pauses beyond this point.
@@ -295,7 +356,11 @@ def main(argv: list[str] | None = None) -> None:
         type=float,
         default=2.0,
         dest="max_diff_html_size",
-        help="Maximum HTML diff size in MB before truncation (default: 2.0). Prevents xhtml2pdf OOM.",
+        help=(
+            "Maximum size in MB of one side-by-side diff before it is left out of "
+            "the HTML and PDF reports and replaced by a note (default: 2.0). Keeps "
+            "PDF generation within memory limits."
+        ),
     )
     parser.add_argument(
         "--dir-alias-a",
@@ -343,11 +408,12 @@ def main(argv: list[str] | None = None) -> None:
     # ── Report format options ─────────────────────────────────────────
     format_group = parser.add_argument_group(
         "Report Format",
-        "Output format(s). Multiple can be combined. "
+        "Output formats. Several can be combined. "
         "If none specified, defaults to PDF (report.pdf).",
     )
     format_group.add_argument(
-        "--report-pdf", "-o",
+        "--report-pdf",
+        "-o",
         metavar="PATH",
         default=None,
         help="Generate a merged PDF report at the given path",
@@ -376,10 +442,10 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         dest="pdf_font",
         help=(
-            "Absolute path to a .ttf/.otf font file for PDF text rendering. "
-            "When specified, the font is embedded via @font-face and used as "
-            "the primary typeface. When omitted, the built-in xhtml2pdf CJK "
-            "font (HYGothic-Medium) is used as fallback."
+            "Path to a TrueType font file (.ttf/.ttc) for CJK text in PDF reports. "
+            "The font is embedded and used for CJK runs; other text keeps the "
+            "default faces. A missing or unloadable font is an error. When "
+            "omitted, the built-in PDF CJK font (HYGothic-Medium) is used."
         ),
     )
     format_group.add_argument(
@@ -397,8 +463,8 @@ def main(argv: list[str] | None = None) -> None:
     # ── Deep compare options ──────────────────────────────────────────
     deep_group = parser.add_argument_group(
         "Deep Compare",
-        "Winnowing-based N:M cross-matching options (only active in "
-        "'--mode deep').",
+        "Options for Deep Compare, which compares every file in A with every file "
+        "in B using Winnowing fingerprints (only with '--mode deep').",
     )
     deep_group.add_argument(
         "--k-gram",
@@ -406,8 +472,8 @@ def main(argv: list[str] | None = None) -> None:
         default=DEFAULT_K,
         dest="k_gram",
         help=(
-            f"K-gram token window size (default: {DEFAULT_K}). "
-            "Schleimer 2003, §4.2."
+            f"K-gram token window size (default: {DEFAULT_K}; the value frozen in "
+            "the measured normalize calibration profile)."
         ),
     )
     deep_group.add_argument(
@@ -417,7 +483,8 @@ def main(argv: list[str] | None = None) -> None:
         dest="window",
         help=(
             f"Winnowing window size (default: {DEFAULT_W}). "
-            "Density guarantee: >=(W+K-1) shared tokens always detected."
+            "Shared runs of >=(W+K-1) tokens always share a fingerprint; "
+            "whether the pair is reported depends on --threshold-deep."
         ),
     )
     deep_group.add_argument(
@@ -426,9 +493,12 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         dest="threshold_deep",
         help=(
-            "Minimum Jaccard similarity 0-100 to report. Default: 5 (raw), or "
-            f"{NORMALIZE_DEFAULT_THRESHOLD:.0f} when --normalize is set (calibrated "
-            "for false-positive <= 1%%; see calibration.py). Pass a value to override."
+            f"Minimum Jaccard similarity to report, 0 to 100. Default: {RAW_LEGACY_THRESHOLD:g} "
+            f"(raw), or {NORMALIZE_DEFAULT_THRESHOLD:.0f} when --normalize is set. The measured "
+            f"false-positive rate applies only at K={NORMALIZE_CALIBRATION_K}, "
+            f"W={NORMALIZE_CALIBRATION_W}, with --strip-comments and without "
+            "--lang-aware; other profiles retain the numeric default for compatibility "
+            "but are unvalidated. Pass a value to override."
         ),
     )
     deep_group.add_argument(
@@ -437,7 +507,8 @@ def main(argv: list[str] | None = None) -> None:
         default=False,
         help=(
             "Normalize identifiers to ID and literals to LIT before "
-            "fingerprinting (improves Type-2 clone detection)"
+            "fingerprinting; renamed-identifier similarity is easier to surface "
+            "but false-positive risk increases"
         ),
     )
     deep_group.add_argument(
@@ -449,7 +520,9 @@ def main(argv: list[str] | None = None) -> None:
             "With --normalize, use language-aware normalization (Pygments lexer, "
             "falling back to per-language keyword sets) so keywords like Rust fn/pub "
             "or Go func are preserved instead of flattened to ID. Opt-in: produces "
-            "fingerprints incompatible with the default channel. No effect without "
+            "fingerprints incompatible with the default channel. Pygments comment "
+            "tokens are always discarded (regardless of --strip-comments), and string "
+            "literals including docstrings collapse to STR. No effect without "
             "--normalize."
         ),
     )
@@ -459,14 +532,16 @@ def main(argv: list[str] | None = None) -> None:
         "Forensic",
         "Options for forensic precision analysis.",
     )
+    # 200: difflib.SequenceMatcher applies autojunk only when the second
+    # sequence has 200 or more items (Python difflib documentation).
     forensic_group.add_argument(
         "--no-autojunk",
         action="store_true",
         default=False,
         help=(
-            "Disable SequenceMatcher's autojunk heuristic. "
-            "All tokens are treated equally — slower but more precise "
-            "for forensic analysis."
+            "Disable difflib's autojunk rule, which ignores very frequent lines "
+            "in files of 200 or more lines. All lines are then treated equally; "
+            "slower, but no line is ignored."
         ),
     )
     forensic_group.add_argument(
@@ -475,8 +550,9 @@ def main(argv: list[str] | None = None) -> None:
         default=10_000_000,
         dest="max_index_entries",
         help=(
-            "Maximum entries in the inverted index for Deep Compare. "
-            "Prevents OOM on massive corpora (default: 10,000,000)."
+            "Maximum number of entries in the Deep Compare index. "
+            "Reaching the cap fails closed unless --allow-partial explicitly "
+            "permits an incomplete result (default: 10,000,000)."
         ),
     )
     forensic_group.add_argument(
@@ -485,8 +561,9 @@ def main(argv: list[str] | None = None) -> None:
         default=False,
         dest="embed_hash",
         help=(
-            "Embed SHA-256 hash table in PDF/HTML report cover page. "
-            "A manifest.sha256.json is always generated regardless of this flag."
+            "Add the table of SHA-256 digests of the input files to the PDF, HTML "
+            "and Markdown reports. A manifest.sha256.json is always written "
+            "regardless of this flag."
         ),
     )
     forensic_group.add_argument(
@@ -499,12 +576,33 @@ def main(argv: list[str] | None = None) -> None:
             "generated reports, and integrity manifest."
         ),
     )
+    forensic_group.add_argument(
+        "--bundle-sources",
+        choices=["full", "none"],
+        default="full",
+        dest="bundle_sources",
+        help=(
+            "Source files in the --bundle zip: 'full' (default) copies every "
+            "hashed file, 'none' leaves them out (the manifest still lists each "
+            "file's SHA-256), for sources that may not leave a protected copy."
+        ),
+    )
+    forensic_group.add_argument(
+        "--allow-partial",
+        action="store_true",
+        default=False,
+        help=(
+            "Allow reports marked incomplete when some workers or files fail. "
+            "Without this flag, a worker or file failure stops the run."
+        ),
+    )
 
     args = parser.parse_args(argv)
 
     # ── Resolve the deep threshold default by channel ────────────────
     args.threshold_deep, threshold_provenance = _resolve_threshold_deep(
-        args.threshold_deep, args.normalize)
+        args.threshold_deep, args.normalize
+    )
 
     # ── Validate numeric ranges at the boundary ──────────────────────
     # Degenerate values must fail loudly here, not crash mid-run after the
@@ -516,14 +614,80 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("--window must be >= 1.")
     if args.workers < 1:
         parser.error("--workers must be >= 1.")
+    if sys.platform == "win32" and args.workers > _MAX_WINDOWS_WORKERS:
+        parser.error(
+            f"--workers must be <= {_MAX_WINDOWS_WORKERS} on Windows "
+            "(ProcessPoolExecutor limit)."
+        )
     if args.max_index_entries < 1:
         parser.error("--max-index-entries must be >= 1.")
-    if not 0 <= args.threshold <= 100:
+    if not math.isfinite(args.threshold) or not 0 <= args.threshold <= 100:
         parser.error("--threshold must be between 0 and 100.")
-    if not 0 <= args.threshold_deep <= 100:
+    if not math.isfinite(args.threshold_deep) or not 0 <= args.threshold_deep <= 100:
         parser.error("--threshold-deep must be between 0 and 100.")
+    # Both sizes are used as int(MB * 1024 * 1024) bytes; validate that value, so a
+    # tiny size cannot become a 0-byte cap (read as "no cap" by Deep Compare but
+    # "everything oversized" by the line channel) and a huge one cannot overflow.
+    for option, value in (
+        ("--max-file-size", args.max_file_size),
+        ("--max-diff-html-size", args.max_diff_html_size),
+    ):
+        size_bytes = value * _BYTES_PER_MB
+        if not math.isfinite(size_bytes) or size_bytes < 1:
+            parser.error(
+                f"{option} must be at least 1 byte ({1 / _BYTES_PER_MB:.2g} MB) "
+                "and finite."
+            )
+    if args.encoding.lower() != "auto":
+        try:
+            # Raises LookupError for unknown names and for non-text codecs
+            # (e.g. base64), which differ.read_file would otherwise turn into
+            # "binary" pairs for every file.
+            b"x".decode(args.encoding)
+        except LookupError:
+            parser.error(f"unknown text encoding for --encoding: {args.encoding!r}")
+        except UnicodeDecodeError:
+            pass  # a real text codec that cannot decode this probe byte (e.g. utf-16)
+        except UnicodeError:
+            # e.g. the "undefined" codec, which raises a plain UnicodeError for
+            # every input: it can never decode a file.
+            parser.error(f"unusable text encoding for --encoding: {args.encoding!r}")
+    for option, value in (
+        ("--bates-prefix", args.bates_prefix),
+        ("--bates-suffix", args.bates_suffix),
+        # The stamp draws prefix + number + suffix with one font, so the
+        # combination must be drawable too (e.g. Hangul prefix + "é" suffix).
+        ("--bates-prefix/--bates-suffix", args.bates_prefix + args.bates_suffix),
+    ):
+        try:
+            bates_font_for(value)
+        except ValueError as exc:
+            parser.error(f"{option}: {exc}")
+    if args.pdf_font:
+        try:
+            register_pdf_font(args.pdf_font, "UserCJK")
+        except PdfFontError as exc:
+            parser.error(f"--pdf-font: {exc}")
     if args.bates_start < 1:
         parser.error("--bates-start must be >= 1.")
+
+    calibration_assessment = None
+    if args.mode == "deep" and args.normalize:
+        calibration_assessment = assess_normalize_calibration(
+            threshold=args.threshold_deep,
+            k=args.k_gram,
+            w=args.window,
+            strip_comments=args.strip_comments,
+            lang_aware=args.lang_aware,
+        )
+    if args.mode == "deep":
+        # Same wording as the report notice. Extensions whose comments cannot be
+        # stripped are known only after collection; the pipeline warns then.
+        warning = threshold_console_warning(
+            calibration_assessment, args.threshold_deep, threshold_provenance
+        )
+        if warning:
+            logging.warning("%s", warning)
 
     # Convert threshold-deep from 0-100 (user-facing) to 0-1 (internal)
     min_jaccard_internal = args.threshold_deep / 100.0
@@ -538,6 +702,19 @@ def main(argv: list[str] | None = None) -> None:
         autojunk=not args.no_autojunk,
         normalize=args.normalize,
         lang_aware=args.lang_aware,
+        strip_comments=args.strip_comments,
+        calibration_profile_id=(
+            calibration_assessment.profile_id if calibration_assessment else None
+        ),
+        calibration_status=(
+            calibration_assessment.status if calibration_assessment else "not-applicable"
+        ),
+        calibration_profile_mismatches=(
+            calibration_assessment.profile_mismatches if calibration_assessment else ()
+        ),
+        calibration_threshold_matches=(
+            calibration_assessment.threshold_matches if calibration_assessment else None
+        ),
     )
 
     # Resolve encoding
@@ -545,7 +722,12 @@ def main(argv: list[str] | None = None) -> None:
 
     # Resolve default PDF output if no --report-* specified
     report_pdf = args.report_pdf
-    if report_pdf is None and args.report_html is None and args.report_md is None and args.report_json is None:
+    if (
+        report_pdf is None
+        and args.report_html is None
+        and args.report_md is None
+        and args.report_json is None
+    ):
         report_pdf = "report.pdf"
 
     run_pipeline(
@@ -567,6 +749,7 @@ def main(argv: list[str] | None = None) -> None:
         kgram_size=args.k_gram,
         window_size=args.window,
         min_jaccard=min_jaccard_internal,
+        threshold_provenance=threshold_provenance,
         normalize=args.normalize,
         lang_aware=args.lang_aware,
         metadata=metadata,
@@ -576,6 +759,7 @@ def main(argv: list[str] | None = None) -> None:
         # Evidence integrity
         embed_hash=args.embed_hash,
         bundle_path=args.bundle_path,
+        allow_partial=args.allow_partial,
         # Multi-format output
         report_pdf=report_pdf,
         report_html=args.report_html,
@@ -598,7 +782,10 @@ def main(argv: list[str] | None = None) -> None:
         binary_handling=args.binary_handling,
         # Ignore list
         ignore_file=args.ignore_file,
-        # Phase 1/2 Architecture
+        sensitive_files=args.sensitive_files,
+        include_patterns=args.include_patterns,
+        bundle_sources=args.bundle_sources,
+        # Metrics-only run and selection filter
         metrics_only=args.metrics_only,
         filter_json=args.filter_json,
         # Stability & Forensics

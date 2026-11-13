@@ -1,0 +1,14 @@
+# Store and check out text as LF on every OS, so file bytes (and the SHA-256
+# values the tool and its fixtures rely on) do not depend on core.autocrlf.
+* text=auto eol=lf
+# Windows-only scripts keep CRLF.
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+# Binary assets.
+*.png binary
+*.pdf binary
+*.zip binary
+*.vsix binary
+# Behaviour corpus: encoding/line-ending cases must stay byte-exact.
+tests/validation/behaviour_corpus/** -text

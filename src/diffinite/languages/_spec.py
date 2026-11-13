@@ -26,3 +26,27 @@ class LangSpec:
     # ── Fingerprint Layer ─────────────────────────────────────────
     keywords: frozenset[str] = field(default_factory=frozenset)
 
+
+@dataclass(frozen=True)
+class LanguageCommentSpec(CommentSpec):
+    """``CommentSpec`` plus string rules that only some languages need.
+
+    ``parser`` reads these with ``getattr`` defaults, so a plain ``CommentSpec``
+    behaves as before.  (They live here because ``models.py`` is owned by another
+    change set; they can move into ``CommentSpec`` itself later.)
+    """
+
+    template_interpolation: bool = True
+    """Whether ``${`` inside a template literal opens an interpolation.
+    JS/TS template literals do; Go raw strings do not (Go spec, "String literals":
+    a raw string is any character sequence between back quotes)."""
+
+    verbatim_string_prefixes: tuple[str, ...] = ()
+    """Prefixes that open a multi-line string with no backslash escapes, where a
+    doubled quote is a literal quote.  C# ``@"..."`` and ``@$"..."`` (C# spec,
+    "Verbatim string literals")."""
+
+    cpp_raw_strings: bool = False
+    """Whether ``R"delim(...)delim"`` (optionally prefixed ``u8``/``u``/``U``/``L``)
+    is a raw string: no escapes, may span lines, ends only at ``)delim"``.
+    C++11 [lex.string]; the delimiter is at most 16 characters."""

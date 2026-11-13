@@ -1,10 +1,30 @@
 ﻿"""Go, Rust, and Swift language definitions."""
 
-from diffinite.languages._spec import LangSpec
+from diffinite.languages._spec import LangSpec, LanguageCommentSpec
 from diffinite.languages._registry import register
 from diffinite.models import CommentSpec
 
-_C_STYLE_COMMENT = CommentSpec(line_markers=("//",), block_start="/*", block_end="*/")
+# Go: `raw strings` have no backslash escapes (`C:\` is a complete literal)
+# and no interpolation (`${ // x }` is plain text).
+_GO_COMMENT = LanguageCommentSpec(
+    line_markers=("//",), block_start="/*", block_end="*/",
+    template_escapes=False, template_interpolation=False,
+)
+
+# Rust: block comments nest; ' is a char literal only when complete ('x', '\n'),
+# otherwise a lifetime/label ('a, 'static); no backtick strings.
+_RUST_COMMENT = CommentSpec(
+    line_markers=("//",), block_start="/*", block_end="*/",
+    string_delims=('"',), template_delims=(), char_literals_strict=True,
+    nested_block_comments=True,
+)
+
+# Swift: """multi-line strings""", nestable block comments, no ' or ` strings.
+_SWIFT_COMMENT = CommentSpec(
+    line_markers=("//",), block_start="/*", block_end="*/",
+    string_delims=('"',), template_delims=(), triple_quote_delims=('"',),
+    nested_block_comments=True,
+)
 
 _GO_KEYWORDS = frozenset({
     "break", "case", "chan", "const", "continue",
@@ -41,23 +61,20 @@ _SWIFT_KEYWORDS = frozenset({
 register(LangSpec(
     name="Go",
     extensions=(".go",),
-    comment=_C_STYLE_COMMENT,
-    has_ifdef_zero=True,
+    comment=_GO_COMMENT,
     keywords=_GO_KEYWORDS,
 ))
 
 register(LangSpec(
     name="Rust",
     extensions=(".rs",),
-    comment=_C_STYLE_COMMENT,
-    has_ifdef_zero=True,
+    comment=_RUST_COMMENT,
     keywords=_RUST_KEYWORDS,
 ))
 
 register(LangSpec(
     name="Swift",
     extensions=(".swift",),
-    comment=_C_STYLE_COMMENT,
-    has_ifdef_zero=True,
+    comment=_SWIFT_COMMENT,
     keywords=_SWIFT_KEYWORDS,
 ))

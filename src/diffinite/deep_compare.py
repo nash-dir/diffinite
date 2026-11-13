@@ -1,7 +1,7 @@
 """N:M deep cross-matching engine.
 
-Uses an **inverted index** over Winnowing fingerprints to efficiently detect
-similar code even when it has been split across or merged from multiple files.
+Uses an **inverted index** over Winnowing fingerprints to compare every A file
+with every B file, so similar code is found even when file names differ.
 
 Architecture:
     1. Extract fingerprints for all files **in parallel** via
@@ -36,42 +36,138 @@ from __future__ import annotations
 
 import logging
 import multiprocessing
+import os
+import sys
+import threading
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Optional
 
 from diffinite.differ import read_file
-from diffinite.calibration import INCONCLUSIVE_TOKEN_FLOOR
+from diffinite.calibration import INCONCLUSIVE_TOKEN_FLOOR, RAW_LEGACY_THRESHOLD
 from diffinite.fingerprint import (
     DEFAULT_K,
     DEFAULT_W,
-    extract_fingerprints,
+    TIER1_PREFIX,
+    extract_fingerprints_with_tier,
     tokenize,
 )
-from diffinite.models import DeepMatchResult
-from diffinite.parser import strip_comments
+from diffinite.languages import get_spec
+from diffinite.models import DeepMatchResult, size_label
+from diffinite.parser import (
+    comment_extensions_for_pair,
+    extensions_without_comment_rules,
+    strip_comments,
+)
 
 logger = logging.getLogger(__name__)
+
+
+# Non-fatal skip reason: recorded in the report, never treated as a failure.
+SKIPPED_BINARY_REASON = "skipped-binary-content"
+
+# Non-fatal skip reason for a readable file with no registered language that is
+# not decodable as text (and has no NUL byte). It is recorded in the same
+# disclosed skip list as binary content, with this distinct reason, and is
+# never counted as a successfully fingerprinted file.
+SKIPPED_UNDECODABLE_REASON = "skipped-undecodable-unregistered-extension"
+
+# Files read successfully but with fewer than k tokens: no k-gram exists, so
+# no fingerprint exists and the file cannot take part in N:M matching.
+BELOW_KGRAM_REASON = "below-k-gram-size"
+
+# CPython concurrent.futures.process._MAX_WINDOWS_WORKERS (= 63 - 2): on Windows
+# ProcessPoolExecutor raises ValueError for max_workers above this.
+_MAX_WINDOWS_WORKERS = 61
+
+_SKIP_REASONS = (SKIPPED_BINARY_REASON, SKIPPED_UNDECODABLE_REASON)
+
+
+def exit_when_parent_dies() -> None:
+    """ProcessPoolExecutor initializer: end this worker once its parent is gone.
+
+    When the parent is killed (e.g. the VS Code extension cancels a run on
+    Windows, where ``taskkill /t`` cannot reach workers once the parent PID is
+    gone), orphaned workers would otherwise keep running over evidence copies.
+    ``multiprocessing.parent_process()`` waits on the parent's process handle
+    (Windows) or sentinel pipe (POSIX), so PID reuse cannot make it watch an
+    unrelated process. It does nothing in the main process and never affects
+    results: it only terminates a worker whose results can no longer be read.
+    """
+    parent = multiprocessing.parent_process()
+    if parent is None:
+        return
+
+    def _watch() -> None:
+        parent.join()
+        os._exit(1)
+
+    threading.Thread(target=_watch, name="diffinite-parent-watch", daemon=True).start()
+
+
+def _is_readable(path: str) -> bool:
+    """Whether the file can be opened and read at all (vs. a decode failure)."""
+    try:
+        with open(path, "rb") as fh:
+            fh.read(1)
+        return True
+    except OSError:
+        return False
+
+
+def _looks_binary(path: str) -> bool:
+    """NUL byte in content that failed text decoding → treat as binary.
+
+    Only consulted after decoding already failed, so UTF-16 text (which
+    contains NULs but decodes) never reaches this check.
+    """
+    try:
+        with open(path, "rb") as fh:
+            # A NUL in the first 8 KiB is the same heuristic git and diff(1)
+            # use to call a file binary; reading the whole file is unnecessary.
+            return b"\x00" in fh.read(8192)
+    except OSError:
+        return False
 
 
 # ──────────────────────────────────────────────────────────────────────
 # 워커 함수 (ProcessPoolExecutor 직렬화를 위해 모듈 최상위 정의 필수)
 # ──────────────────────────────────────────────────────────────────────
-def _extract_one(args: tuple) -> tuple[str, set[int], int]:
+def _extract_one(
+    args: tuple,
+) -> tuple[str, str, set[int], int, int, str | None, str | None]:
     """단일 파일의 핑거프린트를 추출한다.
 
     Args:
         args: ``(side, abs_path, rel_path, extension, k, w, normalize, lang_aware,
-                 max_bytes)`` — tuple 포장은 ``pool.map()`` 인터페이스 제약.
+                 max_bytes, strip_requested, encoding, comment_extension)``.
+            ``comment_extension`` 은 주석 제거에 쓸 확장자(쌍의 상대 쪽에서 빌린
+            것일 수 있다 — ``parser.comment_extensions_for_pair``).
 
     Returns:
-        ``(side, rel_path, hash_set, fingerprint_count, token_count)``
+        ``(side, rel_path, hash_set, fingerprint_count, token_count, failure_reason,
+        lang_aware_tier)``.
         읽기 실패 / 크기 초과 시 빈 set / count=0 / token_count=-1 반환.
         ``token_count`` 은 normalize 모드에서만 계산한다(판정불가 floor 판정용);
-        그 외에는 -1(미산정)을 돌려준다.
+        그 외에는 -1(미산정)을 돌려준다. ``lang_aware_tier`` 는 ``--lang-aware``
+        정규화에서 실제로 쓰인 tier(``"pygments:<alias>"``/``"registry:<사유>"``),
+        그 외에는 ``None``.
     """
-    side, abs_path, rel_path, extension, k, w, normalize, lang_aware, max_bytes = args
+    (
+        side,
+        abs_path,
+        rel_path,
+        extension,
+        k,
+        w,
+        normalize,
+        lang_aware,
+        max_bytes,
+        strip_requested,
+        encoding,
+        comment_extension,
+    ) = args
 
     # Size cap: skip oversized files entirely (both channels) so an untrusted
     # large/pathological file can't hang the run — especially under --lang-aware,
@@ -81,34 +177,63 @@ def _extract_one(args: tuple) -> tuple[str, set[int], int]:
         try:
             if Path(abs_path).stat().st_size > max_bytes:
                 logger.warning(
-                    "Skipping oversized file in deep compare (> %d bytes): %s",
-                    max_bytes, rel_path)
-                return side, rel_path, set(), 0, -1
+                    "Deep Compare skipped a file over the --max-file-size limit of %s: %s",
+                    size_label(max_bytes),
+                    rel_path,
+                )
+                return side, rel_path, set(), 0, -1, "max-file-size-exceeded", None
         except OSError:
             pass
 
     try:
-        text = read_file(abs_path)
+        text = read_file(abs_path, encoding=encoding)
     except PermissionError:
-        logger.warning("Permission denied during deep compare: %s", rel_path)
-        return side, rel_path, set(), 0, -1
+        logger.warning("Deep Compare could not read a file (permission denied): %s", rel_path)
+        return side, rel_path, set(), 0, -1, "permission-denied", None
 
     if text is None:
-        return side, rel_path, set(), 0, -1
+        # A file that cannot even be opened/read (vanished, I/O error) is
+        # evidence loss whatever its extension.
+        if not _is_readable(abs_path):
+            logger.warning("Deep Compare could not read or decode a file: %s", rel_path)
+            return side, rel_path, set(), 0, -1, "decode-or-read-failure", None
+        # An explicit decoder or a registered source language means this was
+        # intended to be text. Treat the failed decode as evidence loss.
+        explicit_encoding = bool(encoding and encoding.lower() not in ("auto", ""))
+        # Undecodable content with a NUL byte is binary data under a source-code
+        # name (e.g. a compiled file saved as .py). The line channel already
+        # reports such a pair by SHA-256 as binary; failing the whole run here
+        # would make one misnamed file block every other result.
+        if not explicit_encoding and _looks_binary(abs_path):
+            logger.warning("Deep Compare skipped a binary file: %s", rel_path)
+            return side, rel_path, set(), 0, -1, SKIPPED_BINARY_REASON, None
+        if explicit_encoding or get_spec(extension):
+            return side, rel_path, set(), 0, -1, "decode-or-read-failure", None
+        # Unregistered extension, readable, no NUL byte, not decodable: an
+        # explicit, disclosed skip — never a silent success.
+        logger.warning(
+            "Deep Compare skipped a file that is not decodable as text and has no registered language: %s",
+            rel_path,
+        )
+        return side, rel_path, set(), 0, -1, SKIPPED_UNDECODABLE_REASON, None
 
-    cleaned = strip_comments(text, extension)
-    fps = extract_fingerprints(
-        cleaned, k=k, w=w, normalize=normalize,
-        ext=extension, lang_aware=lang_aware,
+    cleaned = strip_comments(text, comment_extension) if strip_requested else text
+    fps, tier = extract_fingerprints_with_tier(
+        cleaned,
+        k=k,
+        w=w,
+        normalize=normalize,
+        ext=extension,
+        lang_aware=lang_aware,
     )
     hash_set = {fp.hash_value for fp in fps}
     # Token count gates the inconclusive band; only needed under normalize.
-    # Use the RAW token count as a channel-independent file-size proxy: the floor
-    # (calibration.INCONCLUSIVE_TOKEN_FLOOR) was calibrated in raw-token units, and
-    # --lang-aware's Pygments tokenization yields a different count, so deriving the
-    # count from the active channel would shift the floor decision off-calibration.
+    # Use the RAW token count as a channel-independent file-size proxy: the
+    # compatibility guard was defined in raw-token units, while --lang-aware's
+    # Pygments tokenization yields a different count. Changing channels would
+    # silently change which pairs receive the conservative inconclusive label.
     n_tokens = len(tokenize(cleaned)) if normalize else -1
-    return side, rel_path, hash_set, len(fps), n_tokens
+    return side, rel_path, hash_set, len(fps), n_tokens, None, tier
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -125,7 +250,8 @@ def build_inverted_index(
     나이브 쌍-단위 비교 O(N×M) 대비 O(Σ|fp_a|)로 단축.
 
     메모리: O(Σ|fp_b|) — 대규모 코퍼스에서 수 GB 가능.
-    ``max_entries`` 초과 시 경고 로그 출력 후 truncated index 반환.
+    엔트리 수가 ``max_entries`` 를 초과해 실제로 버려지는 엔트리가 있을 때만
+    경고 로그 출력 후 truncated index 반환(정확히 상한과 같으면 완전한 인덱스).
     ``--max-index-entries`` CLI 옵션으로 제어 가능.
 
     Returns:
@@ -136,15 +262,17 @@ def build_inverted_index(
     entry_count = 0
     for file_id, hashes in fp_map.items():
         for h in hashes:
-            index[h].add(file_id)
-            entry_count += 1
+            # 삽입 전에 검사한다: 정확히 max_entries 개로 끝나는 완전한 인덱스는
+            # 잘린 것이 아니다. 실제로 엔트리를 버릴 때만 truncated=True.
             if entry_count >= max_entries:
                 logger.warning(
-                    "Inverted index truncated at %d entries "
-                    "(--max-index-entries). Some matches may be missed.",
-                    max_entries,
+                    "The Deep Compare index reached the --max-index-entries limit "
+                    "(%s entries); some cross-matches are not reported.",
+                    f"{max_entries:,}",
                 )
                 return index, True
+            index[h].add(file_id)
+            entry_count += 1
     return index, False
 
 
@@ -164,13 +292,18 @@ def run_deep_compare(
     *,
     k: int = DEFAULT_K,
     w: int = DEFAULT_W,
-    workers: int = 4,
-    min_jaccard: float = 0.05,
+    workers: int = 4,  # Operational limit, not a similarity judgment.
+    min_jaccard: float = RAW_LEGACY_THRESHOLD / 100.0,
     normalize: bool = False,
     lang_aware: bool = False,
+    # Operational limits (memory and hang protection), not similarity judgments.
     max_index_entries: int = 10_000_000,
     max_file_size_mb: float = 10.0,
+    strip_comments: bool = False,
+    encoding: str | None = None,
+    allow_partial: bool = False,
     status: Optional[dict] = None,
+    comment_pairs: Optional[list[tuple[str, str]]] = None,
 ) -> list[DeepMatchResult]:
     """Execute N:M cross-matching between two directories.
 
@@ -186,35 +319,87 @@ def run_deep_compare(
         w: Winnowing window size.
         workers: Number of parallel worker processes.
         min_jaccard: Minimum Jaccard similarity to include in results.
-        normalize: If *True*, normalise tokens before fingerprinting.
+        normalize: If *True*, normalize tokens before fingerprinting.
         lang_aware: If *True* (with *normalize*), use the language-aware
             normalization channel (Pygments lexer / registry keywords) instead
             of the language-agnostic default keyword set.
-        status: Optional dict; if given, ``status["index_truncated"]`` is set
-            to whether the inverted index hit ``max_index_entries`` (so the
-            caller can flag an incomplete report).
+        status: Optional dict; if given, it receives the run's disclosure
+            fields: ``index_truncated``, ``requested_file_count``,
+            ``successful_file_count`` (files read and fingerprinted),
+            ``failed_files``, ``skipped_binary_files`` (every disclosed skip;
+            each entry's ``reason`` is ``SKIPPED_BINARY_REASON`` or
+            ``SKIPPED_UNDECODABLE_REASON``), ``unfingerprinted_files`` (read
+            but fewer than *k* tokens, so never matchable), and, when
+            *strip_comments* is on, ``comment_unstripped_extensions``; when
+            *normalize* and *lang_aware* are on, ``lang_aware_tiers`` (extension
+            → sorted tiers used) and ``lang_aware_fallback_files``.
+        comment_pairs: Optional ``(rel_a, rel_b)`` pairs matched by the line
+            channel. A side whose extension has no comment rules strips with its
+            partner's rules (``parser.comment_extensions_for_pair``), exactly as
+            the line channel does, so both channels strip the same text.
 
     Returns:
         List of :class:`DeepMatchResult` for every A-file that has at
         least one B-file match above the threshold.
     """
     workers = max(1, workers)  # library guard: ProcessPoolExecutor needs >= 1
+    if sys.platform == "win32":
+        workers = min(workers, _MAX_WINDOWS_WORKERS)
     root_a = Path(dir_a).resolve()
     root_b = Path(dir_b).resolve()
+
+    # Comment-rule extension per file: its own suffix, or its line-channel
+    # partner's when only the partner has comment rules.
+    comment_ext_a: dict[str, str] = {}
+    comment_ext_b: dict[str, str] = {}
+    for rel_a, rel_b in sorted(comment_pairs or ()):
+        ca, cb = comment_extensions_for_pair(Path(rel_a).suffix.lower(), Path(rel_b).suffix.lower())
+        comment_ext_a.setdefault(rel_a, ca)
+        comment_ext_b.setdefault(rel_b, cb)
 
     # Prepare work items
     max_bytes = int(max_file_size_mb * 1024 * 1024) if max_file_size_mb else 0
     items_a = [
-        ("A", str(root_a / f), f, Path(f).suffix.lower(), k, w, normalize, lang_aware, max_bytes)
+        (
+            "A",
+            str(root_a / f),
+            f,
+            Path(f).suffix.lower(),
+            k,
+            w,
+            normalize,
+            lang_aware,
+            max_bytes,
+            strip_comments,
+            encoding,
+            comment_ext_a.get(f, Path(f).suffix.lower()),
+        )
         for f in files_a
     ]
     items_b = [
-        ("B", str(root_b / f), f, Path(f).suffix.lower(), k, w, normalize, lang_aware, max_bytes)
+        (
+            "B",
+            str(root_b / f),
+            f,
+            Path(f).suffix.lower(),
+            k,
+            w,
+            normalize,
+            lang_aware,
+            max_bytes,
+            strip_comments,
+            encoding,
+            comment_ext_b.get(f, Path(f).suffix.lower()),
+        )
         for f in files_b
     ]
 
-    logger.info("Deep Compare: extracting fingerprints (%d + %d files, %d workers) …",
-                len(items_a), len(items_b), workers)
+    logger.info(
+        "  Deep Compare: extracting fingerprints (files: %d in A, %d in B; worker processes: %d)",
+        len(items_a),
+        len(items_b),
+        workers,
+    )
 
     # Parallel fingerprint extraction
     fp_a: dict[str, set[int]] = {}
@@ -225,10 +410,57 @@ def run_deep_compare(
 
     all_items = items_a + items_b
     ctx = multiprocessing.get_context("spawn")
-    with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
-        results = list(pool.map(_extract_one, all_items))
+    results = []
+    failed_files: list[dict[str, str]] = []
+    with ProcessPoolExecutor(
+        max_workers=workers, mp_context=ctx, initializer=exit_when_parent_dies
+    ) as pool:
+        futures = [pool.submit(_extract_one, item) for item in all_items]
+        for item, future in zip(all_items, futures):
+            side, _abs_path, rel_path = item[:3]
+            try:
+                results.append(future.result())
+            except Exception as exc:
+                failed_files.append(
+                    {
+                        "side": side,
+                        "path": rel_path,
+                        "reason": f"worker-failure: {exc}",
+                    }
+                )
 
-    for side, rel, hset, cnt, ntok in results:
+    skipped_binary: list[dict[str, str]] = []
+    unfingerprinted: list[dict[str, str]] = []
+    for side, rel, hset, _cnt, _ntok, failure_reason, _tier in results:
+        if failure_reason in _SKIP_REASONS:
+            skipped_binary.append({"side": side, "path": rel, "reason": failure_reason})
+        elif failure_reason is None and not hset:
+            # Read and tokenized, but fewer than k tokens: no fingerprint, so it
+            # can never appear in N:M results. Disclose it instead of dropping it.
+            unfingerprinted.append({"side": side, "path": rel, "reason": BELOW_KGRAM_REASON})
+        elif failure_reason:
+            failed_files.append(
+                {
+                    "side": side,
+                    "path": rel,
+                    "reason": failure_reason,
+                }
+            )
+
+    # A configured size cap is still an omitted deep-analysis input.  It may be
+    # emitted only under the caller's explicit partial-analysis authorization;
+    # otherwise an incomplete evidence result would look like a complete run.
+    fatal_failures = failed_files
+    if fatal_failures and not allow_partial:
+        details = ", ".join(
+            f"{item['side']}:{item['path']} ({item['reason']})" for item in fatal_failures
+        )
+        raise RuntimeError(
+            "Deep Compare worker/file failure; refusing a partial analysis. "
+            "Use --allow-partial to emit an explicitly incomplete report: " + details
+        )
+
+    for side, rel, hset, cnt, ntok, _failure_reason, _tier in results:
         if side == "A":
             fp_a[rel] = hset
             fp_a_counts[rel] = cnt
@@ -241,6 +473,35 @@ def run_deep_compare(
     inv_b, index_truncated = build_inverted_index(fp_b, max_entries=max_index_entries)
     if status is not None:
         status["index_truncated"] = index_truncated
+        status["requested_file_count"] = len(all_items)
+        status["successful_file_count"] = len(all_items) - len(failed_files) - len(skipped_binary)
+        status["failed_files"] = failed_files
+        status["skipped_binary_files"] = skipped_binary
+        status["unfingerprinted_files"] = unfingerprinted
+        processed = [r for r in results if r[5] is None]
+        if strip_comments:
+            comment_ext_of = {(item[0], item[2]): item[11] for item in all_items}
+            status["comment_unstripped_extensions"] = extensions_without_comment_rules(
+                comment_ext_of[(r[0], r[1])] for r in processed
+            )
+        if normalize and lang_aware:
+            tiers: dict[str, set[str]] = defaultdict(set)
+            fallback_files: list[dict[str, str]] = []
+            for side, rel, _h, _c, _t, _fr, tier in processed:
+                if tier is None:
+                    continue
+                tiers[Path(rel).suffix.lower()].add(tier)
+                if tier in (TIER1_PREFIX + "lexer-error-token", TIER1_PREFIX + "lexer-exception"):
+                    fallback_files.append({"side": side, "path": rel, "tier": tier})
+            status["lang_aware_tiers"] = {ext: sorted(v) for ext, v in sorted(tiers.items())}
+            status["lang_aware_fallback_files"] = fallback_files
+
+    if index_truncated and not allow_partial:
+        raise RuntimeError(
+            "The Deep Compare index reached --max-index-entries, so the analysis "
+            "would be incomplete and was stopped. Use --allow-partial to produce "
+            "a report marked incomplete."
+        )
 
     # Query each A-file against the index
     deep_results: list[DeepMatchResult] = []
@@ -260,33 +521,44 @@ def run_deep_compare(
 
         tokens_a = fp_a_tokens.get(file_id_a, -1)
         matched_b: list[tuple[str, int, float, bool]] = []
-        for file_id_b, shared in b_counts.items():
+        for file_id_b in b_counts:
+            # Recount from the full sets: under --allow-partial the inverted
+            # index may be truncated, and Jaccard, containment and the shared
+            # count must all describe the same two sets.
+            shared = len(hashes_a & fp_b[file_id_b])
             jaccard = _jaccard(hashes_a, fp_b[file_id_b])
             if jaccard >= min_jaccard:
-                # Inconclusive band: under normalize, a pair where the smaller
-                # file is below the calibrated token floor cannot be separated
-                # from independent same-domain code at any useful threshold, so
-                # the score is flagged rather than presented as a confident match.
+                # Inconclusive band: the published corpus did not establish a
+                # separate precision claim for this small-file guard. Flag the
+                # score conservatively instead of presenting it as confident.
                 tokens_b = fp_b_tokens.get(file_id_b, -1)
                 smaller = min(tokens_a, tokens_b)
-                inconclusive = (
-                    normalize and smaller >= 0 and smaller < INCONCLUSIVE_TOKEN_FLOOR
-                )
-                matched_b.append((file_id_b, shared, round(jaccard, 4), inconclusive))
+                inconclusive = normalize and smaller >= 0 and smaller < INCONCLUSIVE_TOKEN_FLOOR
+                # Exact value: rounding here turned near-identical pairs
+                # (e.g. 0.99997) into 1.0. Renderers round for display.
+                matched_b.append((file_id_b, shared, jaccard, inconclusive))
 
-        # Sort by Jaccard desc, then shared-hash count desc, then file id asc.
+        # Sort by exact Jaccard desc, then shared-hash count desc, then file id asc.
         # The full tie-break is seed-independent: without it, equal-Jaccard
         # matches kept set-iteration order (PYTHONHASHSEED-dependent), so the
         # reported "top match" could change run-to-run on identical inputs.
         matched_b.sort(key=lambda x: (-x[2], -x[1], x[0]))
 
         if matched_b:
-            deep_results.append(DeepMatchResult(
-                file_a=file_id_a,
-                matched_files_b=matched_b,
-                fingerprint_count_a=fp_a_counts.get(file_id_a, 0),
-            ))
+            deep_results.append(
+                DeepMatchResult(
+                    file_a=file_id_a,
+                    matched_files_b=matched_b,
+                    fingerprint_count_a=fp_a_counts.get(file_id_a, 0),
+                    unique_hashes_a=len(hashes_a),
+                    unique_hashes_b={b: len(fp_b[b]) for b, *_ in matched_b},
+                )
+            )
 
     deep_results.sort(key=lambda r: r.file_a)
-    logger.info("Deep Compare: found %d A-files with cross-matches", len(deep_results))
+    logger.info(
+        "  Deep Compare: file pairs at or above the Jaccard threshold: %s (files in A: %s)",
+        f"{sum(len(r.matched_files_b) for r in deep_results):,}",
+        f"{len(deep_results):,}",
+    )
     return deep_results

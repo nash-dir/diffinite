@@ -1,7 +1,5 @@
 """Tests for PDF generation module."""
 
-import pytest
-
 from diffinite.models import DiffResult, FileMatch, DeepMatchResult
 from diffinite.pdf_gen import build_cover_body, build_diff_page_html, _break_path
 
@@ -67,7 +65,8 @@ class TestBuildCoverHtml:
         """The headline column must name difflib so the line-level ratio is not
         misread as semantic similarity (forensic clarity)."""
         html = _cover()
-        assert "Line match (difflib)" in html
+        assert "Line match</th>" in html
+        assert "(difflib)" not in html
         assert "Content Match" not in html
 
     def test_metadata_banner_surfaces_autojunk(self):
@@ -80,25 +79,35 @@ class TestBuildCoverHtml:
             dir_a="a", dir_b="b", by_word=False, strip_comments=False,
             metadata=meta,
         )
-        assert "autojunk=" in html
-        assert "off" in html  # autojunk=False rendered
+        assert 'Line diff autojunk</td><td style="width: 78%;">off</td>' in html
 
-    def _cover_with_meta(self, *, normalize, exec_mode):
+    def _cover_with_meta(self, *, normalize, exec_mode, strip_comments=True):
         from diffinite.models import AnalysisMetadata
         from diffinite.calibration import NORMALIZE_DEFAULT_THRESHOLD
         meta = AnalysisMetadata(
             exec_mode=exec_mode, k=5, w=4, threshold=NORMALIZE_DEFAULT_THRESHOLD,
             threshold_provenance="normalize-default", normalize=normalize,
+            strip_comments=strip_comments,
         )
         return build_cover_body(
             _make_results(), unmatched_a=[], unmatched_b=[],
-            dir_a="a", dir_b="b", by_word=False, strip_comments=False, metadata=meta,
+            dir_a="a", dir_b="b", by_word=False,
+            strip_comments=strip_comments, metadata=meta,
         )
 
     def test_pdf_cover_discloses_fp_under_normalize_deep(self):
         # The PDF is the primary forensic deliverable; it must carry the FP rate.
+        from diffinite.calibration import NORMALIZE_FP_RATE_PCT
         html = self._cover_with_meta(normalize=True, exec_mode="deep")
-        assert "false-positive" in html.lower()
+        assert f"{NORMALIZE_FP_RATE_PCT:.2g}%" in html
+
+    def test_pdf_cover_withholds_measured_fp_for_unvalidated_profile(self):
+        from diffinite.calibration import NORMALIZE_FP_RATE_PCT
+        html = self._cover_with_meta(
+            normalize=True, exec_mode="deep", strip_comments=False,
+        )
+        assert "unvalidated profile" in html.lower()
+        assert f"{NORMALIZE_FP_RATE_PCT:.2g}%" not in html
 
     def test_pdf_cover_no_disclosure_in_simple_mode(self):
         # normalize is a no-op without deep fingerprinting, so no disclosure.
@@ -108,7 +117,7 @@ class TestBuildCoverHtml:
     def test_contains_additions_deletions(self):
         html = _cover()
         assert "+10" in html
-        assert "-5" in html
+        assert "\u22125" in html  # U+2212 MINUS SIGN, not a hyphen
 
     def test_empty_results(self):
         html = _cover(results=[])
@@ -310,3 +319,60 @@ class TestUncomparedMode:
         )
         assert "orphan" in html
         assert "Unmatched Files" in html
+
+
+def _text_pdf(path, pages=3):
+    from reportlab.pdfgen import canvas
+
+    c = canvas.Canvas(str(path))
+    for p in range(pages):
+        for i in range(60):
+            c.drawString(40, 800 - i * 12, f"public int line{p}_{i} = {i}; // code text")
+        c.showPage()
+    c.save()
+
+
+def _contents_filtered(pdf_path):
+    from pypdf import PdfReader
+
+    reader = PdfReader(str(pdf_path))
+    out = []
+    for page in reader.pages:
+        contents = page["/Contents"].get_object()
+        streams = contents if isinstance(contents, list) else [contents]
+        out.append(all(s.get_object().get("/Filter") is not None for s in streams))
+    return reader, out
+
+
+def test_bates_stamping_keeps_content_streams_compressed(tmp_path):
+    """merge_page decompresses page content; stamped PDFs must not stay uncompressed
+    (that made Bates-stamped reports ~10x larger than the same report unstamped)."""
+    from diffinite.pdf_gen import add_bates_numbers, stamp_bates_inplace
+
+    src = tmp_path / "in.pdf"
+    _text_pdf(src)
+    merged = tmp_path / "merged.pdf"
+    add_bates_numbers(str(src), str(merged), prefix="X-", suffix="-C")
+    reader, filtered = _contents_filtered(merged)
+    assert all(filtered)
+    assert reader.pages[-1].extract_text().rstrip().endswith("X-0003-C")
+
+    split = tmp_path / "split.pdf"
+    _text_pdf(split)
+    stamp_bates_inplace(str(split), 5, 4, prefix="X-", suffix="-C")
+    reader, filtered = _contents_filtered(split)
+    assert all(filtered)
+    assert reader.pages[-1].extract_text().rstrip().endswith("X-0007-C")
+
+
+def test_pdf_css_does_not_use_inherit():
+    """xhtml2pdf 0.2.28 crashes resolving "inherit" for cache-hit cells.
+
+    ('Element' object has no attribute 'cssElement'.) The PDF CSS states
+    values explicitly; the screen-only CSS is never given to xhtml2pdf.
+    """
+    import re
+
+    from diffinite.pdf_gen import _CSS_BODY
+
+    assert not re.search(r":\s*inherit\b", _CSS_BODY)

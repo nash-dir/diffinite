@@ -1,9 +1,12 @@
 """Plagiarism dataset cross-validation test harness.
 
-Tests Diffinite's Winnowing fingerprinting against the IR-Plag-Dataset
-(Faidhi-Robinson L1–L6 levels), measuring TPR, FPR, and F1-Score.
+Engine-sensitivity smoke test: exercises Winnowing on the IR-Plag-Dataset
+(Faidhi-Robinson L1–L6 levels) with deliberately loose settings.
 
-Parameters: K=2, W=3, threshold=0.40
+Parameters: K=2, W=3, threshold=0.40. No shipped CLI profile uses these values,
+and at them about 78% of independent submissions are flagged. The TPR/F1 gates
+below only guard against engine regressions; never cite them as tool accuracy.
+Measured error rates live in tests/validation/error_rate.py and holdout.py.
 """
 
 from __future__ import annotations

@@ -4,7 +4,15 @@ from diffinite.languages._spec import LangSpec
 from diffinite.languages._registry import register
 from diffinite.models import CommentSpec
 
-_COMMENT = CommentSpec(line_markers=("//",), block_start="/*", block_end="*/")
+_COMMENT = CommentSpec(
+    line_markers=("//",), block_start="/*", block_end="*/",
+    triple_quote_delims=('"',),  # Java 15 text blocks
+)
+# Kotlin and Scala: """raw strings""" and nestable /* /* */ */ block comments.
+_NESTING_COMMENT = CommentSpec(
+    line_markers=("//",), block_start="/*", block_end="*/",
+    triple_quote_delims=('"',), nested_block_comments=True,
+)
 
 _JAVA_KEYWORDS = frozenset({
     # Control flow
@@ -28,15 +36,13 @@ register(LangSpec(
     name="Java",
     extensions=(".java",),
     comment=_COMMENT,
-    has_ifdef_zero=True,
     keywords=_JAVA_KEYWORDS,
 ))
 
 register(LangSpec(
     name="Kotlin",
     extensions=(".kt", ".kts"),
-    comment=_COMMENT,
-    has_ifdef_zero=True,
+    comment=_NESTING_COMMENT,
     keywords=_JAVA_KEYWORDS | frozenset({
         "fun", "val", "var", "when", "object", "companion",
         "data", "sealed", "suspend", "coroutine",
@@ -46,8 +52,7 @@ register(LangSpec(
 register(LangSpec(
     name="Scala",
     extensions=(".scala",),
-    comment=_COMMENT,
-    has_ifdef_zero=True,
+    comment=_NESTING_COMMENT,
     keywords=_JAVA_KEYWORDS | frozenset({
         "def", "val", "var", "object", "trait", "sealed",
         "implicit", "lazy", "match", "yield",

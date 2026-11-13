@@ -21,6 +21,17 @@ from diffinite.differ import compute_diff, generate_html_diff, read_file
 from diffinite.fingerprint import extract_fingerprints
 from diffinite.parser import strip_comments
 
+
+@pytest.fixture
+def untraced_timing():
+    """Skip wall-clock limits under coverage: they would time the tracer."""
+    try:
+        import coverage
+    except ImportError:
+        return
+    if coverage.Coverage.current() is not None:
+        pytest.skip("timing limit is meaningless under coverage tracing")
+
 # ---------------------------------------------------------------------------
 # Fixtures — support both example/sqlite/ and TDD/ data locations
 # ---------------------------------------------------------------------------
@@ -136,7 +147,7 @@ class TestCommentParser:
         assert '"see https://www.sqlite.org/doc"' in stripped2
         assert '// comment' not in stripped2
 
-    def test_p3_performance_sqlite3_c(self, file_texts):
+    def test_p3_performance_sqlite3_c(self, file_texts, untraced_timing):
         text = file_texts["left/sqlite3.c"]
         strip_comments(text[:1000], ".c")
         start = time.perf_counter()
@@ -144,7 +155,7 @@ class TestCommentParser:
         elapsed = time.perf_counter() - start
         assert elapsed < 2.0, f"Too slow: {elapsed:.2f}s (limit: 2.0s)"
 
-    def test_p3_performance_shell_c(self, file_texts):
+    def test_p3_performance_shell_c(self, file_texts, untraced_timing):
         text = file_texts["left/shell.c"]
         start = time.perf_counter()
         strip_comments(text, ".c")
@@ -183,7 +194,7 @@ class TestDiffEngine:
         assert ratio == 1.0
         assert adds == 0 and dels == 0
 
-    def test_d3_performance_sqlite3_c(self, file_texts):
+    def test_d3_performance_sqlite3_c(self, file_texts, untraced_timing):
         ta = strip_comments(file_texts["left/sqlite3.c"], ".c")
         tb = strip_comments(file_texts["right/sqlite3.c"], ".c")
         start = time.perf_counter()
@@ -273,7 +284,7 @@ class TestFingerprint:
                 f"{r.file_a}: top match is {top_file}, expected self"
             )
 
-    def test_f4_fingerprint_performance_sqlite3_c(self, file_texts):
+    def test_f4_fingerprint_performance_sqlite3_c(self, file_texts, untraced_timing):
         text = file_texts["left/sqlite3.c"]
         stripped = strip_comments(text, ".c")
         start = time.perf_counter()

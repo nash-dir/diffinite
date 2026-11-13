@@ -7,6 +7,8 @@ import * as vscode from "vscode";
 import { compareDirectories } from "./compareCommand";
 import { showHelp } from "./helpViewer";
 import { editIgnoreList } from "./ignoreList";
+import { terminateAllProcesses } from "./runner";
+import { disposeFailureChannel } from "./failureNotice";
 
 export function activate(context: vscode.ExtensionContext): void {
   const compareCmd = vscode.commands.registerCommand(
@@ -24,6 +26,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(compareCmd, helpCmd, ignoreCmd);
 }
 
-export function deactivate(): void {
-  // nothing to clean up
+export async function deactivate(): Promise<void> {
+  await terminateAllProcesses();
+  disposeFailureChannel();
 }

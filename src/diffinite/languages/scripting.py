@@ -26,7 +26,10 @@ register(LangSpec(
 register(LangSpec(
     name="PHP",
     extensions=(".php",),
-    comment=CommentSpec(line_markers=("//", "#"), block_start="/*", block_end="*/"),
+    comment=CommentSpec(
+        line_markers=("//", "#"), block_start="/*", block_end="*/",
+        line_marker_exceptions=("#[",),  # PHP 8: #[Attr] is an attribute, not a comment
+    ),
     keywords=frozenset({
         "if", "else", "elseif", "while", "for", "foreach",
         "do", "switch", "case", "break", "continue", "return",
@@ -42,7 +45,10 @@ register(LangSpec(
 register(LangSpec(
     name="Perl",
     extensions=(".pl", ".pm"),
-    comment=CommentSpec(line_markers=("#",), block_start=None, block_end=None),
+    comment=CommentSpec(
+        line_markers=("#",), block_start=None, block_end=None,
+        line_marker_not_after="$",  # $#arr / $#{ref} is the last-index operator
+    ),
     keywords=frozenset({
         "if", "else", "elsif", "unless", "while", "until",
         "for", "foreach", "do", "sub", "return",
@@ -55,7 +61,12 @@ register(LangSpec(
 register(LangSpec(
     name="Shell",
     extensions=(".sh", ".bash"),
-    comment=CommentSpec(line_markers=("#",), block_start=None, block_end=None),
+    comment=CommentSpec(
+        line_markers=("#",), block_start=None, block_end=None,
+        # bash(1) "COMMENTS": # starts a comment only at the start of a word;
+        # words are split by blanks and the metacharacters ; | & ( ) < >.
+        line_marker_boundary=";|&()<>",
+    ),
     keywords=frozenset({
         "if", "then", "else", "elif", "fi",
         "for", "while", "do", "done", "case", "esac",
@@ -82,7 +93,12 @@ register(LangSpec(
 register(LangSpec(
     name="Zsh",
     extensions=(".zsh",),
-    comment=CommentSpec(line_markers=("#",), block_start=None, block_end=None),
+    comment=CommentSpec(
+        line_markers=("#",), block_start=None, block_end=None,
+        # bash(1) "COMMENTS": # starts a comment only at the start of a word;
+        # words are split by blanks and the metacharacters ; | & ( ) < >.
+        line_marker_boundary=";|&()<>",
+    ),
     keywords=frozenset({
         "if", "then", "else", "elif", "fi",
         "for", "while", "do", "done", "case", "esac",

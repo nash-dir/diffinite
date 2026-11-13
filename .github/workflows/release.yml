@@ -1,32 +1,88 @@
 name: Release Pipeline
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
+
+# A second run for the same tag/ref waits for the first one. Cancelling an
+# in-flight publisher could leave the marketplaces with different asset sets.
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
-  PY_VERSION: "3.12.9"
-  PY_EMBED_URL: "https://www.python.org/ftp/python/3.12.9/python-3.12.9-embed-amd64.zip"
+  # `gh release` resolves its repository from a git checkout or GH_REPO, never
+  # from GITHUB_REPOSITORY. The release jobs that call it do not check out code.
+  GH_REPO: ${{ github.repository }}
 
 jobs:
-  # ─────────────────────────────────────────────
-  # Stage 1: Build & publish platform-specific VSCode extensions
-  #
-  # Windows: bundles Windows Embeddable Python + diffinite source
-  #   → no PyInstaller, no antivirus false-positives
-  # Mac/Linux: TS-only VSIX, relies on system python3 at runtime
-  # ─────────────────────────────────────────────
-  publish-vsce:
-    name: Publish VSIX (${{ matrix.target }})
-    # Job-level so the Open VSX step's `if` can read it — a step's own step-level
-    # env is NOT visible to that same step's `if` condition.
-    env:
-      OVSX_PAT: ${{ secrets.OVSX_PAT }}
+  # Release gate, part 1: the complete CI workflow (bundle-lock audit,
+  # Python 3.10-3.13 matrix, ruff, mypy, Windows bundle build) runs again for
+  # the tagged commit. ci.yml only triggers on master and PRs, so without this a
+  # tag on a commit CI never saw would ship.
+  ci:
+    name: Release gate - CI workflow
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  # Release gate, part 2: the test suite against what the Windows VSIX actually
+  # ships - the hash-locked runtime dependencies on the bundled CPython version
+  # (build_bundle.ps1 default) - rather than the newest versions pip resolves.
+  test:
+    name: Release gate - test suite on locked bundle dependencies
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Read bundled Python version
+        id: bundle_python
+        shell: pwsh
+        run: |
+          $script = Get-Content -Raw vscode-extension/scripts/build_bundle.ps1
+          $m = [regex]::Match($script, '\[string\]\$pythonVersion = "([0-9.]+)"')
+          if (-not $m.Success) { throw "Cannot read the default pythonVersion from build_bundle.ps1." }
+          "version=$($m.Groups[1].Value)" >> $env:GITHUB_OUTPUT
+
+      - name: Set up bundled Python version
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ steps.bundle_python.outputs.version }}
+
+      - name: Install locked runtime, package and test runner
+        shell: pwsh
+        run: |
+          python -m pip install --require-hashes --no-deps -r vscode-extension/scripts/requirements-bundle.lock
+          if ($LASTEXITCODE -ne 0) { throw "Locked runtime install failed." }
+          python -m pip install --no-deps -e .
+          if ($LASTEXITCODE -ne 0) { throw "Package install failed." }
+          python -m pip install "pytest>=7.0.0"
+          if ($LASTEXITCODE -ne 0) { throw "pytest install failed." }
+          python -m pip check
+          if ($LASTEXITCODE -ne 0) { throw "Locked runtime does not satisfy the package requirements." }
+
+      - name: Run pytest
+        run: python -m pytest -q --tb=short
+
+  # Build steps run with read-only repository access and without publishing
+  # credentials. A v* tag push starts a release; a manual dispatch produces
+  # testable VSIX artifacts but cannot publish them.
+  build-vsix:
+    name: Build VSIX (${{ matrix.target }})
+    needs:
+      - test
+      - ci
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -43,23 +99,38 @@ jobs:
     runs-on: ${{ matrix.runner }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      # Capture the reviewed publisher manifest before npm lifecycle hooks,
+      # tests, or packaging code can mutate the working tree. Artifact v4 does
+      # not permit a later step to overwrite an artifact with the same name.
+      - name: Upload locked publisher tool manifest
+        if: matrix.target == 'linux-x64'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: publisher-tools-lock
+          path: |
+            vscode-extension/package.json
+            vscode-extension/package-lock.json
+          if-no-files-found: error
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: "20"
+          # The locked Azure publishing dependencies require Node 22.
+          node-version: "22"
 
-      # Fail fast if the release tag and the packaged version disagree, so we
-      # never publish a VSIX whose version differs from the tag people see.
       - name: Verify version matches release tag
-        if: github.event_name == 'release'
+        if: github.event_name == 'push'
         shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          TAG="${{ github.event.release.tag_name }}"
-          VER="${TAG#v}"
+          VER="${RELEASE_TAG#v}"
           PKG=$(node -p "require('./vscode-extension/package.json').version")
-          echo "tag=$TAG  expected=$VER  package.json=$PKG"
+          echo "tag=$RELEASE_TAG  expected=$VER  package.json=$PKG"
           if [ "$VER" != "$PKG" ]; then
             echo "::error::package.json version ($PKG) does not match release tag ($VER)"
             exit 1
@@ -67,147 +138,775 @@ jobs:
 
       - name: Install Extension dependencies
         working-directory: vscode-extension
-        run: npm install
+        run: npm ci
 
-      - name: Compile TypeScript
+      - name: Typecheck and test TypeScript logic
         working-directory: vscode-extension
-        run: npx tsc -p ./
+        run: npm test
 
-      # ── Windows: Bundle Embeddable Python ──────────────────────
       - name: Build Standalone Bundle (CD Tester)
         if: matrix.bundle_python
         shell: pwsh
         run: |
-          ./vscode-extension/scripts/build_bundle.ps1 -pythonVersion ${{ env.PY_VERSION }}
+          ./vscode-extension/scripts/build_bundle.ps1
 
-      # ── Common: Record metadata & package VSIX ─────────────────
       - name: Record build metadata
         working-directory: vscode-extension
         shell: bash
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          BUILD_TARGET: ${{ matrix.target }}
+          BUNDLE_PYTHON: ${{ matrix.bundle_python }}
         run: |
           mkdir -p bin
-          echo '{
-            "commit": "${{ github.sha }}",
-            "tag": "${{ github.event.release.tag_name || github.ref_name }}",
-            "target": "${{ matrix.target }}",
-            "python_version": "${{ matrix.bundle_python && env.PY_VERSION || 'system' }}",
-            "built_at": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"
-          }' > bin/build-info.json
+          # Record the version the bundled interpreter reports, not a setting.
+          export BUNDLED_PYTHON_VERSION=system
+          if [ "$BUNDLE_PYTHON" = "true" ]; then
+            BUNDLED_PYTHON_VERSION=$(bin/python/python.exe -I -c "import platform; print(platform.python_version())" | tr -d '\r')
+            if [ -z "$BUNDLED_PYTHON_VERSION" ]; then
+              echo "::error::Could not read the bundled Python version."
+              exit 1
+            fi
+          fi
+          export SOURCE_COMMIT_TIME
+          SOURCE_COMMIT_TIME=$(git show -s --format=%cI "$SOURCE_COMMIT")
+          node <<'NODE'
+          const fs = require('fs');
+          const metadata = {
+            commit: process.env.SOURCE_COMMIT,
+            tag: process.env.RELEASE_TAG,
+            target: process.env.BUILD_TARGET,
+            python_version: process.env.BUNDLED_PYTHON_VERSION,
+            "source_commit_time": process.env.SOURCE_COMMIT_TIME,
+          };
+          fs.writeFileSync('bin/build-info.json', `${JSON.stringify(metadata, null, 2)}\n`, 'utf8');
+          NODE
           cat bin/build-info.json
-
-      - name: Install vsce
-        run: npm install -g @vscode/vsce@3.2.2
 
       - name: Package platform-specific VSIX
         working-directory: vscode-extension
         run: >-
-          vsce package
+          npx --no-install vsce package
           --target ${{ matrix.target }}
           --no-dependencies
           --allow-star-activation
 
       - name: Upload VSIX artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: vsix-${{ matrix.target }}
           path: vscode-extension/*.vsix
+          if-no-files-found: error
 
-      - name: Upload VSIX to Release
-        if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: vscode-extension/*.vsix
-
-      # No continue-on-error: a failed Marketplace publish (e.g. an expired
-      # VSCE_PAT) MUST turn the job red. The retry loop now records success and
-      # exits non-zero when all attempts fail, instead of silently ending on the
-      # trailing Start-Sleep.
-      - name: Publish to VSCode Marketplace
-        if: github.event_name == 'release'
-        working-directory: vscode-extension
-        timeout-minutes: 10
-        shell: pwsh
-        run: |
-          $vsix = (Get-ChildItem *.vsix | Select-Object -First 1).Name
-          Write-Output "Publishing $vsix to VS Code Marketplace..."
-          $published = $false
-          for ($i = 1; $i -le 3; $i++) {
-            Write-Output "Attempt $i/3..."
-            vsce publish --packagePath $vsix -p ${{ secrets.VSCE_PAT }}
-            if ($LASTEXITCODE -eq 0) { $published = $true; break }
-            Write-Output "Attempt $i failed (exit $LASTEXITCODE)."
-            if ($i -lt 3) { Write-Output "Waiting 30s..."; Start-Sleep -Seconds 30 }
-          }
-          if (-not $published) {
-            Write-Error "vsce publish failed after 3 attempts. Is VSCE_PAT valid and unexpired?"
-            exit 1
-          }
-
-      # Open VSX (for Cursor / VSCodium / Windsurf / Eclipse Theia users).
-      # Opt-in: skipped unless an OVSX_PAT secret is configured, so it never
-      # blocks a release before the Open VSX namespace/token is set up.
-      # Prerequisite (one-time): `ovsx create-namespace nash-dir -p <OVSX_PAT>`.
-      - name: Publish to Open VSX
-        if: github.event_name == 'release' && env.OVSX_PAT != ''
-        working-directory: vscode-extension
-        timeout-minutes: 10
-        shell: pwsh
-        run: |
-          npm install -g ovsx
-          $vsix = (Get-ChildItem *.vsix | Select-Object -First 1).Name
-          Write-Output "Publishing $vsix to Open VSX..."
-          $published = $false
-          for ($i = 1; $i -le 3; $i++) {
-            Write-Output "Attempt $i/3..."
-            ovsx publish $vsix -p $env:OVSX_PAT
-            if ($LASTEXITCODE -eq 0) { $published = $true; break }
-            Write-Output "Attempt $i failed (exit $LASTEXITCODE)."
-            if ($i -lt 3) { Write-Output "Waiting 30s..."; Start-Sleep -Seconds 30 }
-          }
-          if (-not $published) {
-            Write-Error "ovsx publish failed after 3 attempts. Is OVSX_PAT valid and the namespace created?"
-            exit 1
-          }
-
-  # ─────────────────────────────────────────────
-  # Stage 2: Publish to PyPI
-  # Independent of VSIX builds.
-  # ─────────────────────────────────────────────
-  publish-pypi:
-    name: Publish to PyPI
+  # This job can create or update only a draft release. It does not check out
+  # or run repository code, install dependencies, or receive registry credentials.
+  # A failed upload can therefore leave partial private state, but never a
+  # public asset-incomplete GitHub Release.
+  upload-vsix-release:
+    name: Upload VSIX files to draft GitHub Release
+    if: github.event_name == 'push'
+    needs:
+      - build-vsix
+      - build-python
     runs-on: ubuntu-latest
-    environment:
-      name: pypi
-      url: https://pypi.org/p/diffinite
     permissions:
-      id-token: write
+      contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Download built VSIX files
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: vsix-*
+          path: release-vsix
+          merge-multiple: true
+
+      - name: Create or reuse draft GitHub Release
+        id: draft_release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          SOURCE_REF_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          audit_dir=$(mktemp -d)
+          trap 'rm -rf "$audit_dir"' EXIT
+          release_json="$audit_dir/release.json"
+
+          # github.sha is the tagged commit. For an annotated tag the ref
+          # points at a tag object, so peel tag objects until a commit is
+          # reached before comparing; a re-pointed tag still fails closed.
+          ref_object=$(gh api \
+            "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" \
+            --jq '.object.type + " " + .object.sha')
+          read -r ref_type current_ref_sha <<< "$ref_object"
+          while [ "$ref_type" = "tag" ]; do
+            ref_object=$(gh api \
+              "repos/$GITHUB_REPOSITORY/git/tags/$current_ref_sha" \
+              --jq '.object.type + " " + .object.sha')
+            read -r ref_type current_ref_sha <<< "$ref_object"
+          done
+          if [ "$ref_type" != "commit" ]; then
+            echo "::error::Release tag does not resolve to a commit (type: $ref_type)."
+            exit 1
+          fi
+          if [ "$current_ref_sha" != "$SOURCE_REF_SHA" ]; then
+            echo "::error::Release tag moved after this workflow was triggered."
+            exit 1
+          fi
+
+          # A failed lookup followed by a failed create is safe: no command in
+          # this job can publish a release. A same-tag race also fails closed.
+          if ! gh release view "$RELEASE_TAG" \
+            --json databaseId,isDraft,tagName > "$release_json"; then
+            gh release create "$RELEASE_TAG" \
+              --draft \
+              --verify-tag \
+              --generate-notes \
+              --title "$RELEASE_TAG"
+            gh release view "$RELEASE_TAG" \
+              --json databaseId,isDraft,tagName > "$release_json"
+          fi
+
+          if ! jq -e --arg tag "$RELEASE_TAG" \
+            '.tagName == $tag and .isDraft == true and (.databaseId | type == "number")' \
+            "$release_json" > /dev/null; then
+            echo "::error::Refusing to upload to a public release or mismatched tag."
+            exit 1
+          fi
+
+          release_id=$(jq -r '.databaseId' "$release_json")
+          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
+
+      # Resolve every existing-name collision before this job mutates the
+      # release. Byte-identical assets make a rerun a no-op; only missing
+      # assets enter the upload set. That holds for "Re-run failed jobs" only:
+      # "Re-run all jobs" rebuilds the VSIX, whose zip timestamps change its
+      # bytes, so already-uploaded assets no longer match and this job fails.
+      # The final verification below also closes
+      # the race if another run changes an asset after this preflight query.
+      - name: Prepare idempotent VSIX upload set
+        id: prepare_vsix
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.draft_release.outputs.release_id }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          audit_dir=$(mktemp -d)
+          trap 'rm -rf "$audit_dir"' EXIT
+          upload_dir=pending-vsix
+          mkdir -p "$upload_dir"
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > "$audit_dir/release.json"
+          if ! jq -e --arg tag "$RELEASE_TAG" \
+            '.draft == true and .tag_name == $tag' \
+            "$audit_dir/release.json" > /dev/null; then
+            echo "::error::Release must remain a draft during asset preparation."
+            exit 1
+          fi
+
+          shopt -s nullglob
+          local_assets=(release-vsix/*.vsix)
+          if [ "${#local_assets[@]}" -eq 0 ]; then
+            echo "::error::No local VSIX assets are available for release upload."
+            exit 1
+          fi
+
+          pending_count=0
+          for local_asset in "${local_assets[@]}"; do
+            asset_name=$(basename "$local_asset")
+            match_count=$(jq --arg name "$asset_name" '[.assets[] | select(.name == $name)] | length' "$audit_dir/release.json")
+            if [ "$match_count" -gt 1 ]; then
+              echo "::error::Expected at most one remote asset named $asset_name; found $match_count."
+              exit 1
+            fi
+
+            if [ "$match_count" -eq 0 ]; then
+              cp -- "$local_asset" "$upload_dir/$asset_name"
+              pending_count=$((pending_count + 1))
+              echo "Prepared missing release asset: $asset_name"
+              continue
+            fi
+
+            local_sha=$(sha256sum "$local_asset" | cut -d' ' -f1)
+            remote_digest=$(jq -r --arg name "$asset_name" '.assets[] | select(.name == $name) | .digest // empty' "$audit_dir/release.json")
+            if [[ "$remote_digest" == sha256:* ]]; then
+              remote_sha=${remote_digest#sha256:}
+            else
+              asset_id=$(jq -r --arg name "$asset_name" '.assets[] | select(.name == $name) | .id' "$audit_dir/release.json")
+              remote_asset="$audit_dir/$asset_id.vsix"
+              gh api \
+                -H "Accept: application/octet-stream" \
+                "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" > "$remote_asset"
+              remote_sha=$(sha256sum "$remote_asset" | cut -d' ' -f1)
+            fi
+
+            if [ "$local_sha" != "$remote_sha" ]; then
+              echo "::error::Release asset collision for $asset_name: existing bytes differ from this build."
+              exit 1
+            fi
+            echo "Reusing byte-identical release asset: $asset_name ($local_sha)"
+          done
+
+          if [ "$pending_count" -gt 0 ]; then
+            echo "has_pending=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_pending=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload VSIX files to draft Release
+        if: steps.prepare_vsix.outputs.has_pending == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          pending_assets=(pending-vsix/*.vsix)
+          if [ "${#pending_assets[@]}" -eq 0 ]; then
+            echo "::error::Upload was requested but the pending VSIX set is empty."
+            exit 1
+          fi
+          # Collision replacement is disabled: a same-name race fails without
+          # deleting remote data. This command cannot publish the draft.
+          gh release upload "$RELEASE_TAG" "${pending_assets[@]}"
+
+      # Verify the complete remote set after upload, including assets reused by
+      # preflight. A same-name upload race fails without overwriting either file.
+      # This also proves the action did not make the release public.
+      - name: Verify draft VSIX asset digests
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.draft_release.outputs.release_id }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          audit_dir=$(mktemp -d)
+          trap 'rm -rf "$audit_dir"' EXIT
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > "$audit_dir/release.json"
+          if ! jq -e --arg tag "$RELEASE_TAG" \
+            '.draft == true and .tag_name == $tag' \
+            "$audit_dir/release.json" > /dev/null; then
+            echo "::error::Release became public before asset verification completed."
+            exit 1
+          fi
+
+          shopt -s nullglob
+          local_assets=(release-vsix/*.vsix)
+          if [ "${#local_assets[@]}" -eq 0 ]; then
+            echo "::error::No local VSIX assets are available for digest verification."
+            exit 1
+          fi
+
+          printf '%s\n' "${local_assets[@]##*/}" | LC_ALL=C sort > "$audit_dir/local-names.txt"
+          jq -r '.assets[].name' "$audit_dir/release.json" \
+            | LC_ALL=C sort > "$audit_dir/remote-names.txt"
+          if ! diff -u "$audit_dir/local-names.txt" "$audit_dir/remote-names.txt"; then
+            echo "::error::Unexpected release asset set; refusing to verify a partial or augmented draft."
+            exit 1
+          fi
+
+          for local_asset in "${local_assets[@]}"; do
+            asset_name=$(basename "$local_asset")
+            match_count=$(jq --arg name "$asset_name" '[.assets[] | select(.name == $name)] | length' "$audit_dir/release.json")
+            if [ "$match_count" -ne 1 ]; then
+              echo "::error::Expected exactly one remote asset named $asset_name; found $match_count."
+              exit 1
+            fi
+
+            local_sha=$(sha256sum "$local_asset" | cut -d' ' -f1)
+            remote_digest=$(jq -r --arg name "$asset_name" '.assets[] | select(.name == $name) | .digest // empty' "$audit_dir/release.json")
+            if [[ "$remote_digest" == sha256:* ]]; then
+              remote_sha=${remote_digest#sha256:}
+            else
+              asset_id=$(jq -r --arg name "$asset_name" '.assets[] | select(.name == $name) | .id' "$audit_dir/release.json")
+              remote_asset="$audit_dir/$asset_id.vsix"
+              gh api \
+                -H "Accept: application/octet-stream" \
+                "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" > "$remote_asset"
+              remote_sha=$(sha256sum "$remote_asset" | cut -d' ' -f1)
+            fi
+
+            if [ "$local_sha" != "$remote_sha" ]; then
+              echo "::error::Release asset collision for $asset_name: existing bytes differ from this build."
+              exit 1
+            fi
+            echo "Verified release asset: $asset_name ($local_sha)"
+          done
+
+  # Marketplace publishing is isolated from the GitHub Release write token.
+  # Tool installation happens before, and without, either marketplace PAT.
+  # Residual risk: external registries do not offer a shared transaction. A
+  # partial registry publish remains a failed run. Only "Re-run failed jobs"
+  # completes it. "Re-run all jobs" rebuilds the VSIX, whose zip timestamps
+  # change its bytes, so every already-published target then fails the
+  # byte check below and the run cannot finish. On "Re-run failed jobs", before
+  # each publish attempt the registry is queried, and a version already listed
+  # for the VSIX's target platform is skipped only when the registry's copy is
+  # byte-identical to this build. Different bytes fail the run, so duplicate
+  # versions are never trusted blindly. Every VSIX is attempted and the step
+  # fails once at the end, so one failing target does not block the others.
+  publish-marketplaces:
+    name: Publish extension marketplaces
+    if: github.event_name == 'push'
+    needs: upload-vsix-release
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Set up Node.js for publishing
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          # ovsx 1.x ships with the current vsce toolchain, which requires Node 22.
+          node-version: "22"
+
+      - name: Download built VSIX files
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: vsix-*
+          path: release-vsix
+          merge-multiple: true
+
+      - name: Download locked publisher tool manifest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: publisher-tools-lock
+          path: publisher-tools
+
+      - name: Install locked publishing tools
+        working-directory: publisher-tools
+        run: npm ci --ignore-scripts
+
+      - name: Publish to VSCode Marketplace
+        working-directory: publisher-tools
+        timeout-minutes: 10
+        shell: pwsh
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:VSCE_PAT)) {
+            throw "VSCE_PAT is not configured."
+          }
+          $vsixFiles = @(Get-ChildItem ..\release-vsix\*.vsix -File)
+          if ($vsixFiles.Count -eq 0) { throw "No VSIX files were downloaded." }
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          function Get-VsixIdentity([string]$Path) {
+            $zip = [System.IO.Compression.ZipFile]::OpenRead($Path)
+            try {
+              $entry = $zip.GetEntry('extension.vsixmanifest')
+              if ($null -eq $entry) { throw "No extension.vsixmanifest in $Path." }
+              $reader = New-Object System.IO.StreamReader($entry.Open())
+              try { [xml]$manifest = $reader.ReadToEnd() } finally { $reader.Dispose() }
+            } finally { $zip.Dispose() }
+            $identity = $manifest.PackageManifest.Metadata.Identity
+            if ([string]::IsNullOrWhiteSpace($identity.TargetPlatform)) {
+              throw "$Path has no TargetPlatform in its manifest."
+            }
+            return $identity
+          }
+          function Get-RemoteSha256([string]$Url) {
+            $tmp = [System.IO.Path]::GetTempFileName()
+            try {
+              Invoke-WebRequest -Uri $Url -OutFile $tmp -UseBasicParsing
+              $bytes = [System.IO.File]::ReadAllBytes($tmp)
+              # 0x1F 0x8B is the gzip magic number (RFC 1952); a registry may
+              # serve the VSIX gzip-encoded, and the VSIX bytes are compared.
+              if ($bytes.Length -ge 2 -and $bytes[0] -eq 0x1F -and $bytes[1] -eq 0x8B) {
+                $in = New-Object System.IO.MemoryStream(,$bytes)
+                $gz = New-Object System.IO.Compression.GZipStream($in, [System.IO.Compression.CompressionMode]::Decompress)
+                $out = New-Object System.IO.MemoryStream
+                try { $gz.CopyTo($out); $bytes = $out.ToArray() } finally { $gz.Dispose(); $out.Dispose() }
+              }
+              $sha = [System.Security.Cryptography.SHA256]::Create()
+              try { return ([System.BitConverter]::ToString($sha.ComputeHash($bytes)) -replace '-', '') }
+              finally { $sha.Dispose() }
+            } finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+          }
+          # Returns the Marketplace download URL when this version is already
+          # listed for the VSIX's target platform, otherwise $null.
+          function Find-MarketplaceVersion($Identity) {
+            $extensionId = "$($Identity.Publisher).$($Identity.Id)"
+            $json = (npx --no-install vsce show $extensionId --json) -join "`n"
+            if ($LASTEXITCODE -ne 0) { throw "vsce show $extensionId failed (exit $LASTEXITCODE)." }
+            if ($json.Trim() -eq 'undefined') { return $null }
+            $extension = $json | ConvertFrom-Json
+            $listed = @($extension.versions | Where-Object {
+              $_.version -eq $Identity.Version -and $_.targetPlatform -eq $Identity.TargetPlatform
+            })
+            if ($listed.Count -eq 0) { return $null }
+            return ("https://marketplace.visualstudio.com/_apis/public/gallery/publishers/" +
+              "$($Identity.Publisher)/vsextensions/$($Identity.Id)/$($Identity.Version)/" +
+              "vspackage?targetPlatform=$($Identity.TargetPlatform)")
+          }
+
+          $failures = @()
+          foreach ($vsix in $vsixFiles) {
+            try {
+              $identity = Get-VsixIdentity $vsix.FullName
+              $localSha = (Get-FileHash -LiteralPath $vsix.FullName -Algorithm SHA256).Hash
+              Write-Output "Publishing $($vsix.Name) ($($identity.TargetPlatform) $($identity.Version)) to VS Code Marketplace..."
+              $published = $false
+              for ($i = 1; $i -le 3; $i++) {
+                Write-Output "Attempt $i/3..."
+                # Check first: an earlier run, or an attempt that timed out after
+                # the server accepted it, may already have published this VSIX.
+                $remoteUrl = Find-MarketplaceVersion $identity
+                if ($null -ne $remoteUrl) {
+                  $remoteSha = Get-RemoteSha256 $remoteUrl
+                  if ($remoteSha -ne $localSha) {
+                    throw "Marketplace already lists $($identity.Version) for $($identity.TargetPlatform) with different bytes ($remoteSha, local $localSha)."
+                  }
+                  Write-Output "Already published with identical bytes ($localSha); skipping."
+                  $published = $true
+                  break
+                }
+                # vsce reads VSCE_PAT directly, keeping the credential out of argv.
+                npx --no-install vsce publish --packagePath $vsix.FullName
+                if ($LASTEXITCODE -eq 0) { $published = $true; break }
+                Write-Output "Attempt $i failed (exit $LASTEXITCODE)."
+                if ($i -lt 3) { Write-Output "Waiting 30s..."; Start-Sleep -Seconds 30 }
+              }
+              if (-not $published) {
+                throw "vsce publish failed after 3 attempts."
+              }
+            } catch {
+              $failures += "$($vsix.Name): $($_.Exception.Message)"
+              Write-Output "::error::$($vsix.Name): $($_.Exception.Message)"
+            }
+          }
+          if ($failures.Count -gt 0) {
+            throw "VS Code Marketplace publish incomplete: $($failures -join '; ')"
+          }
+
+      - name: Detect Open VSX credential
+        id: ovsx_token
+        shell: bash
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          if [ -n "$OVSX_PAT" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to Open VSX
+        if: steps.ovsx_token.outputs.configured == 'true'
+        working-directory: publisher-tools
+        timeout-minutes: 10
+        shell: pwsh
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:OVSX_PAT)) {
+            throw "OVSX_PAT was detected but is unavailable to the publish step."
+          }
+          $vsixFiles = @(Get-ChildItem ..\release-vsix\*.vsix -File)
+          if ($vsixFiles.Count -eq 0) { throw "No VSIX files were downloaded." }
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          function Get-VsixIdentity([string]$Path) {
+            $zip = [System.IO.Compression.ZipFile]::OpenRead($Path)
+            try {
+              $entry = $zip.GetEntry('extension.vsixmanifest')
+              if ($null -eq $entry) { throw "No extension.vsixmanifest in $Path." }
+              $reader = New-Object System.IO.StreamReader($entry.Open())
+              try { [xml]$manifest = $reader.ReadToEnd() } finally { $reader.Dispose() }
+            } finally { $zip.Dispose() }
+            $identity = $manifest.PackageManifest.Metadata.Identity
+            if ([string]::IsNullOrWhiteSpace($identity.TargetPlatform)) {
+              throw "$Path has no TargetPlatform in its manifest."
+            }
+            return $identity
+          }
+          function Get-RemoteSha256([string]$Url) {
+            $tmp = [System.IO.Path]::GetTempFileName()
+            try {
+              Invoke-WebRequest -Uri $Url -OutFile $tmp -UseBasicParsing
+              $bytes = [System.IO.File]::ReadAllBytes($tmp)
+              # 0x1F 0x8B is the gzip magic number (RFC 1952); a registry may
+              # serve the VSIX gzip-encoded, and the VSIX bytes are compared.
+              if ($bytes.Length -ge 2 -and $bytes[0] -eq 0x1F -and $bytes[1] -eq 0x8B) {
+                $in = New-Object System.IO.MemoryStream(,$bytes)
+                $gz = New-Object System.IO.Compression.GZipStream($in, [System.IO.Compression.CompressionMode]::Decompress)
+                $out = New-Object System.IO.MemoryStream
+                try { $gz.CopyTo($out); $bytes = $out.ToArray() } finally { $gz.Dispose(); $out.Dispose() }
+              }
+              $sha = [System.Security.Cryptography.SHA256]::Create()
+              try { return ([System.BitConverter]::ToString($sha.ComputeHash($bytes)) -replace '-', '') }
+              finally { $sha.Dispose() }
+            } finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+          }
+          # Returns the Open VSX download URL when this version is already
+          # published for the VSIX's target platform, otherwise $null.
+          function Find-OpenVsxVersion($Identity) {
+            $url = "https://open-vsx.org/api/$($Identity.Publisher)/$($Identity.Id)/$($Identity.TargetPlatform)/$($Identity.Version)"
+            try {
+              $entry = Invoke-RestMethod -Uri $url -UseBasicParsing
+            } catch {
+              $response = $_.Exception.Response
+              # 404 Not Found (RFC 9110): this version/target is not published.
+              if ($null -ne $response -and [int]$response.StatusCode -eq 404) { return $null }
+              throw
+            }
+            if ([string]::IsNullOrWhiteSpace($entry.files.download)) {
+              throw "Open VSX lists $($Identity.Version) for $($Identity.TargetPlatform) without a download URL."
+            }
+            return $entry.files.download
+          }
+
+          $failures = @()
+          foreach ($vsix in $vsixFiles) {
+            try {
+              $identity = Get-VsixIdentity $vsix.FullName
+              $localSha = (Get-FileHash -LiteralPath $vsix.FullName -Algorithm SHA256).Hash
+              Write-Output "Publishing $($vsix.Name) ($($identity.TargetPlatform) $($identity.Version)) to Open VSX..."
+              $published = $false
+              for ($i = 1; $i -le 3; $i++) {
+                Write-Output "Attempt $i/3..."
+                $remoteUrl = Find-OpenVsxVersion $identity
+                if ($null -ne $remoteUrl) {
+                  $remoteSha = Get-RemoteSha256 $remoteUrl
+                  if ($remoteSha -ne $localSha) {
+                    throw "Open VSX already lists $($identity.Version) for $($identity.TargetPlatform) with different bytes ($remoteSha, local $localSha)."
+                  }
+                  Write-Output "Already published with identical bytes ($localSha); skipping."
+                  $published = $true
+                  break
+                }
+                # ovsx reads OVSX_PAT directly, keeping the credential out of argv.
+                npx --no-install ovsx publish $vsix.FullName
+                if ($LASTEXITCODE -eq 0) { $published = $true; break }
+                Write-Output "Attempt $i failed (exit $LASTEXITCODE)."
+                if ($i -lt 3) { Write-Output "Waiting 30s..."; Start-Sleep -Seconds 30 }
+              }
+              if (-not $published) {
+                throw "ovsx publish failed after 3 attempts."
+              }
+            } catch {
+              $failures += "$($vsix.Name): $($_.Exception.Message)"
+              Write-Output "::error::$($vsix.Name): $($_.Exception.Message)"
+            }
+          }
+          if ($failures.Count -gt 0) {
+            throw "Open VSX publish incomplete: $($failures -join '; ')"
+          }
+
+  # Build the Python distributions without OIDC. Only the final publisher has
+  # id-token:write, and that job does not check out or execute repository code.
+  build-python:
+    name: Build Python distributions
+    needs:
+      - test
+      - ci
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Verify version matches release tag
-        if: github.event_name == 'release'
         shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          TAG="${{ github.event.release.tag_name }}"
-          VER="${TAG#v}"
+          VER="${RELEASE_TAG#v}"
           PYP=$(grep -m1 '^version' pyproject.toml | sed -E 's/.*"([^"]+)".*/\1/')
-          echo "tag=$TAG  expected=$VER  pyproject=$PYP"
+          echo "tag=$RELEASE_TAG  expected=$VER  pyproject=$PYP"
           if [ "$VER" != "$PYP" ]; then
             echo "::error::pyproject.toml version ($PYP) does not match release tag ($VER)"
             exit 1
           fi
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
       - name: Install build tools
-        run: pip install build
+        run: >-
+          python -m pip install
+          --require-hashes
+          --no-deps
+          -r vscode-extension/scripts/requirements-build.lock
 
       - name: Build package
-        run: python -m build
+        run: python -m build --no-isolation
+
+      # The gate above tested the source tree; this checks that the wheel that
+      # will be uploaded installs and starts in a clean environment.
+      - name: Smoke-test built wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          smoke_dir=$(mktemp -d)
+          python -m venv "$smoke_dir/venv"
+          "$smoke_dir/venv/bin/python" -m pip install dist/*.whl
+          cd "$smoke_dir"
+          "$smoke_dir/venv/bin/python" -I -m diffinite --help > /dev/null
+
+      - name: Upload Python distributions
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: python-dist
+          path: dist/*
+          if-no-files-found: error
+
+  # PyPI runs last among the registries: a PyPI file name can never be reused,
+  # so it is published only after both extension marketplaces succeeded. A
+  # rerun re-uploading byte-identical files is accepted by PyPI as a no-op.
+  # Use "Re-run failed jobs" here too: "Re-run all jobs" rebuilds the
+  # distributions, and the rebuilt bytes are not guaranteed to be identical.
+  publish-pypi:
+    name: Publish to PyPI
+    if: github.event_name == 'push'
+    needs:
+      - build-python
+      - upload-vsix-release
+      - publish-marketplaces
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/diffinite
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Download Python distributions
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: python-dist
+          path: dist
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # release/v1
+
+  # This is the only public GitHub Release transition. Because all required
+  # jobs are explicit dependencies and this job has no `always()` override,
+  # any build, verification, asset upload, or external publish failure leaves
+  # the release private. It receives no registry credential and runs no source.
+  publish-github-release:
+    name: Publish verified GitHub Release
+    if: github.event_name == 'push'
+    needs:
+      - upload-vsix-release
+      - publish-marketplaces
+      - publish-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download verified VSIX files
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: vsix-*
+          path: release-vsix
+          merge-multiple: true
+
+      - name: Publish verified draft GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          SOURCE_REF_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          audit_dir=$(mktemp -d)
+          trap 'rm -rf "$audit_dir"' EXIT
+
+          # github.sha is the tagged commit. For an annotated tag the ref
+          # points at a tag object, so peel tag objects until a commit is
+          # reached before comparing; a re-pointed tag still fails closed.
+          ref_object=$(gh api \
+            "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" \
+            --jq '.object.type + " " + .object.sha')
+          read -r ref_type current_ref_sha <<< "$ref_object"
+          while [ "$ref_type" = "tag" ]; do
+            ref_object=$(gh api \
+              "repos/$GITHUB_REPOSITORY/git/tags/$current_ref_sha" \
+              --jq '.object.type + " " + .object.sha')
+            read -r ref_type current_ref_sha <<< "$ref_object"
+          done
+          if [ "$ref_type" != "commit" ]; then
+            echo "::error::Release tag does not resolve to a commit (type: $ref_type)."
+            exit 1
+          fi
+          if [ "$current_ref_sha" != "$SOURCE_REF_SHA" ]; then
+            echo "::error::Release tag moved after this workflow was triggered."
+            exit 1
+          fi
+
+          gh release view "$RELEASE_TAG" \
+            --json databaseId,isDraft,tagName > "$audit_dir/before.json"
+          if ! jq -e --arg tag "$RELEASE_TAG" \
+            '.tagName == $tag and .isDraft == true and (.databaseId | type == "number")' \
+            "$audit_dir/before.json" > /dev/null; then
+            echo "::error::Expected the verified release to still be a draft."
+            exit 1
+          fi
+
+          release_id=$(jq -r '.databaseId' "$audit_dir/before.json")
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+            > "$audit_dir/release.json"
+
+          shopt -s nullglob
+          local_assets=(release-vsix/*.vsix)
+          if [ "${#local_assets[@]}" -eq 0 ]; then
+            echo "::error::No verified VSIX assets are available for finalization."
+            exit 1
+          fi
+
+          printf '%s\n' "${local_assets[@]##*/}" | LC_ALL=C sort > "$audit_dir/local-names.txt"
+          jq -r '.assets[].name' "$audit_dir/release.json" \
+            | LC_ALL=C sort > "$audit_dir/remote-names.txt"
+          if ! diff -u "$audit_dir/local-names.txt" "$audit_dir/remote-names.txt"; then
+            echo "::error::Unexpected release asset set immediately before publication."
+            exit 1
+          fi
+
+          for local_asset in "${local_assets[@]}"; do
+            asset_name=$(basename "$local_asset")
+            local_sha=$(sha256sum "$local_asset" | cut -d' ' -f1)
+            remote_digest=$(jq -r --arg name "$asset_name" \
+              '.assets[] | select(.name == $name) | .digest // empty' \
+              "$audit_dir/release.json")
+            if [[ "$remote_digest" == sha256:* ]]; then
+              remote_sha=${remote_digest#sha256:}
+            else
+              asset_id=$(jq -r --arg name "$asset_name" \
+                '.assets[] | select(.name == $name) | .id' \
+                "$audit_dir/release.json")
+              remote_asset="$audit_dir/$asset_id.vsix"
+              gh api \
+                -H "Accept: application/octet-stream" \
+                "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" > "$remote_asset"
+              remote_sha=$(sha256sum "$remote_asset" | cut -d' ' -f1)
+            fi
+            if [ "$local_sha" != "$remote_sha" ]; then
+              echo "::error::Final release digest mismatch for $asset_name."
+              exit 1
+            fi
+          done
+
+          gh release edit "$RELEASE_TAG" --draft=false --verify-tag
+
+          gh release view "$RELEASE_TAG" \
+            --json isDraft,tagName > "$audit_dir/after.json"
+          if ! jq -e --arg tag "$RELEASE_TAG" \
+            '.tagName == $tag and .isDraft == false' \
+            "$audit_dir/after.json" > /dev/null; then
+            echo "::error::GitHub Release did not reach the verified public state."
+            exit 1
+          fi
